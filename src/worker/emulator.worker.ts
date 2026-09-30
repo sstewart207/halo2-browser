@@ -938,10 +938,14 @@ const loadPeData = async (peData: Uint8Array, skipReset: boolean = false) => {
     // Initialize page tables in guest memory (identity-mapped).
     // Pages are all Present+RW+User. Paging is ENABLED later by thunk dispatcher
     // when bootloader signals PM+IDT ready (0xDEAD0003 marker).
-    const { PageTableManager } = await import('./core/memory/page-table-manager');
+    const { PageTableManager, PAGE_TABLE_REGION_SIZE } = await import('./core/memory/page-table-manager');
+    // Reserve the tables through the allocator so PE images and later allocations
+    // cannot occupy the same bytes. A fixed address below HEAP can lie inside a PE.
+    const pageTableBase = system.process!.memory.alloc(PAGE_TABLE_REGION_SIZE, 'THUNK_DATA', 'rw', 0x1000);
     const ptm = new PageTableManager(
         () => system.process!.v86.mem8 || system.process!.v86.v86?.cpu?.mem8,
-        () => cpu.wm?.exports
+        () => cpu.wm?.exports,
+        pageTableBase
     );
     const { VER_PLATFORM_WIN32_WINDOWS } = await import('./core/emulator-config-manager');
     const win9x = EmulatorConfig.getInstance().osVersion.platformId === VER_PLATFORM_WIN32_WINDOWS;

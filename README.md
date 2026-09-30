@@ -2,7 +2,7 @@
 
 Private research by Shane Stewart into running **Halo 2 Project Cartographer locally in a browser**, using [BottleShip](https://github.com/jenissimo/bottleship).
 
-**Status: startup blocked. Halo 2 has not reached its menu or gameplay.** Native x86 code executes in Chrome and passes Cartographer's version checks. The current blocker is a deterministic invalid execution address during CRT initialization. The checkpoint PR holds the compatibility changes; the project is not yet playable.
+**Status: startup blocked. Halo 2 has not reached its menu or gameplay.** Native x86 code executes in Chrome and passes Cartographer's version checks. The CRT crash is fixed: emulator page tables were overwriting the executable. Startup now reaches a PC compatibility error because Microsoft XML COM support is missing. The checkpoint PR holds the compatibility changes; the project is not yet playable.
 
 ## Goal
 
@@ -15,9 +15,10 @@ Run the single-player campaign in the browser without streaming or remote game e
 - Correct export-name ordering and distinguish executable exports from forwarded exports.
 - Supply missing x86 import signatures, offline IP Helper behavior, and accurate unsupported DPAPI failures.
 - Keep debug logs and diagnostic panels readable when the window is resized or zoomed.
-- Capture bounded crash-memory samples to investigate the delayed GetProcAddress resolver.
+- Capture bounded crash-memory samples and reserve page tables outside loaded PE images.
+- Trace the native PCCompat checker and its Microsoft XML COM dependency.
 
-TypeScript passes. The checkpoint's focused suite passes **24 tests / 155 assertions**. A Chrome boot still crashes at EIP `0xe7618007`; passing tests do not establish gameplay.
+TypeScript passes. The checkpoint's focused suite passes **30 tests / 184 assertions**. Chrome passes the former `0xe7618007` crash and reaches compatibility dialogs; passing tests do not establish gameplay.
 
 See the [checkpoint branch](https://github.com/sstewart207/halo2-browser/tree/codex/halo2-browser-checkpoint), [pull requests](https://github.com/sstewart207/halo2-browser/pulls), and [issues](https://github.com/sstewart207/halo2-browser/issues).
 
@@ -37,14 +38,14 @@ Bun and a current Chromium browser with WebGPU are required by the runtime. In t
 
 ```powershell
 bun run typecheck
-bun test tools/tests/version-resource.test.ts tools/tests/hle-image.test.ts tools/tests/import-supplement.test.ts tools/tests/iphlpapi-offline.test.ts
+bun test tools/tests/version-resource.test.ts tools/tests/hle-image.test.ts tools/tests/import-supplement.test.ts tools/tests/iphlpapi-offline.test.ts tools/tests/page-table-manager.test.ts tools/tests/registry-roots.test.ts
 ```
 
 Import your own game files locally. The private boot fixture currently contains the executable, required DLLs and the main-menu map; it does not include campaign maps. The real-file version test runs only when the developer's installed executable exists; synthetic parser tests run independently.
 
 ## Next milestones
 
-1. Fix the startup resolver trap and reach the real main menu.
+1. Supply the missing XML compatibility dependency and reach the real main menu.
 2. Verify one campaign level: rendered graphics, audio, and keyboard/mouse input.
 3. Persist native campaign progress across a browser restart.
 4. Support DualSense controls with remapping and dead zones.
