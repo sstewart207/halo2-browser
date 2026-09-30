@@ -19,6 +19,7 @@ export interface CrashFault {
   lastThunks?: string[];
   gameEsp?: number;
   stackDump?: number[];
+  memorySamples?: Array<{ label: string; address: number; hex: string }>;
   cpu?: {
     eip?: number;
     eipSym?: string | null;
@@ -160,6 +161,10 @@ export function formatGuestReport(f: CrashFault, gameName: string, crashed: bool
   if (f.stackDump?.length) {
     lines.push(``, `stack dump (32 words from ${hx(f.gameEsp)}):`,
       ...f.stackDump.map((w, i) => `  [+0x${(i * 4).toString(16)}] ${hx(w)}`));
+  }
+  if (f.memorySamples?.length) {
+    lines.push(``, `guest memory at crash (hex bytes):`,
+      ...f.memorySamples.map((s) => `  ${s.label} ${hx(s.address)}: ${s.hex}`));
   }
   const lastThunks = f.lastThunks?.length ? f.lastThunks : f.recentCalls;
   if (lastThunks?.length) {

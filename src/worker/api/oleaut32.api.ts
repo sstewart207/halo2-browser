@@ -53,6 +53,8 @@ export const oleaut32Module: ModuleDescriptor = {
 
         // SafeArray
         makeFunc("SafeArrayCreate", 3),
+        makeFunc("ord_314", 4, { ordinal: 314 }), // VarBstrCmp (verified Windows DLL export)
+        makeFunc("VarBstrCmp", 4),
         makeFunc("SafeArrayDestroy", 1),
         makeFunc("SafeArrayGetDim", 1),
         makeFunc("SafeArrayGetLBound", 3),

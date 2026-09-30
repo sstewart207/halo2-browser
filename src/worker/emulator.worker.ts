@@ -971,6 +971,7 @@ const loadPeData = async (peData: Uint8Array, skipReset: boolean = false) => {
     resumeEmulator();
     framePacer.start();
     gameSessionActive = true;
+    return true;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     Logger.error(LogCategory.SYSTEM, `PE load failed: ${message}`);
@@ -978,6 +979,7 @@ const loadPeData = async (peData: Uint8Array, skipReset: boolean = false) => {
     // "game crashed" dialog with a copyable report (e.g. a missing HLE API
     // discovered while generating import thunks), instead of a silent worker log.
     system.reportGuestCrash({ reason: `PE load failed: ${message}`, eip: 0, threadId: null });
+    return false;
   }
 };
 
@@ -1711,7 +1713,9 @@ const loadBundleImpl = async (payload: { data?: Uint8Array; url?: string; blob?:
     system.fileSystem.setCurrentDirectory(executableDir);
     Logger.log(LogCategory.SYSTEM, `Executable: name="${exeName}", path="${executablePath}", args="${system.executableArgs}"`);
 
-    await loadPeData(bundle.entrypointBytes, true);
+    // Do not announce a successful boot after the loader has reported a crash:
+    // that progress message would clear the host's crash dialog.
+    if (!(await loadPeData(bundle.entrypointBytes, true))) return;
     bootMark("pe-loaded");
 
     // Signal host that loading is done and the game is starting

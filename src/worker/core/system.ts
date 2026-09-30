@@ -50,6 +50,8 @@ export interface CrashFaultPayload {
     recentCalls: string[];
     gameEsp: number;
     stackDump: number[];
+    /** Small, bounded guest-memory snapshots for indirect-call crash diagnosis. */
+    memorySamples?: Array<{ label: string; address: number; hex: string }>;
     // --- harness.report() fields (via buildHarnessReport) + crash-only extras below ---
     cpu?: HarnessReport["cpu"];
     backtrace?: HarnessReport["backtrace"];
@@ -426,6 +428,36 @@ export class System {
                 }
             }
             fault.backtrace = report.backtrace;
+            const mem = this.process?.getCurrentMemory();
+            if (mem && report.cpu) {
+                const r = report.cpu.regs;
+                const candidates: Array<[string, number]> = [
+                    ["EIP", report.cpu.eip], ["EAX", r.eax],
+                    ["ESI", r.esi], ["EDI", r.edi],
+                    ...report.backtrace.slice(0, 3).map((b): [string, number] =>
+                        [`return #${b.i} - 16`, (Number(b.ret) - 16) >>> 0]),
+                ];
+                const seen = new Set<number>();
+                fault.memorySamples = [];
+                for (const [label, address] of candidates) {
+                    if (!address || address >= mem.length || seen.has(address)) continue;
+                    seen.add(address);
+                    const bytes = mem.subarray(address, Math.min(address + 64, mem.length));
+                    fault.memorySamples.push({ label, address,
+                        hex: Array.from(bytes, (v) => v.toString(16).padStart(2, "0")).join(" ") });
+                    // Snapshot the destination pointer of any FF 25 absolute JMP
+                    // in the prologue as well, without following or executing it.
+                    for (let i = 0; i + 6 <= bytes.length; i++) {
+                        if (bytes[i] !== 0xff || bytes[i + 1] !== 0x25) continue;
+                        const slot = new DataView(bytes.buffer, bytes.byteOffset + i + 2, 4).getUint32(0, true);
+                        if (slot + 4 > mem.length || seen.has(slot)) continue;
+                        seen.add(slot);
+                        fault.memorySamples.push({ label: `${label} JMP pointer`, address: slot,
+                            hex: Array.from(mem.subarray(slot, slot + 4), (v) =>
+                                v.toString(16).padStart(2, "0")).join(" ") });
+                    }
+                }
+            }
             fault.lastThunks = report.lastThunks;
             fault.recentCalls = report.lastThunks;
             if (!fault.lastThunk && report.lastThunk) fault.lastThunk = report.lastThunk;

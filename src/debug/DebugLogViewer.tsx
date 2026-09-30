@@ -1,3 +1,4 @@
+import styles from "./Diagnostics.module.css";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getLogClient, sendLogToServer, flushLogClient } from "../utils/log-client";
 
@@ -31,7 +32,7 @@ const LOG_CATEGORIES = [
 ];
 
 // Virtualization constants
-const ITEM_HEIGHT = 24; // approximate height of one log entry in pixels
+const ITEM_HEIGHT = 24; // Must match .logRow height in Diagnostics.module.css
 const OVERSCAN = 50; // render +50 elements above/below for smooth scrolling
 const MAX_LOGS = 50000; // maximum logs in memory (circular buffer)
 const BATCH_SIZE = 100; // flush batch when this many entries accumulated
@@ -191,7 +192,7 @@ export default function DebugLogViewer({ isOpen, onClose, worker }: DebugLogView
         filtered = filtered.filter((e) => categories.has(e.category));
       }
 
-      if (levels.size < 4) {
+      if (levels.size < 5) {
         filtered = filtered.filter((e) => levels.has(e.level));
       }
 
@@ -421,6 +422,11 @@ export default function DebugLogViewer({ isOpen, onClose, worker }: DebugLogView
     worker.postMessage({ type: "log_get_recent", count: 2000 });
   }, [worker]);
 
+  // Opening diagnostics should show the startup failure immediately.
+  useEffect(() => {
+    if (isOpen) loadRecent();
+  }, [isOpen, loadRecent]);
+
   const clearLogs = useCallback(() => {
     logsRef.current = [];
     filteredLogsRef.current = [];
@@ -569,6 +575,7 @@ export default function DebugLogViewer({ isOpen, onClose, worker }: DebugLogView
         </span>
       );
       lastIndex = regex.lastIndex;
+      if (match[0].length === 0) regex.lastIndex++;
     }
 
     // Add remaining text
@@ -587,7 +594,7 @@ export default function DebugLogViewer({ isOpen, onClose, worker }: DebugLogView
       const levelColor = getLevelColor(entry.level);
 
       return (
-        <div style={{ marginBottom: "4px", height: ITEM_HEIGHT, lineHeight: `${ITEM_HEIGHT}px` }}>
+        <div title={entry.message} className={styles.logRow}>
           <span style={{ color: "#888" }}>[{relTime}s]</span>{" "}
           <span
             style={{
@@ -605,7 +612,7 @@ export default function DebugLogViewer({ isOpen, onClose, worker }: DebugLogView
           >
             [{entry.category}]
           </span>{" "}
-          <span style={{ color: "#fff" }}>{highlightText(entry.message, debouncedSearchText)}</span>
+          <span style={{ color: "#fff" }}>{highlightText(entry.message.replace(/[\r\n]+/g, " "), debouncedSearchText)}</span>
         </div>
       );
     }
@@ -619,44 +626,13 @@ export default function DebugLogViewer({ isOpen, onClose, worker }: DebugLogView
   const showingCount = visibleLogs.length;
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: "rgba(0, 0, 0, 0.8)",
-        zIndex: 9999,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "20px",
-      }}
+    <div className={styles.overlay}
       onClick={onClose}
     >
-      <div
-        style={{
-          backgroundColor: "#1a1a1a",
-          borderRadius: "8px",
-          padding: "20px",
-          width: "90%",
-          maxWidth: "1200px",
-          height: "80vh",
-          display: "flex",
-          flexDirection: "column",
-          gap: "12px",
-          border: "1px solid #333",
-        }}
+      <div className={styles.logPanel} role="dialog" aria-modal="true" aria-label="Debug logs"
         onClick={(e) => e.stopPropagation()}
       >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-          }}
-        >
+        <div className={styles.header}>
           <h2 style={{ margin: 0, color: "#fff", fontSize: "18px" }}>
             Debug Log Viewer
           </h2>
@@ -675,6 +651,7 @@ export default function DebugLogViewer({ isOpen, onClose, worker }: DebugLogView
           </button>
         </div>
 
+        <div className={styles.controls}>
         {/* Search bar */}
         <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
           <input
@@ -906,7 +883,7 @@ export default function DebugLogViewer({ isOpen, onClose, worker }: DebugLogView
         {/* Level filters */}
         <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
           <span style={{ color: "#fff", fontSize: "12px" }}>Levels:</span>
-          {([0, 1, 2, 3] as LogLevel[]).map((level) => (
+          {([0, 1, 2, 3, 4] as LogLevel[]).map((level) => (
             <label
               key={level}
               style={{ display: "flex", alignItems: "center", gap: "4px", color: "#fff", fontSize: "11px" }}
@@ -951,26 +928,19 @@ export default function DebugLogViewer({ isOpen, onClose, worker }: DebugLogView
           ))}
         </div>
 
+        </div>
+
         {/* Virtualized log container */}
         <div
           ref={logContainerRef}
           onScroll={handleScroll}
-          style={{
-            flex: 1,
-            overflowY: "auto",
-            backgroundColor: "#0a0a0a",
-            border: "1px solid #333",
-            borderRadius: "4px",
-            padding: "12px",
-            fontFamily: "monospace",
-            fontSize: "12px",
-            lineHeight: "1.5",
-            position: "relative",
-          }}
+          className={styles.logs}
+          tabIndex={0}
+          aria-label="Log output"
         >
           {filteredLogsRef.current.length === 0 ? (
             <div style={{ color: "#666", textAlign: "center", paddingTop: "40px" }}>
-              No logs yet. Click "Start Stream" or "Load Recent" to begin.
+              No log entries. Load Recent refreshes the snapshot; Start Stream follows new entries.
             </div>
           ) : (
             <>

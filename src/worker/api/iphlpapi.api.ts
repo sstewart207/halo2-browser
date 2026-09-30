@@ -19,5 +19,8 @@ export const iphlpapiModule: ModuleDescriptor = {
     name: "iphlpapi",
     functions: [
         makeFunc("GetAdaptersInfo", 2),
+        makeFunc("GetBestInterface", 2),
+        makeFunc("GetIpAddrTable", 3),
+        makeFunc("GetAdaptersAddresses", 5),
     ],
 };

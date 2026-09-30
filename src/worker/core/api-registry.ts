@@ -1,6 +1,7 @@
 import { ModuleDescriptor, calculateStackCleanup } from "../api/types";
 import { setupapiModule } from "../api/setupapi.api";
 import { kernel32VistaSupplement } from "../api/kernel32-vista-supplement";
+import { win32ImportSupplements } from "../api/win32-import-supplement";
 import { REFERENCE_ARG_COUNTS } from "../reference-argcounts.generated";
 import { Logger, LogCategory } from "./logger";
 
@@ -96,6 +97,7 @@ export class APIRegistry {
 
         // After glob: merge GetProcAddress-only exports (static import survives stale Vite glob).
         this.mergeModuleFunctions(kernel32VistaSupplement);
+        for (const descriptor of win32ImportSupplements) this.mergeModuleFunctions(descriptor);
     }
 
     /** Add exports to an existing module descriptor (deduped by function name). */

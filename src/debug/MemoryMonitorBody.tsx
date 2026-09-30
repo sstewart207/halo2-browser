@@ -262,7 +262,7 @@ export default function MemoryMonitorBody({ worker }: MemoryMonitorBodyProps) {
             </div>
 
             {/* Content */}
-            <div style={{ padding: 10, overflowY: "auto", flex: 1 }}>
+            <div style={{ padding: 10, overflow: "auto", minHeight: 0, minWidth: 0, flex: 1 }}>
                 {!stats ? (
                     <div style={{ padding: 20, textAlign: "center", color: "#888" }}>
                         Loading memory stats...

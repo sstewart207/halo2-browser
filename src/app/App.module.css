@@ -6,7 +6,7 @@
   --fullscreen-integer-h: 480px;
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -102,7 +102,7 @@
   align-items: center;
   height: 44px;
   padding: 0 12px;
-  background: linear-gradient(180deg, var(--ink-800), var(--ink-900));
+  background: var(--ink-800);
   border-bottom: 1px solid var(--line-1);
   flex-shrink: 0;
   gap: 8px;
@@ -196,7 +196,7 @@
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  background: radial-gradient(120% 120% at 50% 35%, #11161d 0%, #0a0d12 100%);
+  background: #0a0d12;
   opacity: 1;
   transition: opacity 0.42s var(--ease);
 }
@@ -247,7 +247,7 @@
 
 .loading-overlay__bar {
   height: 100%;
-  background: linear-gradient(90deg, var(--cyan), var(--amber));
+  background: var(--cyan);
   border-radius: var(--r-pill);
   transition: width var(--t) var(--ease);
   min-width: 4px;
