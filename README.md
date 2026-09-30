@@ -1,145 +1,64 @@
-# BottleShip
+# Halo 2 in the browser
 
-**Run classic Windows games in your browser.**
+Private research by Shane Stewart into running **Halo 2 Project Cartographer locally in a browser**, using [BottleShip](https://github.com/jenissimo/bottleship).
 
-BottleShip runs real x86 Windows games in the browser — no OS image, no plugins, no
-server round-trip. It loads a game's PE executable directly and reimplements Windows
-itself (Win32, COM, DirectDraw / Direct3D 3–9, DirectSound) on top of WebGPU, WebAudio
-and OPFS.
+**Status: startup blocked. Halo 2 has not reached its menu or gameplay.** Native x86 code executes in Chrome and passes Cartographer's version checks. The current blocker is a deterministic invalid execution address during CRT initialization. The checkpoint PR holds the compatibility changes; the project is not yet playable.
 
-[Play online](https://bottleship.pages.dev) · [Compatibility](docs/compatibility.md) · [Documentation](#documentation) · [Contributing](CONTRIBUTING.md)
+## Goal
 
-<!-- TODO: hero.gif — a short montage (Max Payne / NFS Underground / StarCraft / Unreal) -->
+Run the single-player campaign in the browser without streaming or remote game execution. Add DualSense input, persistent campaign saves, and full emulator save states after gameplay works. Test desktop first, then supported mobile browsers. Multiplayer is deferred.
 
-- Real x86 Windows executables — not source ports
-- DirectDraw & Direct3D 3–9 → WebGPU
-- DirectSound & `waveOut` → WebAudio
-- Runs entirely on the client — no game streaming, no server-side execution
+## Current work
 
-> ⚠️ Early and actively developed — expect rough edges.
+- Read the executable's actual PE version resources instead of fabricated game metadata.
+- Provide mapped Windows-module export images for guest code that resolves APIs itself.
+- Correct export-name ordering and distinguish executable exports from forwarded exports.
+- Supply missing x86 import signatures, offline IP Helper behavior, and accurate unsupported DPAPI failures.
+- Keep debug logs and diagnostic panels readable when the window is resized or zoomed.
+- Capture bounded crash-memory samples to investigate the delayed GetProcAddress resolver.
 
-## Games running today
+TypeScript passes. The checkpoint's focused suite passes **24 tests / 155 assertions**. A Chrome boot still crashes at EIP `0xe7618007`; passing tests do not establish gameplay.
 
-BottleShip already runs a range of late-90s / early-2000s titles into gameplay, including
-Re-Volt, Heroes of Might & Magic III, StarCraft / Brood War, Diablo II, Max Payne, The Elder
-Scrolls III: Morrowind, Harry Potter and the Philosopher's Stone, Need for Speed: Porsche
-Unleashed & Underground, Unreal Gold, Command & Conquer: Tiberian Sun, Discworld Noir, Tomb
-Raider II and Tony Hawk's Pro Skater 2. See the [full compatibility list](docs/compatibility.md)
-for exact status per title.
+See the [checkpoint branch](https://github.com/sstewart207/halo2-browser/tree/codex/halo2-browser-checkpoint), [pull requests](https://github.com/sstewart207/halo2-browser/pulls), and [issues](https://github.com/sstewart207/halo2-browser/issues).
 
-Several of these are sold DRM-free on **GOG** (Heroes III, Re-Volt, Morrowind, Unreal Gold,
-Tomb Raider II…) — you can drop the offline installer straight in. Because only **demos and
-freeware** are legally redistributable, the online library lets you play those instantly;
-everything else, you bring your own legally-owned copy.
+## Development
 
-[Open the game library →](https://bottleship.pages.dev)
+Start from the checkpoint branch to use the Halo compatibility work:
 
-## Why
-
-The web has great open emulators for old platforms — DOSBox, ScummVM, Dolphin. But the
-awkward middle — **native Win32 games from ~1997–2004** with no source port, not on modern
-stores, and fussy on current Windows — has no easy home. BottleShip aims squarely at that gap.
-
-It gives those games a browser-native runtime without booting a Windows image or a native
-install. **We ship the emulator, not the games:** the online library is demos, shareware and
-other redistributable releases; you import your own legally-owned files locally.
-
-## How it works
-
-BottleShip doesn't boot Windows. It loads the game's PE executable into a 4 GB guest address
-space, runs its x86 code through a fork of [v86](https://github.com/copy/v86), and intercepts
-every imported Win32 and DirectX call.
-
-```mermaid
-flowchart LR
-    GAME["Windows game<br/>x86 PE"] --> CPU["v86 CPU<br/>(WASM)"]
-    CPU --> HLE["Win32 / DirectX HLE<br/>TypeScript + WASM"]
-    HLE --> WEB["WebGPU · WebAudio<br/>OPFS · input"]
-```
-
-- Win32 / COM APIs are reimplemented in TypeScript and WASM.
-- DirectDraw and Direct3D 3–9 are translated to WebGPU / WGSL in real time.
-- DirectSound and `waveOut` mix in an AudioWorklet over a SharedArrayBuffer ring.
-- Game files, saves and registry live in an OPFS virtual filesystem (read-only ROM plus a
-  copy-on-write overlay).
-- Hot guest/host calls stay entirely inside WASM for speed.
-
-[Read the architecture guide →](docs/architecture.md)
-
-## Run locally
-
-Requirements: [Bun](https://bun.sh/), and a browser with WebGPU (Chrome / Edge 113+) and
-SharedArrayBuffer.
-
-```bash
-git clone <repo-url>
-cd bottleship
+```powershell
+git clone --branch codex/halo2-browser-checkpoint https://github.com/sstewart207/halo2-browser.git
+cd halo2-browser
+git submodule update --init --recursive
 bun install
 bun run dev
 ```
 
-Open <http://localhost:5174>.
+Bun and a current Chromium browser with WebGPU are required by the runtime. In the existing Windows workspace, the working Bun binary is `../toolchain/node_modules/@oven/bun-windows-x64/bin/bun.exe`. Check the terminal for the actual Vite port.
 
-[Development & self-hosting guide →](docs/development.md)
-
-## Import your own games
-
-BottleShip can load:
-
-- `.wgb` game bundles;
-- raw game folders (drag & drop);
-- supported GOG Inno Setup installers (extracted in-browser).
-
-Imported files are processed locally in the browser and stored in OPFS, with a read-only base
-image and a writable overlay for saves and configuration.
-
-```bash
-bun tools/make-wgb.ts <game-dir> <out.wgb> --exe game.exe
+```powershell
+bun run typecheck
+bun test tools/tests/version-resource.test.ts tools/tests/hle-image.test.ts tools/tests/import-supplement.test.ts tools/tests/iphlpapi-offline.test.ts
 ```
 
-[Game import guide →](docs/bundles.md) · [GOG import →](docs/gog-import.md)
+Import your own game files locally. The private boot fixture currently contains the executable, required DLLs and the main-menu map; it does not include campaign maps. The real-file version test runs only when the developer's installed executable exists; synthetic parser tests run independently.
 
-## Help preserve a game
+## Next milestones
 
-BottleShip is built around compatibility work: load a game, find the generic Win32 or DirectX
-gap, implement it faithfully, and prove the fix with the automation harness — a fix that helps
-every title on the same code path, never a per-game hack.
+1. Fix the startup resolver trap and reach the real main menu.
+2. Verify one campaign level: rendered graphics, audio, and keyboard/mouse input.
+3. Persist native campaign progress across a browser restart.
+4. Support DualSense controls with remapping and dead zones.
+5. Implement full emulator save/restore and verify repeated round trips.
+6. Measure browser/device compatibility and performance, including mobile.
 
-Coding-agent-assisted contributions are welcome, as long as fixes stay generic, reviewable and
-covered by reproducible harness tests.
+Each milestone has observable acceptance checks in the issue backlog. The full engine, campaign, audio, controller input, portable saves and mobile support remain unverified.
 
-- Report a working or broken game
-- Diagnose a missing API (`report()` / `stubs()` name the culprit)
-- Submit a verified, generic implementation
+## Files and privacy
 
-[Contributing guide →](CONTRIBUTING.md) · [Contributing with coding agents →](docs/contributing-with-ai.md)
+Game executables, DLLs, maps, bundles, accounts, profiles, saves, runtime logs and local captures stay outside the repository. No game content is included here. The existing native installation and Windows security settings are preserved.
 
-## Community & contact
+## Credits and upstream
 
-- Questions, ideas, or a game you got running → [GitHub Discussions](https://github.com/jenissimo/bottleship/discussions).
-- Bugs & compatibility reports → [Issues](https://github.com/jenissimo/bottleship/issues) (use the templates).
-- Security → [SECURITY.md](SECURITY.md) (private reporting).
-- Anything else, including takedown / legal: **jenissimo+bottleship@gmail.com**.
+Project owner: **Shane Stewart**. Contributors credited at Shane's request: **Shane Stewart, ChatGPT (Codex), Claude Opus 5.5, and MiMo 2.6 Flash**. OpenCode work on version resources and HLE images was also completed using **Muse Spark 1.3**.
 
-## Support
-
-BottleShip is free and open source. If it brought a game back to life for you, you can chip in:
-[Ko-fi](https://ko-fi.com/bottleship) · [CloudTips (RU)](https://pay.cloudtips.ru/p/e2362fd1) · [Crypto](https://nowpayments.io/donation/bottleship).
-
-## Documentation
-
-- [Architecture](docs/architecture.md) — how the engine fits together
-- [Compatibility](docs/compatibility.md) — tested titles and their status
-- [Importing games](docs/bundles.md) · [GOG import](docs/gog-import.md)
-- [Development & self-hosting](docs/development.md)
-- [Automation harness](docs/harness.md) — driving and observing games
-- [Contributing with coding agents](docs/contributing-with-ai.md)
-
-## License & acknowledgements
-
-BottleShip is licensed under [Apache-2.0](LICENSE). It builds on a fork of
-[v86](https://github.com/copy/v86) (BSD-2) and bundles other open-source components
-(SeaBIOS / VGA BIOS, an FFmpeg-based decoder, fonts) — their licenses and notices are in
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
-
-**BottleShip does not distribute commercial game files.** Bring your own legally-owned copies.
+BottleShip is by **Eugeniy Smirnov (jenissimo)** and its contributors. The original upstream README is preserved in [docs/upstream-readme.md](docs/upstream-readme.md). The original Apache 2.0 license and upstream notices remain in place. The CPU runtime is the [BottleShip v86 fork](https://github.com/jenissimo/v86), based on [v86](https://github.com/copy/v86); its own license applies.

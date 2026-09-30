@@ -82,3 +82,12 @@ demos/**/*.exe
 # ReactOS-sourced headers are re-fetchable via `bun run fetch-reference-headers`; proprietary
 # ones (mss.h) are BYO. Only the derived, fact-only *.sig.json are tracked and shipped.
 tools/reference/**/*.h
+
+# Private Halo research inputs and outputs
+/private-assets/
+/bundles/
+/captures/
+/accounts/
+/profiles/
+/saves/
+*.wgb
