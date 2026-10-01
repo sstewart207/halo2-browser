@@ -644,6 +644,23 @@ export class Process {
     // Environment variables
     environment: Map<string, string> = new Map();
 
+    // Profile folders match the paths shell32 reports for the same CSIDLs.
+    private setDefaultEnvironment(): void {
+        const env = this.environment;
+        env.set("PATH", "C:\\WINDOWS\\SYSTEM32;C:\\WINDOWS;C:\\");
+        env.set("SYSTEMROOT", "C:\\WINDOWS");
+        env.set("WINDIR", "C:\\WINDOWS");
+        env.set("TEMP", "C:\\TEMP");
+        env.set("TMP", "C:\\TEMP");
+        env.set("USERNAME", "BottleShip");
+        env.set("COMPUTERNAME", "BS-EMULATOR");
+        env.set("USERPROFILE", "C:\\Windows");
+        env.set("APPDATA", "C:\\Windows\\Application Data");
+        env.set("LOCALAPPDATA", "C:\\Windows\\Local Settings\\Application Data");
+        env.set("HOMEDRIVE", "C:");
+        env.set("HOMEPATH", "\\Windows");
+    }
+
     // Last error code (set by SetLastError, read by GetLastError)
     lastError: number = 0;
 
@@ -681,14 +698,7 @@ export class Process {
             Logger.error(LogCategory.SYSTEM, `Failed to initialize thunk memory: ${err}`);
         });
 
-        // Default environment
-        this.environment.set("PATH", "C:\\WINDOWS\\SYSTEM32;C:\\WINDOWS;C:\\");
-        this.environment.set("SYSTEMROOT", "C:\\WINDOWS");
-        this.environment.set("WINDIR", "C:\\WINDOWS");
-        this.environment.set("TEMP", "C:\\TEMP");
-        this.environment.set("TMP", "C:\\TEMP");
-        this.environment.set("USERNAME", "BottleShip");
-        this.environment.set("COMPUTERNAME", "BS-EMULATOR");
+        this.setDefaultEnvironment();
 
         // Initialize callback manager for x86 callback invocation (WndProc, etc.)
         // Pass thunk memory manager to dispatcher so it can use dynamic addresses
@@ -822,13 +832,7 @@ export class Process {
 
         // Restore default environment
         this.environment.clear();
-        this.environment.set("PATH", "C:\\WINDOWS\\SYSTEM32;C:\\WINDOWS;C:\\");
-        this.environment.set("SYSTEMROOT", "C:\\WINDOWS");
-        this.environment.set("WINDIR", "C:\\WINDOWS");
-        this.environment.set("TEMP", "C:\\TEMP");
-        this.environment.set("TMP", "C:\\TEMP");
-        this.environment.set("USERNAME", "BottleShip");
-        this.environment.set("COMPUTERNAME", "BS-EMULATOR");
+        this.setDefaultEnvironment();
 
         this.lastError = 0;
 
