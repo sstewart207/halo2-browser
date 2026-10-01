@@ -202,7 +202,8 @@ function emitTexOp(
             body.push(`// tex (stage ${stage}${isCube ? ", cube" : ""}${projected ? ", proj.w" : ""}${biased ? ", bias" : ""})`);
             body.push(`let ${tc} = ${coordExpr};`);
             const projd = projected ? `((${tc}) / (${tc}).w)` : `(${tc})`;
-            const coord = isCube ? `${projd}.xyz` : `${projd}.xy`;
+            const isVolume = ((cubeMask >> (stage + 8)) & 1) !== 0;
+            const coord = (isCube || isVolume) ? `${projd}.xyz` : `${projd}.xy`;
             const sampleExpr = biased
                 ? `textureSampleBias(tex${stage}, samp, ${coord}, (${tc}).w)`
                 : `textureSample(tex${stage}, samp, ${coord})`;

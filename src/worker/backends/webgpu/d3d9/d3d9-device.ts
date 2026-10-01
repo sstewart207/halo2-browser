@@ -9,6 +9,8 @@ import { D3D9BackendExecutor, UniformData } from "./d3d9-backend-executor";
 import { VertexBufferStore, IndexBufferStore, TextureStore } from "./d3d9-resources";
 import { DxSamplerCache } from "../shared/dx-sampler";
 import { TexturePaletteStore } from "../shared/texture-palette-store";
+import { D3D9VolumeData, volumeMipLayouts } from './d3d9-volume';
+import { ResourceBindings } from "./resource-lifetime";
 import { decodeD3d9Sampler } from "./d3d9-sampler";
 import { buildColorTargetState, computeBlendKey } from "./d3d9-blend";
 import { effectiveMipLevels } from "../shared/mip-utils";
@@ -37,7 +39,7 @@ import { frameProfiler } from "../../../core/frame-profiler";
 import { framePacer } from "../../../core/frame-pacer";
 import { statsOverlay } from "../../../core/stats-overlay";
 import {
-    compileVertexShader, compilePixelShader, linkProgram, computeCubeMask,
+    compileVertexShader, compilePixelShader, linkProgram, computeCubeMask, computeVolumeMask,
     CompiledVs, CompiledPs, RawVertexElement, PROG_BIND,
 } from "./shader";
 import { AlphaTest, alphaTestSnippet } from "./shader/sm-wgsl";
@@ -61,6 +63,7 @@ import {
     applyStateBlockEntries,
     captureStateToEntries,
     refreshCapturedEntries,
+    retainStateBlockTextures,
     classifyStateBlockCoverage,
     type D3D9StateBlockData,
     type StateBlockEntry,
@@ -133,6 +136,8 @@ type ClearState = {
 };
 
 export class D3D9Device {
+    readonly resourceBindings = new ResourceBindings();
+    private recordingResourceRefs = new ResourceBindings();
     // A hardware-3D presenter owns the screen: GDI window-background paints must NOT composite
     // over (and black out) the rendered 3D frame. Matches D3D8/Glide/OpenGL (RenderActive contract).
     readonly suppressGdiOverlay = true;
@@ -266,6 +271,7 @@ export class D3D9Device {
         if (newTarget === this.currentRtIndex && newFace === this.currentRtFace) return 0;
         // Flush everything drawn for the current target/face before switching.
         this.submitFrame(false);
+        this.resourceBindings.set('renderTarget', newTarget === null ? 0 : texturePtr);
         this.currentRtIndex = newTarget;
         this.currentRtFace = newFace;
         return 0;
@@ -311,6 +317,7 @@ export class D3D9Device {
     }
 
     // Temporary lock records for mip levels > 0.
+    readonly volumeData = new Map<number, D3D9VolumeData>();
     private mipLevelLocks: Map<string, { guestPtr: number; pitch: number }> = new Map();
     // Persisted mip pixel data (level > 0) for D3DXFilterTexture and LockRect round-trips.
     private mipLevelData: Map<string, Uint8Array> = new Map();
@@ -936,6 +943,7 @@ export class D3D9Device {
         if (streamNumber !== 0) return 0;
 
         const index = this.vertexBuffers.getIndex(vbPtr);
+        this.resourceBindings.set('stream0', index === null ? 0 : vbPtr);
         if (index === null) {
             if (d3d9WasmArena.isInitialized()) d3d9WasmArena.setStreamSource(0, 0, 0);
             if (!this.stateTracker.clearStreamSource()) d3d9PerfSkip("setStreamSource");
@@ -1073,6 +1081,7 @@ export class D3D9Device {
 
     setIndices(ibPtr: number): number {
         d3d9PerfInc("setIndices");
+        this.resourceBindings.set('indices', this.indexBuffers.getIndex(ibPtr) === null ? 0 : ibPtr);
         if (ibPtr === 0) {
             if (d3d9WasmArena.isInitialized()) d3d9WasmArena.setIndices(0, 0);
             if (!this.stateTracker.setIndexSource(null)) d3d9PerfSkip("setIndices");
@@ -1103,6 +1112,43 @@ export class D3D9Device {
 
     getCurrentTexturePalette(): number {
         return this.texturePalettes.getCurrentTexturePalette();
+    }
+
+    createVolumeTexture(texPtr: number, width: number, height: number, depth: number, levels: number, format: number): number {
+        const process = System.getInstance().process;
+        if (!process) return 0;
+        let ptr = 0;
+        try {
+            const mips = volumeMipLayouts(width, height, depth, levels, format);
+            ptr = process.memory.alloc(mips.reduce((n, mip) => n + mip.bytes, 0), 'HEAP', undefined, undefined, 'd3d9:volumeTexture');
+            this.textures.create(texPtr, width, height, levels, format, ptr);
+            this.volumeData.set(texPtr, new D3D9VolumeData(ptr, width, height, depth, levels, format));
+            return ptr;
+        } catch (error) {
+            if (ptr) process.memory.free(ptr);
+            Logger.error(LogCategory.D3D9, `createVolumeTexture ${width}x${height}x${depth}: ${error}`);
+            return 0;
+        }
+    }
+
+    private ensureVolumeTexture(index: number, device: GPUDevice): void {
+        const volume = this.volumeData.get(this.textures.getHandle(index));
+        if (!volume) return;
+        let texture = this.textures.getGpuTexture(index);
+        if (!texture) {
+            const mip = volume.mips[0];
+            texture = device.createTexture({ dimension: '3d', size: [mip.width, mip.height, mip.depth],
+                mipLevelCount: volume.mips.length, format: 'rgba8unorm',
+                usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+            this.textures.setGpuTexture(index, texture, texture.createView({ dimension: '3d' }));
+        }
+        if (!volume.dirty) return;
+        for (let level = 0; level < volume.mips.length; level++) {
+            const mip = volume.mips[level];
+            this.backend.getQueue()!.writeTexture({ texture, mipLevel: level }, volume.rgba(level, this.memory) as any,
+                { bytesPerRow: mip.width * 4, rowsPerImage: mip.height }, [mip.width, mip.height, mip.depth]);
+        }
+        volume.dirty = false;
     }
 
     createTexture(texPtr: number, width: number, height: number, levels: number, format: number, usage: number = 0): number {
@@ -1419,6 +1465,7 @@ export class D3D9Device {
         if (stage < this.boundTexturePtrs.length) {
             this.boundTexturePtrs[stage] = texPtr;
         }
+        this.resourceBindings.set(`texture:${stage}`, this.textures.getIndex(texPtr) === null ? 0 : texPtr);
         if (texPtr === 0) {
             if (d3d9WasmArena.isInitialized()) d3d9WasmArena.setTexture(stage, 0);
             if (!this.stateTracker.setTexture(stage, null)) {
@@ -1449,6 +1496,7 @@ export class D3D9Device {
      * Called when the COM object's refCount reaches 0.
      */
     releaseVertexBuffer(vbPtr: number): void {
+        this.submitFrame(false); // Pending draws still refer to store indices.
         const vb = this.vertexBuffers.release(vbPtr);
         if (vb?.gpuBuffer) {
             vb.gpuBuffer.destroy();
@@ -1463,6 +1511,7 @@ export class D3D9Device {
      * Called when the COM object's refCount reaches 0.
      */
     releaseIndexBuffer(ibPtr: number): void {
+        this.submitFrame(false);
         const ib = this.indexBuffers.release(ibPtr);
         if (ib?.gpuBuffer) {
             ib.gpuBuffer.destroy();
@@ -1477,6 +1526,7 @@ export class D3D9Device {
      * Called when the COM object's refCount reaches 0.
      */
     releaseTexture(texPtr: number): void {
+        this.submitFrame(false);
         const mipPrefix = `${texPtr}:`;
         for (const [key, lock] of this.mipLevelLocks.entries()) {
             if (key.startsWith(mipPrefix)) {
@@ -1485,6 +1535,7 @@ export class D3D9Device {
             }
         }
         this.clearMipLevelData(texPtr);
+        this.volumeData.delete(texPtr);
 
         // Cube face scratch / persisted pixels / per-face render views keyed by this texPtr.
         const cubePrefix = `${texPtr}:`;
@@ -1824,6 +1875,14 @@ export class D3D9Device {
 
     reset(pPresentationParameters: number, mem: Uint8Array): number {
         if (!pPresentationParameters) return 0x8876086c; // D3DERR_INVALIDCALL
+
+        this.submitFrame(false);
+        this.resourceBindings.clear();
+        this.currentRtIndex = null;
+        this.currentRtFace = -1;
+        this.setStreamSource(0, 0, 0, 0);
+        this.setIndices(0);
+        for (let stage = 0; stage < PROG_BIND.MAX_TEX; stage++) this.setTexture(stage, 0);
 
         const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
         const width = Math.max(1, view.getUint32(pPresentationParameters + 0, true) || 800);
@@ -2741,7 +2800,7 @@ export class D3D9Device {
         const alphaTest = this.getAlphaTest();
         // Effective cube mask (dcl_cube ∪ bound cube textures) — part of the pipeline identity since
         // the same shader sampled with a 2D vs a cube texture compiles to different texN dimensions.
-        const cubeMask = computeCubeMask(ps) | this.boundCubeMask();
+        const cubeMask = computeCubeMask(ps) | (computeVolumeMask(ps) << 8) | this.boundCubeMask();
         // Per-stage D3DTTFF_PROJECTED key — part of the pipeline identity: the same ps_1_x shader
         // compiles to a projective-divide sample vs a plain sample depending on the stage flag.
         const projKey = this.projectedStageKey();
@@ -2878,6 +2937,7 @@ export class D3D9Device {
         for (let stage = 0; stage < PROG_BIND.MAX_TEX; stage++) {
             const ti = this.stateTracker.getTexture(stage);
             if (ti !== null && this.textures.isCubeMap(ti)) mask |= (1 << stage);
+            if (ti !== null && this.volumeData.has(this.textures.getHandle(ti))) mask |= (1 << (stage + 8));
         }
         return mask;
     }
@@ -2919,7 +2979,7 @@ export class D3D9Device {
         // Effective cube mask = shader dcl_cube ∪ stages with a cube texture bound. MUST equal the
         // mask resolveProgrammablePipeline used to build the pipeline layout (same derivation) so
         // the per-draw bind group stays compatible.
-        const cubeMask = computeCubeMask(ps) | this.boundCubeMask();
+        const cubeMask = computeCubeMask(ps) | (computeVolumeMask(ps) << 8) | this.boundCubeMask();
         state.cubeMask = cubeMask;
 
         for (let stage = 0; stage < PROG_BIND.MAX_TEX; stage++) {
@@ -2936,7 +2996,8 @@ export class D3D9Device {
             // (blank screen). Only bind the view when its dimension matches the slot; otherwise leave
             // null so the executor supplies the correct-dimension fallback.
             const stageIsCube = ((cubeMask >> stage) & 1) !== 0;
-            state.textures[stage] = (stageIsCube === this.textures.isCubeMap(ti))
+            const stageIsVolume = ((cubeMask >> (stage + 8)) & 1) !== 0;
+            state.textures[stage] = (stageIsCube === this.textures.isCubeMap(ti) && stageIsVolume === this.volumeData.has(this.textures.getHandle(ti)))
                 ? this.textures.getView(ti)
                 : null;
         }
@@ -3171,7 +3232,7 @@ export class D3D9Device {
             return null;
         }
         // The FFP bind-group layout's texture slot is 2D; a cube view would make it invalid.
-        if (this.textures.isCubeMap(textureIndex)) return null;
+        if (this.textures.isCubeMap(textureIndex) || this.volumeData.has(this.textures.getHandle(textureIndex))) return null;
         this.ensureTexture(textureIndex);
         return this.textures.getView(textureIndex);
     }
@@ -3183,6 +3244,7 @@ export class D3D9Device {
         if (this.textures.isRenderTarget(index)) return;
         // Cube textures own a 6-layer GPU texture created in createCubeTexture; upload LockRect'd
         // faces only (their sampling view is the cube view — never replace it with a 2D view).
+        if (this.volumeData.has(this.textures.getHandle(index))) { this.ensureVolumeTexture(index, device); return; }
         if (this.textures.isCubeMap(index)) { this.ensureCubeTexture(index, device); return; }
         const data = this.textures.getData(index);
         if (!data) return;
@@ -3469,6 +3531,7 @@ export class D3D9Device {
     private recordStateBlock(entry: StateBlockEntry): void {
         if (!this.suppressStateBlockRecording) {
             this.stateBlockRecorder.record(entry);
+            if (entry.op === 'texture') this.recordingResourceRefs.set(`texture:${entry.stage}`, entry.texPtr);
         }
     }
 
@@ -3498,11 +3561,13 @@ export class D3D9Device {
         return 0;
     }
 
-    endStateBlock(): { hr: number; entries: StateBlockEntry[] } {
+    endStateBlock(): { hr: number; entries: StateBlockEntry[]; resourceRefs?: ResourceBindings } {
         if (!this.stateBlockRecorder.isRecording()) {
             return { hr: 0x88760826, entries: [] }; // D3DERR_NOTINBEGINSTATEBLOCK
         }
-        return { hr: 0, entries: this.stateBlockRecorder.end() };
+        const resourceRefs = this.recordingResourceRefs;
+        this.recordingResourceRefs = new ResourceBindings();
+        return { hr: 0, entries: this.stateBlockRecorder.end(), resourceRefs };
     }
 
     createStateBlockData(blockType: number): D3D9StateBlockData {
@@ -3577,6 +3642,7 @@ export class D3D9Device {
             if (data.handleEntries && data.handleEntries.length > 0) {
                 refreshCapturedEntries(this, data.handleEntries);
             }
+            retainStateBlockTextures(data);
             return 0;
         }
         if (data.entries.length > 0) {
@@ -3585,6 +3651,7 @@ export class D3D9Device {
             data.entries = captureStateToEntries(this, data.blockType);
             data.coverable = classifyStateBlockCoverage(data.entries).coverable;
         }
+        retainStateBlockTextures(data);
         return 0;
     }
 

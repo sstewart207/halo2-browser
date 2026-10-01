@@ -20,6 +20,7 @@ export class Shlwapi implements IModule {
 
         bindA("PathFindFileNameA", (args) => this.findFileNameAnsi(args[0] >>> 0), 4);
         bindA("PathFindFileNameW", (args) => this.findFileNameWide(args[0] >>> 0), 4);
+        bindA("StrStrIA", (args) => this.findSubstringInsensitiveAnsi(args[0] >>> 0, args[1] >>> 0), 8);
         bindA("PathFindExtensionA", (args) => this.findExtensionAnsi(args[0] >>> 0), 4);
         bindA("PathFindExtensionW", (args) => this.findExtensionWide(args[0] >>> 0), 4);
 
@@ -83,6 +84,25 @@ export class Shlwapi implements IModule {
     }
 
     reset(): void {}
+
+    private findSubstringInsensitiveAnsi(textPtr: number, searchPtr: number): number {
+        const mem = Mem.getView();
+        if (!mem || !textPtr || !searchPtr || textPtr >= mem.length || searchPtr >= mem.length) return 0;
+        const text = this.readAnsi(textPtr, mem.length - textPtr);
+        const search = this.readAnsi(searchPtr, mem.length - searchPtr);
+        if (!search.length) return 0;
+        const decoder = getCodePageDecoder(EmulatorConfig.getInstance().ansiCodePage);
+        // Compare at guest byte boundaries so the result is an ANSI pointer,
+        // including when the configured code page uses multibyte characters.
+        const wanted = search.toLowerCase();
+        const searchBytes = encodeAnsi(search).length;
+        const textBytes = encodeAnsi(text).length;
+        for (let offset = 0; offset + searchBytes <= textBytes; offset++) {
+            const candidate = decoder.decode(new Uint8Array(mem.subarray(textPtr + offset, textPtr + offset + searchBytes)));
+            if (candidate.toLowerCase() === wanted) return (textPtr + offset) >>> 0;
+        }
+        return 0;
+    }
 
     private readAnsi(ptr: number, maxLen: number = MAX_PATH): string {
         if (!ptr) return "";

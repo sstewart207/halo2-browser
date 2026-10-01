@@ -4,10 +4,13 @@
 
 import { Mem } from '../../core/memory/mem-accessor';
 import { Logger, LogCategory } from '../../core/logger';
-import { devices, getVTables, createComObject, resourceToDevice } from './shared-state';
+import { devices, getVTables, createComObject, resourceToDevice, stateBlocks } from './shared-state';
 import { D3D9Device } from '../../backends/webgpu/d3d9/d3d9-device';
 import { initReturnPtr, D3DFMT_UNKNOWN, normalizePalettizedTexturePool } from '../../backends/webgpu/shared/dx-com-helpers';
 import { isDxExclusiveFormat } from '../../backends/webgpu/shared/dx-format-support';
+import { System } from '../../core/system';
+import { d3d9ResourceLifetime } from '../../backends/webgpu/d3d9/resource-lifetime';
+import { d3d9WasmArena } from '../../backends/webgpu/d3d9/d3d9-wasm-arena';
 
 export type TextureMeta = {
     width: number;
@@ -18,6 +21,7 @@ export type TextureMeta = {
     format: number;
     /** Cube texture: width === height === edge length; faces selected via CubeMapFace. */
     isCube?: boolean;
+    depth?: number;
 };
 
 export type BufferMeta = {
@@ -55,12 +59,43 @@ export const deviceBoundDepthStencil: Map<number, number> = new Map();
 export const textureLevelSurfaces: Map<number, Map<number, number>> = new Map();
 /** Cube texture COM ptr -> `${face}_${level}` -> stable IDirect3DSurface9 COM ptr. */
 export const cubeFaceSurfaces: Map<number, Map<string, number>> = new Map();
+export const volumeLevels = new Map<number, { texturePtr: number; level: number }>();
 
 const D3D_OK = 0;
 const D3DERR_INVALIDCALL = 0x8876086c;
 const D3DFMT_A8R8G8B8 = 21;
 const D3DRTYPE_SURFACE = 1;
 const D3DMULTISAMPLE_NONE = 0;
+
+export function destroyResource(ptr: number, kind: string): void {
+    const device = resourceToDevice.get(ptr);
+    if (kind === 'IDirect3DVolumeTexture9' || kind === 'IDirect3DTexture9' || kind === 'IDirect3DCubeTexture9') {
+        device?.releaseTexture(ptr);
+        clearTextureSubresourceSurfaces(ptr);
+        textureMeta.delete(ptr);
+        for (const [child, meta] of volumeLevels) {
+            if (meta.texturePtr !== ptr) continue;
+            volumeLevels.delete(child);
+            resourceToDevice.delete(child);
+            System.getInstance().process?.memory.free(child);
+        }
+    } else if (kind === 'IDirect3DVertexBuffer9') {
+        device?.releaseVertexBuffer(ptr);
+        vertexBufferMeta.delete(ptr);
+    } else if (kind === 'IDirect3DIndexBuffer9') {
+        device?.releaseIndexBuffer(ptr);
+        indexBufferMeta.delete(ptr);
+    } else if (kind === 'IDirect3DStateBlock9') {
+        const block = stateBlocks.get(ptr);
+        block?.resourceRefs?.clear();
+        if (block?.wasmSlot !== undefined) d3d9WasmArena.releaseBlockSlot(block.wasmSlot);
+        stateBlocks.delete(ptr);
+    } else {
+        surfaceMeta.delete(ptr);
+    }
+    resourceToDevice.delete(ptr);
+    System.getInstance().process?.memory.free(ptr);
+}
 
 export function clearTextureSubresourceSurfaces(texturePtr: number): void {
     const pTex = texturePtr >>> 0;
@@ -69,6 +104,7 @@ export function clearTextureSubresourceSurfaces(texturePtr: number): void {
         for (const surfPtr of levels.values()) {
             surfaceMeta.delete(surfPtr);
             resourceToDevice.delete(surfPtr);
+            System.getInstance().process?.memory.free(surfPtr);
         }
         textureLevelSurfaces.delete(pTex);
     }
@@ -77,6 +113,7 @@ export function clearTextureSubresourceSurfaces(texturePtr: number): void {
         for (const surfPtr of faces.values()) {
             surfaceMeta.delete(surfPtr);
             resourceToDevice.delete(surfPtr);
+            System.getInstance().process?.memory.free(surfPtr);
         }
         cubeFaceSurfaces.delete(pTex);
     }
@@ -101,6 +138,7 @@ export function ensureTextureLevelSurface(pTexture: number, level: number): numb
 
     const dims = getTextureLevelDims(meta.width, meta.height, level);
     const surfacePtr = createComObject(vtableAddr);
+    d3d9ResourceLifetime.alias(surfacePtr, pTex);
     resourceToDevice.set(surfacePtr, device);
     surfaceMeta.set(surfacePtr, {
         format: meta.format,
@@ -138,6 +176,7 @@ export function ensureCubeFaceSurface(pCube: number, face: number, level: number
 
     const dim = Math.max(1, meta.width >>> level);
     const surfacePtr = createComObject(vtableAddr);
+    d3d9ResourceLifetime.alias(surfacePtr, pTex);
     resourceToDevice.set(surfacePtr, device);
     surfaceMeta.set(surfacePtr, {
         format: meta.format,
@@ -174,6 +213,7 @@ export function precreateCubeFaceSurfaces(pCube: number, levelCount: number): bo
 
 export function clearResourceRegistry(): void {
     textureMeta.clear();
+    volumeLevels.clear();
     surfaceMeta.clear();
     vertexBufferMeta.clear();
     indexBufferMeta.clear();
@@ -262,6 +302,7 @@ export function createGuestTexture(
 
     const guestPtr = device.createTexture(texPtr, w, h, levelCount, fmt, usage >>> 0);
     if (guestPtr === 0) {
+        d3d9ResourceLifetime.release(texPtr);
         if (ppTexture) initReturnPtr(ppTexture);
         return D3DERR_INVALIDCALL;
     }
@@ -277,9 +318,7 @@ export function createGuestTexture(
     });
 
     if (!precreateTextureLevelSurfaces(texPtr, maxLevels)) {
-        clearTextureSubresourceSurfaces(texPtr);
-        resourceToDevice.delete(texPtr);
-        textureMeta.delete(texPtr);
+        d3d9ResourceLifetime.release(texPtr);
         if (ppTexture) initReturnPtr(ppTexture);
         return D3DERR_INVALIDCALL;
     }

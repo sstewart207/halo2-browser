@@ -774,6 +774,35 @@ export const IDirect3DTexture9: InterfaceDescriptor = {
     ]
 };
 
+export const IDirect3DVolumeTexture9: InterfaceDescriptor = {
+    name: "IDirect3DVolumeTexture9",
+    inherits: "IDirect3DBaseTexture9",
+    methods: [
+        ...IUnknown.methods,
+        ...textureMethodSpecs.slice(0, 14).map(spec => makeMethod(spec.name, spec.args)),
+        makeMethod("GetLevelDesc", 3),
+        makeMethod("GetVolumeLevel", 3),
+        makeMethod("LockBox", 5, { category: "lock" }),
+        makeMethod("UnlockBox", 2, { category: "lock" }),
+        makeMethod("AddDirtyBox", 2),
+    ],
+};
+
+export const IDirect3DVolume9: InterfaceDescriptor = {
+    name: "IDirect3DVolume9",
+    methods: [
+        ...IUnknown.methods,
+        makeMethod("GetDevice", 2),
+        makeMethod("SetPrivateData", 5),
+        makeMethod("GetPrivateData", 4),
+        makeMethod("FreePrivateData", 2),
+        makeMethod("GetContainer", 3),
+        makeMethod("GetDesc", 2),
+        makeMethod("LockBox", 4, { category: "lock" }),
+        makeMethod("UnlockBox", 1, { category: "lock" }),
+    ],
+};
+
 // IDirect3DCubeTexture9 — same IDirect3DBaseTexture9 vtable as IDirect3DTexture9,
 // but the per-image accessors take a CubeMapFace selector: GetCubeMapSurface
 // (replaces GetSurfaceLevel), and LockRect/UnlockRect/AddDirtyRect gain a FaceType
@@ -1086,6 +1115,8 @@ export const d3d9Module: ModuleDescriptor = {
         IDirect3DVertexBuffer9,
         IDirect3DIndexBuffer9,
         IDirect3DTexture9,
+        IDirect3DVolumeTexture9,
+        IDirect3DVolume9,
         IDirect3DCubeTexture9,
         IDirect3DSurface9,
         IDirect3DStateBlock9,

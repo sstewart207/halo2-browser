@@ -11,7 +11,9 @@ import { devices, getVTables, createComObject, stateBlocks } from './shared-stat
 import { RawVertexElement } from '../../backends/webgpu/d3d9/shader';
 import type { D3D9StateBlockData } from '../../backends/webgpu/d3d9/d3d9-state-block';
 import { classifyStateBlockCoverage, tryAttachWasmBlockSlot } from '../../backends/webgpu/d3d9/d3d9-state-block';
+import { retainStateBlockTextures } from '../../backends/webgpu/d3d9/d3d9-state-block';
 import { d3d9PerfStateBlockCreated } from './d3d9-perf';
+import { d3d9ResourceLifetime } from '../../backends/webgpu/d3d9/resource-lifetime';
 import {
     vertexDeclComObjects,
     vertexShaderComObjects,
@@ -36,6 +38,7 @@ export function createStateExports(): Record<string, ThunkImplementation> {
         if (!ppvObject) return E_POINTER;
         // D3DX and runtime code QI for IUnknown/base interfaces on the same object pointer.
         if (!Mem.writeUint32(ppvObject, thisPtr)) return E_POINTER;
+        d3d9ResourceLifetime.addRef(thisPtr);
         return D3D_OK;
     }
 
@@ -60,6 +63,7 @@ export function createStateExports(): Record<string, ThunkImplementation> {
             coverage.psConstRanges,
         );
         stateBlocks.set(sbPtr, data);
+        retainStateBlockTextures(data);
         return sbPtr;
     }
 
@@ -425,6 +429,8 @@ export function createStateExports(): Record<string, ThunkImplementation> {
         'IDirect3DVertexBuffer9',
         'IDirect3DIndexBuffer9',
         'IDirect3DTexture9',
+        'IDirect3DVolumeTexture9',
+        'IDirect3DVolume9',
         'IDirect3DCubeTexture9',
         'IDirect3DSurface9',
         'IDirect3DStateBlock9',
@@ -439,13 +445,13 @@ export function createStateExports(): Record<string, ThunkImplementation> {
         exports[`${prefix}_AddRef`] = (ctx, mem, args) => {
             const pObject = args[0];
             Logger.verbose(LogCategory.D3D9, `${prefix}::AddRef(0x${pObject.toString(16)})`);
-            return 2; // Dummy ref count
+            return d3d9ResourceLifetime.count(pObject) ? d3d9ResourceLifetime.addRef(pObject) : 2;
         };
 
         exports[`${prefix}_Release`] = (ctx, mem, args) => {
             const pObject = args[0];
             Logger.verbose(LogCategory.D3D9, `${prefix}::Release(0x${pObject.toString(16)})`);
-            return 1; // Dummy ref count
+            return d3d9ResourceLifetime.count(pObject) ? d3d9ResourceLifetime.release(pObject) : 1;
         };
     }
 
@@ -706,6 +712,7 @@ export function createStateExports(): Record<string, ThunkImplementation> {
             devicePtr: pDevice,
             blockType: 0,
             entries: result.entries,
+            resourceRefs: result.resourceRefs,
         });
         if (!sbPtr || !writeStateBlockOut(ppSB, sbPtr, mem)) return D3DERR_INVALIDCALL;
 

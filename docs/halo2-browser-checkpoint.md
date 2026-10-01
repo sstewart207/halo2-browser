@@ -1,3 +1,20 @@
+# October 1 checkpoint: resource lifetime and volume texture startup fixes
+
+Live Chrome execution, with the same private 2GB bundle, now reaches the Windows Media Foundation intro-video path. It still renders black. No menu, video, campaign gameplay, correct audio, controller input or saving is accepted.
+
+- Real D3D9 resource AddRef/Release replaces dummy return values in both slow and fast dispatch paths. Texture surfaces, device bindings and state blocks retain owners; final release frees CPU/GPU backing. Live guest memory fell from 1741 MB to roughly 750 MB without enlarging RAM.
+- Wait APIs honor persisted termination on reaped thread handles. Halo passes its former renderer-thread wait.
+- StrStrIA returns actual match pointers/NULL instead of falsely identifying the adapter as AMD.
+- Missing CreateVolumeTexture caused hundreds of thousands of failed bitmap-loading calls and repeated renderer resets. Volume COM interfaces, full native mip/slice backing, box locks, child references, real WebGPU 3D uploads and matching shader/layout coordinates are implemented.
+- Latest Chrome sample: 762.13 MB live, 756.32 MB tracked, peak 762.19 MB. No continued renderer-reset entry hits at the subsequent video startup stop.
+- Current stop: Media Foundation MFCreateMediaSession; MFStartup is unimplemented. The intro path needs real local decode/render. UpdateTexture/GetTexture/StretchRect remain observed graphics gaps, so video is not the only possible cause of black output.
+
+Validation: 895 tests passed, 0 failed, 4615 assertions across 93 files; TypeScript and diff checks clean. Volume tests cover mip/slice pitches, bounds, native descriptors/ABI, compressed locks, readonly behavior, slice pixel conversion and 3D shader coordinates. These are compatibility tests, not gameplay acceptance.
+
+Private runtime logs, captures, game executables/DLLs, maps, profiles, saves and bundles remain excluded from Git. The installed game and Defender settings are unchanged. Workspace HANDOFF.md NEWEST-15 contains the precise runtime addresses and local Ghidra evidence. An interior fast breakpoint with zero hits is not proof its branch is unused: tracing the reset function entry confirmed the bitmap caller.
+
+---
+
 # Latest paused checkpoint: PAUSED; compiler OOM traced to rejected HeapAlloc(0)
 
 September 30, 2026, late evening. User explicitly requested pause and handoff to GLM 5.3. STOP development until the user or their chosen agent resumes it. This supersedes NEWEST-5's active-development instruction. No implementation changes were made after bb6a256; this checkpoint documents a newly isolated cause. Halo menu/video/gameplay remains unverified.

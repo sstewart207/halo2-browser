@@ -29,6 +29,11 @@ export class SyncObjectManager {
 
     // ─── Events ─────────────────────────────────────────────────────────────
 
+    private _threadTerminated(object: KernelThreadObject, lookup: ThreadLookupFn): boolean {
+        // A thread handle remains signaled after the scheduler reaps its execution record.
+        return object.terminated === true || lookup(object.threadId)?.state === ThreadState.TERMINATED;
+    }
+
     createEvent(manualReset: boolean, initialState: boolean): number {
         const handle = this.resourceProvider.registerKernelObject({
             kind: 'event', manualReset, signaled: initialState,
@@ -201,7 +206,7 @@ export class SyncObjectManager {
         const obj = this.resourceProvider.getKernelObject(handle) as KernelObject | null;
         if (!obj) return false;
         switch (obj.kind) {
-            case 'thread': { const t = threadLookup((obj as KernelThreadObject).threadId); return t !== null && t.state === ThreadState.TERMINATED; }
+            case 'thread': return this._threadTerminated(obj as KernelThreadObject, threadLookup);
             case 'event': return this._eventReady(obj as KernelEventObject, handle);
             case 'semaphore': return (obj as KernelSemaphoreObject).count > 0;
             case 'mutex': { const m = obj as KernelMutexObject; const owner = this._mutexOwner(m, handle); return owner === null || owner === threadId; }
@@ -285,7 +290,7 @@ export class SyncObjectManager {
             const obj = this.resourceProvider.getKernelObject(h) as KernelObject | null;
             if (!obj) return { ready: true, result: WAIT_FAILED, consumeAutoReset: [], consumeSemaphores: [], consumeMutexes: [] };
             switch (obj.kind) {
-                case 'thread': { const t = tl((obj as KernelThreadObject).threadId); if (!t || t.state !== ThreadState.TERMINATED) return _notReady; break; }
+                case 'thread': { if (!this._threadTerminated(obj as KernelThreadObject, tl)) return _notReady; break; }
                 case 'event': {
                     const e = obj as KernelEventObject;
                     const st = this._getEventState(e, h);
@@ -314,7 +319,7 @@ export class SyncObjectManager {
             const obj = this.resourceProvider.getKernelObject(h) as KernelObject | null;
             if (!obj) return { ready: true, result: WAIT_FAILED, consumeAutoReset: [], consumeSemaphores: [], consumeMutexes: [] };
             switch (obj.kind) {
-                case 'thread': { const t = tl((obj as KernelThreadObject).threadId); if (t && t.state === ThreadState.TERMINATED) return { ready: true, result: WAIT_OBJECT_0 + i, consumeAutoReset: [], consumeSemaphores: [], consumeMutexes: [] }; break; }
+                case 'thread': { if (this._threadTerminated(obj as KernelThreadObject, tl)) return { ready: true, result: WAIT_OBJECT_0 + i, consumeAutoReset: [], consumeSemaphores: [], consumeMutexes: [] }; break; }
                 case 'event': {
                     const e = obj as KernelEventObject;
                     if (this._eventReady(e, h)) {

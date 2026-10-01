@@ -2,7 +2,7 @@
 
 Private research by Shane Stewart into running **Halo 2 Project Cartographer locally in a browser**, using [BottleShip](https://github.com/jenissimo/bottleship).
 
-**Status: graphics initialization reached; no menu or gameplay yet.** Chrome creates a real 800×600 Direct3D9Ex device, loads Halo's precompiled pixel shaders and allocates render textures. The NT loader/semaphore startup crash is fixed. Cartographer's correct native D3DX43 and D3DCompiler43 now execute inside the guest. Preprocessing succeeds, but D3DCompile returns E_OUTOFMEMORY; the latest trace isolates a valid zero-byte HeapAlloc request that our emulator rejects. The fix is pending. Halo exits before drawing game frames. The earlier native D3DX31/INVALIDCALL diagnosis was superseded. Development is paused at the user's request for handoff to GLM 5.3.
+**Status: startup now reaches the intro-video path; no menu or gameplay yet.** Shader compilation, the graphics resource leak, a reaped-thread wait, and missing volume texture support are fixed. Chrome uses about 762 MB of live guest memory instead of exhausting 1.74 GB. The current stop is Media Foundation session creation for the intro WMV. Development is active.
 
 ## Goal
 
@@ -10,15 +10,12 @@ Run the single-player campaign in the browser without streaming or remote game e
 
 ## Current work
 
-- Preserve the original exception even when crash reporting floods diagnostics.
-- Provide the NT loader export required by Halo's Unicode API resolver.
-- Implement D3D9Ex factory/device interfaces and GPU render-target surfaces.
-- Execute a selected private native DLL through `emulator.nativeDlls`, retaining HLE defaults for other bundles.
-- Implement the missing CRT _mbstrlen dependency and trace native D3DCompile failure.
-- Diagnose native D3DX shader compilation before claiming game rendering.
+- Diagnose and implement the Media Foundation startup/session/video path.
+- Implement the observed D3D9 UpdateTexture, GetTexture and StretchRect gaps.
+- Verify actual main-menu pixels before campaign, audio, controller and saving acceptance.
 - Record verified [engine and tooling references](docs/halo2-research-leads.md).
 
-**Latest validation: 10 focused tests / 74 assertions, TypeScript and production build pass.** The preceding checkpoint passed 53 tests / 350 assertions. Chrome verifies the device and texture allocations. See [checkpoint details](docs/halo2-browser-checkpoint.md).
+**Latest validation: 895 tests pass, TypeScript clean.** Chrome confirms lower live memory and progress past bitmap-loading reset churn. Tests do not establish working gameplay. See [checkpoint details](docs/halo2-browser-checkpoint.md).
 
 See the [checkpoint branch](https://github.com/sstewart207/halo2-browser/tree/codex/halo2-browser-checkpoint), [pull requests](https://github.com/sstewart207/halo2-browser/pulls), and [issues](https://github.com/sstewart207/halo2-browser/issues).
 
@@ -45,7 +42,7 @@ Import your own game files locally. The private test fixture contains the execut
 
 ## Next milestones
 
-1. Resolve native D3DX shader compilation and reach the real main menu.
+1. Resolve video startup and remaining rendering gaps; reach the real main menu.
 2. Verify one campaign level: rendered graphics, audio, and keyboard/mouse input.
 3. Persist native campaign progress across a browser restart.
 4. Support DualSense controls with remapping and dead zones.

@@ -15,6 +15,7 @@ import { WebGPUBackend } from '../../backends/webgpu/webgpu-backend';
 import { writeDeviceCaps9 } from './caps';
 import { getVTables, devices, createComObject, resourceToDevice, deviceToD3D9 } from './shared-state';
 import { deviceBoundDepthStencil, surfaceMeta } from './resource-registry';
+import { d3d9ResourceLifetime } from '../../backends/webgpu/d3d9/resource-lifetime';
 
 const D3DFMT_X8R8G8B8 = 22;
 const D3DFMT_R5G6B5 = 23;
@@ -75,6 +76,8 @@ function bindAutoDepthStencil(device: D3D9Device, devicePtr: number, mem: Uint8A
         height: h,
     });
     deviceBoundDepthStencil.set(devicePtr, surfacePtr);
+    device.resourceBindings.set('depthStencil', surfacePtr);
+    d3d9ResourceLifetime.release(surfacePtr); // Initial reference transfers to the device.
     Logger.log(LogCategory.D3D9, `auto depth-stencil ${w}x${h} fmt=${format} -> 0x${surfacePtr.toString(16)} (bound)`);
 }
 
@@ -510,6 +513,7 @@ export function createDeviceExports(): Record<string, ThunkImplementation> {
         }
 
         deviceBoundDepthStencil.set(pDevice, pNewZStencil);
+        device.resourceBindings.set('depthStencil', pNewZStencil);
         Logger.verbose(LogCategory.D3D9, `SetDepthStencilSurface(0x${pNewZStencil.toString(16)})`);
         return D3D_OK;
     };
@@ -528,6 +532,8 @@ export function createDeviceExports(): Record<string, ThunkImplementation> {
         if (!Mem.writeUint32(ppZStencilSurface, bound)) {
             return D3DERR_INVALIDCALL;
         }
+
+        if (bound) d3d9ResourceLifetime.addRef(bound);
 
         return D3D_OK;
     };

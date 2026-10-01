@@ -4,6 +4,7 @@
  * Atomic implementation for Direct3D resource operations
  */
 
+import { createVolumeExports } from './volume-resources';
 import { ThunkImplementation } from '../../core/thunking/thunk-dispatcher';
 import { Logger, LogCategory } from '../../core/logger';
 import { System } from '../../core/system';
@@ -18,7 +19,6 @@ import {
     ensureCubeFaceSurface,
     precreateTextureLevelSurfaces,
     precreateCubeFaceSurfaces,
-    clearTextureSubresourceSurfaces,
     type SurfaceMeta,
 } from './resource-registry';
 import { getD3DTextureLayout } from '../../backends/webgpu/shared/texture-formats';
@@ -28,6 +28,7 @@ import {
     normalizePalettizedTexturePool,
 } from '../../backends/webgpu/shared/dx-com-helpers';
 import { isDxExclusiveFormat } from '../../backends/webgpu/shared/dx-format-support';
+import { d3d9ResourceLifetime } from '../../backends/webgpu/d3d9/resource-lifetime';
 
 const D3DERR_NOTAVAILABLE = 0x8876086a;
 const D3DFMT_A8R8G8B8 = 21;
@@ -105,6 +106,7 @@ export function createResourcesExports(): Record<string, ThunkImplementation> {
 
         const guestPtr = device.createVertexBuffer(vbPtr, Length, FVF);
         if (guestPtr === 0) {
+            d3d9ResourceLifetime.release(vbPtr);
             initReturnPtr(ppVertexBuffer);
             return D3DERR_INVALIDCALL;
         }
@@ -144,6 +146,7 @@ export function createResourcesExports(): Record<string, ThunkImplementation> {
 
         const guestPtr = device.createIndexBuffer(ibPtr, Length, Format);
         if (guestPtr === 0) {
+            d3d9ResourceLifetime.release(ibPtr);
             initReturnPtr(ppIndexBuffer);
             return D3DERR_INVALIDCALL;
         }
@@ -195,6 +198,7 @@ export function createResourcesExports(): Record<string, ThunkImplementation> {
 
         const guestPtr = device.createTexture(texPtr, width, height, levelCount, Format, Usage >>> 0);
         if (guestPtr === 0) {
+            d3d9ResourceLifetime.release(texPtr);
             initReturnPtr(ppTexture);
             return D3DERR_INVALIDCALL;
         }
@@ -209,9 +213,7 @@ export function createResourcesExports(): Record<string, ThunkImplementation> {
         });
 
         if (!precreateTextureLevelSurfaces(texPtr, maxLevels)) {
-            clearTextureSubresourceSurfaces(texPtr);
-            resourceToDevice.delete(texPtr);
-            textureMeta.delete(texPtr);
+            d3d9ResourceLifetime.release(texPtr);
             initReturnPtr(ppTexture);
             return D3DERR_INVALIDCALL;
         }
@@ -259,6 +261,7 @@ export function createResourcesExports(): Record<string, ThunkImplementation> {
 
         const guestPtr = device.createCubeTexture(cubePtr, edge, levelCount, Format, Usage >>> 0);
         if (guestPtr === 0) {
+            d3d9ResourceLifetime.release(cubePtr);
             initReturnPtr(ppCubeTexture);
             return D3DERR_INVALIDCALL;
         }
@@ -274,9 +277,7 @@ export function createResourcesExports(): Record<string, ThunkImplementation> {
         });
 
         if (!precreateCubeFaceSurfaces(cubePtr, maxLevels)) {
-            clearTextureSubresourceSurfaces(cubePtr);
-            resourceToDevice.delete(cubePtr);
-            textureMeta.delete(cubePtr);
+            d3d9ResourceLifetime.release(cubePtr);
             initReturnPtr(ppCubeTexture);
             return D3DERR_INVALIDCALL;
         }
@@ -572,13 +573,16 @@ export function createResourcesExports(): Record<string, ThunkImplementation> {
 
         const meta = textureMeta.get(pTexture);
         if (!meta || meta.isCube || level >= meta.levels) {
+            Logger.warn(LogCategory.D3D9, `GetSurfaceLevel rejected: texture=0x${pTexture.toString(16)} level=${level} levels=${meta?.levels ?? 'missing'} cube=${meta?.isCube ?? false}`);
             return D3DERR_INVALIDCALL;
         }
 
         const surfacePtr = ensureTextureLevelSurface(pTexture, level);
         if (!surfacePtr) return D3DERR_INVALIDCALL;
 
-        return Mem.writeUint32(ppSurfaceLevel, surfacePtr) ? D3D_OK : D3DERR_INVALIDCALL;
+        if (!Mem.writeUint32(ppSurfaceLevel, surfacePtr)) return D3DERR_INVALIDCALL;
+        d3d9ResourceLifetime.addRef(surfacePtr);
+        return D3D_OK;
     };
 
     // ── IDirect3DCubeTexture9 ────────────────────────────────────────────────
@@ -602,7 +606,9 @@ export function createResourcesExports(): Record<string, ThunkImplementation> {
         const surfacePtr = ensureCubeFaceSurface(pCube, faceType, level);
         if (!surfacePtr) return D3DERR_INVALIDCALL;
 
-        return Mem.writeUint32(ppSurface, surfacePtr) ? D3D_OK : D3DERR_INVALIDCALL;
+        if (!Mem.writeUint32(ppSurface, surfacePtr)) return D3DERR_INVALIDCALL;
+        d3d9ResourceLifetime.addRef(surfacePtr);
+        return D3D_OK;
     };
 
     exports['IDirect3DCubeTexture9_LockRect'] = (_ctx, mem, args) => {
@@ -830,5 +836,6 @@ export function createResourcesExports(): Record<string, ThunkImplementation> {
         return D3D_OK;
     };
 
+    Object.assign(exports, createVolumeExports());
     return exports;
 }
