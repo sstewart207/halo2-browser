@@ -72,7 +72,14 @@ export class MemoryManager {
     // tell UAF-reuse (alloc→free→alloc) from double-hand-out (alloc→alloc, no free)
     // from corruption (address only ever allocated by one subsystem).
     private static readonly LARGE_ALLOC_THRESHOLD = 0x10000; // 64KB = VirtualAlloc granularity
-    private static readonly LARGE_ALLOC_LOG_SIZE = 4096;
+    // Ring capacity for large-alloc history. Sized to cover a FULL Halo 2 boot: that
+    // run holds ~17k live allocations, and alloc+free pairs mean the ring turns over
+    // twice over. At 4096 it wrapped long before the interesting blocks were still
+    // live, so heapReport's per-tag attribution came back EMPTY at exactly the moment
+    // it was needed most -- an empty answer that reads like "nothing is allocated".
+    // Diagnostic-only; each entry carries a backtrace string, so this is bounded and
+    // not on any hot path.
+    private static readonly LARGE_ALLOC_LOG_SIZE = 65536;
     private largeAllocLog: Array<{ op: 'alloc' | 'free' | 'alias'; addr: number; size: number; time: number; bt: string; js: string; tag: string }> = [];
     private largeAllocLogIdx = 0;
     /** Allocation-site tag for the NEXT logLargeEvent (see alloc's `tag`). */
@@ -149,6 +156,16 @@ export class MemoryManager {
      * caller backtrace shows whether the address was freed before reuse (UAF) or
      * handed out while live (double-hand-out / corruption).
      */
+    /**
+     * Ring capacity, so callers can tell "no large allocations" apart from "the ring
+     * wrapped and evicted the ones you wanted". A full ring means the history is
+     * incomplete: later entries are present, earlier ones are gone. Entries evicted
+     * are NOT necessarily freed.
+     */
+    getLargeAllocRingCapacity(): number {
+        return MemoryManager.LARGE_ALLOC_LOG_SIZE;
+    }
+
     getLargeAllocHistory(addr: number, radius: number = 0x20000): Array<{ op: string; addr: string; size: string; t: string; overlaps: boolean; bt: string; js: string; tag: string }> {
         const target = addr >>> 0;
         const lo = Math.max(0, target - radius);
