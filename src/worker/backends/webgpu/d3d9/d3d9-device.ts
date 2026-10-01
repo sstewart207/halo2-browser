@@ -984,7 +984,7 @@ export class D3D9Device {
         if (!process) return 0;
         try {
             // +16: tail canary (see BUF_CANARY) — kept outside the size the store/game sees.
-            const guestPtr = process.memory.alloc(size + D3D9Device.BUF_CANARY_BYTES, "HEAP");
+            const guestPtr = process.memory.alloc(size + D3D9Device.BUF_CANARY_BYTES, "HEAP", undefined, undefined, "d3d9:vertexBuffer");
             this.vertexBuffers.create(vbPtr, size, fvf, guestPtr);
             this.writeCanary(null, guestPtr, size);
             return guestPtr;
@@ -1031,7 +1031,7 @@ export class D3D9Device {
         if (!process) return 0;
         try {
             // +16: tail canary, same scheme as createVertexBuffer.
-            const guestPtr = process.memory.alloc(size + D3D9Device.BUF_CANARY_BYTES, "HEAP");
+            const guestPtr = process.memory.alloc(size + D3D9Device.BUF_CANARY_BYTES, "HEAP", undefined, undefined, "d3d9:indexBuffer");
             this.indexBuffers.create(ibPtr, size, format, guestPtr);
             this.writeCanary(null, guestPtr, size);
             return guestPtr;
@@ -1110,7 +1110,7 @@ export class D3D9Device {
         if (!process) return 0;
         const bytes = getD3DTextureLayout(format, width, height).bytes;
         try {
-            const guestPtr = process.memory.alloc(bytes, "HEAP");
+            const guestPtr = process.memory.alloc(bytes, "HEAP", undefined, undefined, "d3d9:texture2D");
             const index = this.textures.create(texPtr, width, height, levels, format, guestPtr);
             // D3DUSAGE_RENDERTARGET (0x1): the guest renders INTO this texture (no LockRect
             // upload). Create a render-attachment-capable GPU texture eagerly so it is a valid
@@ -1159,7 +1159,7 @@ export class D3D9Device {
         try {
             // Scratch HEAP backing keeps TextureStore.create's bookkeeping uniform with 2D
             // textures; cube faces are locked into per-face scratch on demand (lockCubeFace).
-            const guestPtr = process.memory.alloc(getD3DTextureLayout(format, e, e).bytes, "HEAP");
+            const guestPtr = process.memory.alloc(getD3DTextureLayout(format, e, e).bytes, "HEAP", undefined, undefined, "d3d9:cubeTexture");
             const index = this.textures.create(cubePtr, e, e, levelCount, format, guestPtr);
             this.textures.markCube(index);
             if (d3d9WasmArena.isInitialized()) d3d9WasmArena.markTextureCube(index, true);
@@ -1214,7 +1214,7 @@ export class D3D9Device {
         if (!process) return null;
         let guestPtr: number;
         try {
-            guestPtr = process.memory.alloc(bytes, "HEAP");
+            guestPtr = process.memory.alloc(bytes, "HEAP", undefined, undefined, "d3d9:lockRectScratch");
         } catch (err) {
             Logger.error(LogCategory.D3D9, `lockCubeFace: HEAP alloc failed bytes=${bytes}: ${err}`);
             return null;
@@ -1281,7 +1281,7 @@ export class D3D9Device {
         if (!process) return null;
         let guestPtr: number;
         try {
-            guestPtr = process.memory.alloc(bytes, "HEAP");
+            guestPtr = process.memory.alloc(bytes, "HEAP", undefined, undefined, "d3d9:lockRectScratchCube");
         } catch (e) {
             Logger.error(LogCategory.D3D9, `lockTexture mip${level}: HEAP alloc failed bytes=${bytes}: ${e}`);
             return null;

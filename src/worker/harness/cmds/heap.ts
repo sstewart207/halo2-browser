@@ -150,6 +150,13 @@ export function registerHeapCommands(svc: HarnessService): void {
         // Roll the live large blocks up by which API produced them — the one number that
         // decides between "the guest really needs this much RAM" and "an emulator path is
         // over-charging the bucket".
+        //
+        // The ring only records blocks >=64KB and only carries 4096 events, so it ROLLS
+        // OVER: `largeLive` comes back empty exactly when the guest is deepest into its
+        // allocation and you need the answer most. An empty `apiTotals` therefore means
+        // "the ring rolled over", NOT "nothing is allocated". `ringRolledOver` says so
+        // explicitly so that reading is never mistaken for a clean result — the size
+        // histogram and totals are the authoritative numbers; this is attribution only.
         const byApi = new Map<string, { mb: number; n: number }>();
         for (const e of largeLive) {
             const key = (e.tag || (e.js || "").split("|")[0] || "?").trim();
@@ -161,6 +168,9 @@ export function registerHeapCommands(svc: HarnessService): void {
         const apiTotals = [...byApi.entries()]
             .map(([api, v]) => ({ api, mb: +v.mb.toFixed(2), blocks: v.n }))
             .sort((a, b) => b.mb - a.mb);
+        // true = the ring filled up, so later allocations evicted earlier ones and the
+        // attribution above is incomplete. Blocks evicted are NOT necessarily freed.
+        const ringRolledOver = raw.length >= (mem.getLargeAllocRingCapacity?.() ?? 4096);
 
         return {
             buckets,
@@ -185,6 +195,7 @@ export function registerHeapCommands(svc: HarnessService): void {
             sizeHistogram,
             largeLive,
             apiTotals,
+            ringRolledOver,
             totals: {
                 allocations: allocs.length,
                 trackedMB: +(allocs.reduce((s, a) => s + a.size, 0) / MB).toFixed(2),
