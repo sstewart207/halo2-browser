@@ -181,3 +181,15 @@ test('D3D9 caps advertise the two implemented programmable color attachments', (
     expect(writeDeviceCaps9(64)).toBe(true);
     expect(Mem.readUint32(64 + 240)).toBe(2);
 });
+
+
+test('primary render-target binding restores full viewport even when surface is unchanged', () => {
+    const device = Object.create(D3D9Device.prototype) as any;
+    device.currentRtIndex = 21; device.currentRtFace = -1;
+    device.viewport = {x: 4, y: 5, width: 240, height: 180, minZ: 0.2, maxZ: 0.8};
+    device.textures = {getIndex: () => 21, isRenderTarget: () => true, isCubeMap: () => false,
+        getWidth: () => 800, getHeight: () => 600};
+    device.resourceBindings = {set: () => {}};
+    expect(device.setRenderTarget(0, 123, -1, 124)).toBe(0);
+    expect(device.getViewport()).toEqual({x:0,y:0,width:800,height:600,minZ:0,maxZ:1});
+});

@@ -45,6 +45,7 @@ import {
     CompiledVs, CompiledPs, RawVertexElement, PROG_BIND,
 } from "./shader";
 import { AlphaTest, alphaTestSnippet } from "./shader/sm-wgsl";
+import { readShaderTokens } from "./shader/read-tokens";
 import { Op, opName } from "./shader/sm-enums";
 import {
     FFP_UNIFORM_STRUCT_WGSL,
@@ -345,12 +346,19 @@ export class D3D9Device {
             }
         }
         if (newTarget !== null) this.rtNonBackThisFrame++;
-        if (newTarget === this.currentRtIndex && newFace === this.currentRtFace) return 0;
+        if (newTarget === this.currentRtIndex && newFace === this.currentRtFace) {
+            const {w, h} = this.getCurrentTargetSize();
+            this.viewport = {x: 0, y: 0, width: w, height: h, minZ: 0, maxZ: 1};
+            return 0;
+        }
         // Flush everything drawn for the current target/face before switching.
         this.submitFrame(false);
         this.resourceBindings.set('renderTarget', newTarget === null ? 0 : texturePtr);
         this.currentRtIndex = newTarget;
         this.currentRtFace = newFace;
+        // D3D9 resets the primary viewport when binding a render target.
+        const {w, h} = this.getCurrentTargetSize();
+        this.viewport = {x: 0, y: 0, width: w, height: h, minZ: 0, maxZ: 1};
         return 0;
     }
 
@@ -587,16 +595,7 @@ export class D3D9Device {
     // ── Vertex shader API ────────────────────────────────────────────────
 
     private readShaderTokens(bytecodePtr: number, mem: Uint8Array): Uint32Array {
-        const dv = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
-        const maxTokens = 8192; // safety limit
-        const tokens = new Uint32Array(maxTokens);
-        let count = 0;
-        for (let i = 0; i < maxTokens; i++) {
-            const token = dv.getUint32(bytecodePtr + i * 4, true);
-            tokens[count++] = token;
-            if ((token & 0xFFFF) === 0xFFFF) break; // END token
-        }
-        return tokens.subarray(0, count);
+        return readShaderTokens(mem, bytecodePtr);
     }
 
     createVertexShader(bytecodePtr: number, mem: Uint8Array): { hr: number; handle: number; bytecode: Uint32Array } {
@@ -615,7 +614,7 @@ export class D3D9Device {
                 `consts=${a.constantCount} inputs=${a.inputDcls.length} instrs=${compiled.prog.instructions.length}`);
             return { hr: 0, handle, bytecode };
         } catch (e) {
-            Logger.error(LogCategory.D3D9, `[D3D9] CreateVertexShader failed: ${e}`);
+            this.recordPipelineError(`CreateVertexShader failed: ${e}`);
             return { hr: 0x8876086c, handle: 0, bytecode: new Uint32Array(0) }; // D3DERR_INVALIDCALL
         }
     }
@@ -636,7 +635,7 @@ export class D3D9Device {
                 `consts=${a.constantCount} samplers=${[...a.samplers].join(",")} instrs=${compiled.prog.instructions.length}`);
             return { hr: 0, handle, bytecode };
         } catch (e) {
-            Logger.error(LogCategory.D3D9, `[D3D9] CreatePixelShader failed: ${e}`);
+            this.recordPipelineError(`CreatePixelShader failed: ${e}`);
             return { hr: 0x8876086c, handle: 0, bytecode: new Uint32Array(0) }; // D3DERR_INVALIDCALL
         }
     }
@@ -2068,8 +2067,7 @@ export class D3D9Device {
     setViewport(pViewport: number, mem: Uint8Array): number {
         if (!pViewport || !isValidAddress(mem, pViewport, 24)) return 0x8876086c;
         const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
-        const targetW = this.viewport.width || 800;
-        const targetH = this.viewport.height || 600;
+        const {w: targetW, h: targetH} = this.getCurrentTargetSize();
         this.viewport = sanitizeViewport({
             x: view.getUint32(pViewport + 0, true),
             y: view.getUint32(pViewport + 4, true),

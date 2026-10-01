@@ -2,7 +2,7 @@
 
 Private research by Shane Stewart into running **Halo 2 Project Cartographer locally in a browser**, using [BottleShip](https://github.com/jenissimo/bottleship).
 
-**Status: active rendering loop; scene pixels in GPU targets; actual game viewport still black.** Resource lifetime, volume textures and a Windows video-proxy trap are resolved. Halo handles unavailable video and continues hundreds of draws per frame, around 763 MB live guest memory. Texture transfers and real GPU surface copies are implemented; menu and gameplay remain unverified. Development is active.
+**Status: real animated Halo 2 title screen renders locally in Chrome.** Enter advances to a menu panel, but menu labels are missing. Fixing a shader-bytecode reader that stopped inside comments/immediates restored genuine game pixels. Campaign, audio, controller and saving remain unverified. Paused at a tested checkpoint for agent handoff.
 
 ## Goal
 
@@ -11,11 +11,11 @@ Run the single-player campaign in the browser without streaming or remote game e
 ## Current work
 
 - Diagnose and implement the Media Foundation startup/session/video path.
-- Trace presentation and scene rendering: SM3 semantic mapping and multi-stream buffer fixes remove observed GPU pipeline rejections, but the viewport remains black.
+- Trace presentation and scene rendering: SM3 semantic mapping and multi-stream buffer fixes remove observed GPU pipeline rejections, with actual title-screen presentation now verified.
 - Verify actual main-menu pixels before campaign, audio, controller and saving acceptance.
 - Record verified [engine and tooling references](docs/halo2-research-leads.md).
 
-**Latest validation: 915 tests pass, TypeScript clean.** Chrome verifies real GPU copy pixels and local decoding of 120 non-black WMV intro frames in a separate decoder probe. Halo integration remains incomplete. Tests do not establish working gameplay. See [checkpoint details](docs/halo2-browser-checkpoint.md).
+**Latest validation: 920 tests pass, TypeScript clean.** Chrome verifies real GPU copy pixels and local decoding of 120 non-black WMV intro frames in a separate decoder probe. Halo integration remains incomplete. Tests do not establish working gameplay. See [checkpoint details](docs/halo2-browser-checkpoint.md).
 
 See the [checkpoint branch](https://github.com/sstewart207/halo2-browser/tree/codex/halo2-browser-checkpoint), [pull requests](https://github.com/sstewart207/halo2-browser/pulls), and [issues](https://github.com/sstewart207/halo2-browser/issues).
 
