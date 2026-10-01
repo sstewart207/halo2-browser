@@ -38,8 +38,26 @@ const TWO_TO_THE_31 = 0x80000000;
 /** The primary HEAP bucket, which must not move. */
 const PRIMARY_HEAP_SIZE = 0x20000000;
 
+/**
+ * Layout and allocator maths here only ever read `ram.length` — nothing in this file
+ * reads or writes guest bytes — so the tests avoid materialising real 1–2GB buffers.
+ * That matters: when Chrome is holding a 2GB WASM memory for a live emulator (the
+ * normal state while diagnosing), a genuine `new Uint8Array(2GB)` in the test process
+ * intermittently OOMs and fails the suite for reasons unrelated to the code under test.
+ */
+function fakeRam(size: number): Uint8Array {
+    return {
+        length: size,
+        byteLength: size,
+        byteOffset: 0,
+        buffer: null,
+        fill: () => {},
+        set: () => {},
+    } as unknown as Uint8Array;
+}
+
 function install(ramSize: number) {
-    const ram = new Uint8Array(ramSize);
+    const ram = fakeRam(ramSize);
     const addressSpace = new AddressSpace(() => ram);
     addressSpace.initializeLayout(ram.length);
     const memory = new MemoryManager(addressSpace);

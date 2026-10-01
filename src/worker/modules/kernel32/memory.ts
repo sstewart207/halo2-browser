@@ -2692,7 +2692,20 @@ export function registerFastPathHeapFunctions(dispatcher: any): void {
 
         try {
             const allocBytes = dwBytes <= HEAP_SMALL_ALLOC_MAX ? alignSmallAlloc(dwBytes) : dwBytes;
-            const address = process.memory.alloc(allocBytes) >>> 0;
+            // Fast paths bypass the dispatcher wrapper that publishes the thunk name, so
+            // without this every block allocated through HeapAlloc stamps
+            // `api=<not-a-thunk>` and heapReport's per-API rollup comes back useless.
+            // Halo 2 allocates nearly all of its ~1.7GB this way, so this is the one
+            // attribution that matters. Restore in finally so a throw cannot leave a
+            // stale name attached to the NEXT unrelated allocation.
+            const prevThunk = (globalThis as any).__currentThunkName;
+            (globalThis as any).__currentThunkName = 'kernel32:HeapAlloc';
+            let address: number;
+            try {
+                address = process.memory.alloc(allocBytes) >>> 0;
+            } finally {
+                (globalThis as any).__currentThunkName = prevThunk;
+            }
             if (zeroMemory) {
                 mem8.fill(0, address, address + allocBytes);
             }
