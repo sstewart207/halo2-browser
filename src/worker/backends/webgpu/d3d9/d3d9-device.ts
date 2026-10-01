@@ -11,6 +11,7 @@ import { DxSamplerCache } from "../shared/dx-sampler";
 import { TexturePaletteStore } from "../shared/texture-palette-store";
 import { D3D9VolumeData, volumeMipLayouts } from './d3d9-volume';
 import { ResourceBindings } from "./resource-lifetime";
+import { SurfaceCopier, type CopyRect } from './stretch-rect';
 import { decodeD3d9Sampler } from "./d3d9-sampler";
 import { buildColorTargetState, computeBlendKey } from "./d3d9-blend";
 import { effectiveMipLevels } from "../shared/mip-utils";
@@ -136,6 +137,40 @@ type ClearState = {
 };
 
 export class D3D9Device {
+    private surfaceCopier?: SurfaceCopier;
+    private surfaceCopyLog: string[] = [];
+    noteSurfaceCopy(message: string): void {
+        if (this.surfaceCopyLog[this.surfaceCopyLog.length - 1] === message) return;
+        this.surfaceCopyLog.push(message);
+        if (this.surfaceCopyLog.length > 12) this.surfaceCopyLog.shift();
+    }
+
+    readShaderConstants(vertex: boolean, start: number, count: number, output: number): boolean {
+        const constants = vertex ? this.vsConstantBits : this.psConstantBits;
+        if (!output || start > constants.length / 4 || count > constants.length / 4 - start) return false;
+        for (let i = 0; i < count * 4; i++) {
+            if (!Mem.writeUint32(output + i * 4, constants[start * 4 + i])) return false;
+        }
+        return true;
+    }
+
+    stretchSurface(sourcePtr: number, sourceLevel: number, sourceLayer: number, src: CopyRect,
+        targetPtr: number, targetLevel: number, targetLayer: number, dst: CopyRect, filter: number): boolean {
+        const gpu = this.backend.getDevice();
+        if (!gpu) return false;
+        this.submitFrame(false);
+        const resolve = (ptr: number): GPUTexture | null => {
+            if (!ptr) return this.backendExecutor.getBackBufferTexture();
+            const index = this.textures.getIndex(ptr);
+            if (index === null || this.volumeData.has(ptr)) return null;
+            this.ensureTexture(index);
+            return this.textures.getGpuTexture(index);
+        };
+        const source = resolve(sourcePtr), target = resolve(targetPtr);
+        if (!source || !target || !(source.usage & GPUTextureUsage.TEXTURE_BINDING) || !(target.usage & GPUTextureUsage.RENDER_ATTACHMENT)) return false;
+        this.surfaceCopier ??= new SurfaceCopier(gpu);
+        return this.surfaceCopier.copy(source, sourceLevel, sourceLayer, src, target, targetLevel, targetLayer, dst, filter === 2);
+    }
     readonly resourceBindings = new ResourceBindings();
     private recordingResourceRefs = new ResourceBindings();
     // A hardware-3D presenter owns the screen: GDI window-background paints must NOT composite
@@ -242,8 +277,8 @@ export class D3D9Device {
         }
     }
     /** HARNESS rtDebug verb: what SetRenderTarget saw + which textures were created as RTs. */
-    getRtDebug(): { resolves: string[]; creates: string[]; currentRtIndex: number | null } {
-        return { resolves: [...this.rtResolveLog], creates: [...this.rtCreateLog], currentRtIndex: this.currentRtIndex };
+    getRtDebug(): { resolves: string[]; creates: string[]; copies: string[]; currentRtIndex: number | null } {
+        return { resolves: [...this.rtResolveLog], creates: [...this.rtCreateLog], copies: [...this.surfaceCopyLog], currentRtIndex: this.currentRtIndex };
     }
 
     /** HARNESS: last `n` per-present summaries (newest last). See frameLog verb. */
@@ -437,6 +472,10 @@ export class D3D9Device {
             System.getInstance().requestHostResize(width, height);
             this.viewport = { x: 0, y: 0, width, height, minZ: 0, maxZ: 1 };
         }
+    }
+
+    getBackBufferSize(): { width: number; height: number } {
+        return this.backendExecutor.getCanvasSize();
     }
 
     setRenderState(state: number, value: number): number {
@@ -1414,6 +1453,50 @@ export class D3D9Device {
             }
         }
         this.mipLevelData.set(`${texPtr}:${level}`, out);
+        return true;
+    }
+
+    markTextureDirty(texPtr: number): boolean {
+        const index = this.textures.getIndex(texPtr);
+        if (index === null) return false;
+        this.textures.setDirty(index, true);
+        return true;
+    }
+
+    /** Native-format CPU copies; destination upload happens on its next binding. */
+    copyTextureLevels(sourcePtr: number, targetPtr: number, offset: number, levels: number): boolean {
+        const sourceIndex = this.textures.getIndex(sourcePtr), targetIndex = this.textures.getIndex(targetPtr);
+        if (sourceIndex === null || targetIndex === null) return false;
+        // Submit draws that still reference the old destination before changing its backing.
+        this.submitFrame(false);
+        const sourceVolume = this.volumeData.get(sourcePtr), targetVolume = this.volumeData.get(targetPtr);
+        if (sourceVolume || targetVolume) {
+            if (!sourceVolume || !targetVolume) return false;
+            for (let level = 0; level < levels; level++) {
+                const src = sourceVolume.mips[level + offset], dst = targetVolume.mips[level];
+                if (!src || !dst || src.bytes !== dst.bytes) return false;
+                this.memory.copyWithin(targetVolume.base + dst.offset, sourceVolume.base + src.offset,
+                    sourceVolume.base + src.offset + src.bytes);
+            }
+            targetVolume.dirty = true;
+        } else if (this.textures.isCubeMap(sourceIndex)) {
+            if (!this.textures.isCubeMap(targetIndex)) return false;
+            for (let level = 0; level < levels; level++) {
+                const width = Math.max(1, this.textures.getWidth(targetIndex) >>> level);
+                const layout = getD3DTextureLayout(this.textures.getFormat(targetIndex), width, width);
+                for (let face = 0; face < 6; face++) {
+                    const data = this.cubeFaceData.get(`${sourcePtr}:${face}:${level + offset}`);
+                    this.cubeFaceData.set(`${targetPtr}:${face}:${level}`,
+                        data ? data.slice() : new Uint8Array(layout.bytes));
+                }
+            }
+        } else {
+            for (let level = 0; level < levels; level++) {
+                const source = this.getTextureLevelPixels(sourcePtr, level + offset);
+                if (!source || !this.setTextureLevelPixels(targetPtr, level, source.data, source.pitch)) return false;
+            }
+        }
+        this.textures.setDirty(targetIndex, true);
         return true;
     }
 

@@ -5,6 +5,7 @@
  */
 
 import { createVolumeExports } from './volume-resources';
+import { createTextureTransferExports } from './texture-transfer';
 import { ThunkImplementation } from '../../core/thunking/thunk-dispatcher';
 import { Logger, LogCategory } from '../../core/logger';
 import { System } from '../../core/system';
@@ -72,7 +73,7 @@ function computeLockRectOffset(format: number, width: number, height: number, pi
 }
 
 export function createResourcesExports(): Record<string, ThunkImplementation> {
-    const exports: Record<string, ThunkImplementation> = {};
+    const exports: Record<string, ThunkImplementation> = createTextureTransferExports();
 
     const D3D_OK = 0;
     const D3DERR_INVALIDCALL = 0x8876086c;

@@ -34,6 +34,8 @@ export const THUNKED_DLL_PSEUDO_BASE: Record<string, number> = {
     binkw32: 0x72910000,
     glide2x: 0x72920000,
     quartz: 0x72930000,
+    mf: 0x729f0000,
+    mfplat: 0x72a00000,
     opengl32: 0x72940000,
     glu32: 0x72950000,
     gdiplus: 0x72960000,

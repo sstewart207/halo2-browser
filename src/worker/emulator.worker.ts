@@ -65,6 +65,7 @@ import { D3D8 } from "./modules/d3d8";
 import { D3dx9 } from "./modules/d3dx9";
 import { OpenAL, ALUT } from "./modules/openal/openal";
 import { Quartz } from "./modules/quartz";
+import { MediaFoundation } from "./modules/media-foundation";
 import { A3d } from "./modules/a3d";
 import { Avifil32 } from "./modules/avifil32";
 import { Rpcrt4 } from "./modules/rpcrt4";
@@ -1972,6 +1973,8 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       const smackw32 = new SmackW32();
       const binkw32 = new BinkW32();
       const quartz = new Quartz();
+      const mf = new MediaFoundation('mf');
+      const mfplat = new MediaFoundation('mfplat');
       const a3d = new A3d();
       const avifil32 = new Avifil32();
       const rpcrt4 = new Rpcrt4();
@@ -2082,6 +2085,8 @@ const initV86 = async (canvas: OffscreenCanvas) => {
         binkw32.initialize(process);
       }
       quartz.initialize(process);
+      mf.initialize(process);
+      mfplat.initialize(process);
       a3d.initialize(process);
       avifil32.initialize(process);
       rpcrt4.initialize(process);
@@ -2148,6 +2153,8 @@ const initV86 = async (canvas: OffscreenCanvas) => {
         process.registerModule(binkw32.name, binkw32);
       }
       process.registerModule(quartz.name, quartz);
+      process.registerModule(mf.name, mf);
+      process.registerModule(mfplat.name, mfplat);
       process.registerModule(a3d.name, a3d);
       process.registerModule(avifil32.name, avifil32);
       process.registerModule(rpcrt4.name, rpcrt4);
@@ -2215,6 +2222,8 @@ const initV86 = async (canvas: OffscreenCanvas) => {
         process.dispatcher.registerModule(binkw32.name, binkw32.exports);
       }
       process.dispatcher.registerModule(quartz.name, quartz.exports);
+      process.dispatcher.registerModule(mf.name, mf.exports);
+      process.dispatcher.registerModule(mfplat.name, mfplat.exports);
       process.dispatcher.registerModule(a3d.name, a3d.exports);
       process.dispatcher.registerModule(avifil32.name, avifil32.exports);
       process.dispatcher.registerModule(rpcrt4.name, rpcrt4.exports);

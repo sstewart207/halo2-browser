@@ -670,6 +670,12 @@ export class D3D9BackendExecutor {
         return { width: canvas.width, height: canvas.height };
     }
 
+    getBackBufferTexture(): GPUTexture | null {
+        if (!this.backend.getDevice()) return null;
+        this.ensureOffscreenTarget();
+        return this.offscreenTexture;
+    }
+
     private ensureOffscreenTarget(): void {
         const device = this.backend.getDevice()!;
         const format = this.backend.getFormat()!;
@@ -692,7 +698,7 @@ export class D3D9BackendExecutor {
         this.offscreenTexture = device.createTexture({
             size: { width: size.width, height: size.height, depthOrArrayLayers: 1 },
             format,
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
         });
         this.offscreenView = this.offscreenTexture.createView();
 

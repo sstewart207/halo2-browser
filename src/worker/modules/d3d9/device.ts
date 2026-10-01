@@ -463,7 +463,7 @@ export function createDeviceExports(): Record<string, ThunkImplementation> {
         const ppBackBuffer = args[4];
 
         const device = devices.get(pDevice);
-        if (!device) {
+        if (!device || !ppBackBuffer || iSwapChain !== 0 || iBackBuffer !== 0 || Type !== 0) {
             Logger.error(LogCategory.D3D9, `GetBackBuffer: invalid device ${pDevice}`);
             return D3DERR_INVALIDCALL;
         }
@@ -480,6 +480,10 @@ export function createDeviceExports(): Record<string, ThunkImplementation> {
         
         // Register surface with device for method calls
         resourceToDevice.set(surfacePtr, device);
+        const canvas = device.getBackBufferSize();
+        surfaceMeta.set(surfacePtr, { format: D3DFMT_X8R8G8B8, type: D3DRTYPE_SURFACE, usage: 1,
+            pool: D3DPOOL_DEFAULT, multiSampleType: 0, multiSampleQuality: 0,
+            width: canvas?.width || 800, height: canvas?.height || 600 });
 
         if (ppBackBuffer) {
             const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);

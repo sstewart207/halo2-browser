@@ -227,6 +227,16 @@ export function createStateExports(): Record<string, ThunkImplementation> {
         return D3D_OK;
     };
 
+    exports['IDirect3DDevice9_GetTexture'] = (_ctx, _mem, args) => {
+        const [devicePtr, stage, output] = args;
+        const device = devices.get(devicePtr);
+        if (!device || !output || stage >= 16) return D3DERR_INVALIDCALL;
+        const texture = device.getBoundTexturePtr(stage);
+        if (!Mem.writeUint32(output, texture)) return D3DERR_INVALIDCALL;
+        if (texture) d3d9ResourceLifetime.addRef(texture);
+        return D3D_OK;
+    };
+
     exports['IDirect3DDevice9_GetRenderState'] = (_ctx, _mem, args) => {
         const pDevice = args[0];
         const state = args[1];
@@ -686,6 +696,13 @@ export function createStateExports(): Record<string, ThunkImplementation> {
         if (pNumPasses && !Mem.writeUint32(pNumPasses, 1)) return D3DERR_INVALIDCALL;
         return D3D_OK;
     };
+
+    for (const [name, vertex] of [['GetVertexShaderConstantF', true], ['GetPixelShaderConstantF', false]] as const) {
+        exports[`IDirect3DDevice9_${name}`] = (_ctx, _mem, args) => {
+            const device = devices.get(args[0]);
+            return device?.readShaderConstants(vertex, args[1] >>> 0, args[3] >>> 0, args[2] >>> 0) ? D3D_OK : D3DERR_INVALIDCALL;
+        };
+    }
 
     // ── State blocks (D3DX effect framework) ───────────────────────────
 

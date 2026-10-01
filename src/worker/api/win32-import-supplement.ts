@@ -66,6 +66,9 @@ export const win32ImportSupplements: ModuleDescriptor[] = [
     module("rpcrt4", [["I_RpcMapWin32Status", 1]]),
     module("powrprof", [["CallNtPowerInformation", 5]]),
     module("mfplat", [["MFStartup", 2], ["MFShutdown", 0]]),
+    module("mf", [["MFCreateTopology", 1], ["MFCreateMediaSession", 2],
+        ["MFCreateAudioRendererActivate", 1], ["MFCreateVideoRendererActivate", 2],
+        ["MFCreateTopologyNode", 2], ["MFCreateSourceResolver", 1], ["MFGetService", 4]]),
     module("oleaut32", [["VarBstrCmp", 4]]),
     // _ui64tow has a 64-bit integer followed by two pointers/scalars: four
     // DWORD stack slots. CRT functions are caller-cleaned, including varargs.

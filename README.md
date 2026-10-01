@@ -2,7 +2,7 @@
 
 Private research by Shane Stewart into running **Halo 2 Project Cartographer locally in a browser**, using [BottleShip](https://github.com/jenissimo/bottleship).
 
-**Status: startup now reaches the intro-video path; no menu or gameplay yet.** Shader compilation, the graphics resource leak, a reaped-thread wait, and missing volume texture support are fixed. Chrome uses about 762 MB of live guest memory instead of exhausting 1.74 GB. The current stop is Media Foundation session creation for the intro WMV. Development is active.
+**Status: active rendering loop; actual game viewport still black.** Resource lifetime, volume textures and a Windows video-proxy trap are resolved. Halo handles unavailable video and continues hundreds of draws per frame, around 763 MB live guest memory. Texture transfers and real GPU surface copies are implemented; menu and gameplay remain unverified. Development is active.
 
 ## Goal
 
@@ -11,11 +11,11 @@ Run the single-player campaign in the browser without streaming or remote game e
 ## Current work
 
 - Diagnose and implement the Media Foundation startup/session/video path.
-- Implement the observed D3D9 UpdateTexture, GetTexture and StretchRect gaps.
+- Trace black output with implemented UpdateTexture/GetTexture/StretchRect and shader constant queries.
 - Verify actual main-menu pixels before campaign, audio, controller and saving acceptance.
 - Record verified [engine and tooling references](docs/halo2-research-leads.md).
 
-**Latest validation: 895 tests pass, TypeScript clean.** Chrome confirms lower live memory and progress past bitmap-loading reset churn. Tests do not establish working gameplay. See [checkpoint details](docs/halo2-browser-checkpoint.md).
+**Latest validation: 903 tests pass, TypeScript clean.** Chrome verifies real GPU copy pixels and local decoding of 120 non-black WMV intro frames in a separate decoder probe. Halo integration remains incomplete. Tests do not establish working gameplay. See [checkpoint details](docs/halo2-browser-checkpoint.md).
 
 See the [checkpoint branch](https://github.com/sstewart207/halo2-browser/tree/codex/halo2-browser-checkpoint), [pull requests](https://github.com/sstewart207/halo2-browser/pulls), and [issues](https://github.com/sstewart207/halo2-browser/issues).
 
