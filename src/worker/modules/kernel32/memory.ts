@@ -1300,9 +1300,21 @@ export const exports: Record<string, ThunkImplementation> = (() => {
         const process = system.process;
         if (process) {
             if (dwBytes === 0) {
-                system.scheduler.setLastError(HEAP_OOM_ERROR);
-                Logger.warn(LogCategory.KERNEL32, `HeapAlloc refused size 0 ${formatCallSite(ctx, mem, 4, [0x38, 0x44], [0])}`);
-                return 0;
+                try {
+                    const address = process.memory.allocZeroSize();
+                    const physical = process.memory.getPhysicalSize(address) ?? HEAP_ALLOC_GRANULARITY;
+                    const zeroMemory = (dwFlags & HEAP_ZERO_MEMORY_FLAG) !== 0 || DEBUG_FORCE_ZERO_HEAP;
+                    if (zeroMemory) {
+                        mem.fill(0, address, address + physical);
+                    }
+                    heapWatch('alloc', ctx, mem, [address], `size=0`);
+                    Logger.verboseLazy(LogCategory.KERNEL32, () => `HeapAlloc(0) -> 0x${address.toString(16)}`);
+                    return address;
+                } catch (error) {
+                    system.scheduler.setLastError(HEAP_OOM_ERROR);
+                    Logger.warn(LogCategory.KERNEL32, `HeapAlloc failed: ${error}`);
+                    return 0;
+                }
             }
 
             // If the slab arena is exhausted, grow it. Reaching JS for a sub-4KB
@@ -2649,8 +2661,18 @@ export function registerFastPathHeapFunctions(dispatcher: any): void {
         if (!process) return null;
 
         if (dwBytes === 0) {
-            system.scheduler.setLastError(HEAP_OOM_ERROR);
-            return 0;
+            try {
+                const address = process.memory.allocZeroSize() >>> 0;
+                const zeroMemory = (dwFlags & HEAP_ZERO_MEMORY_FLAG) !== 0 || DEBUG_FORCE_ZERO_HEAP_FAST_PATH;
+                if (zeroMemory) {
+                    const physical = process.memory.getPhysicalSize(address) ?? HEAP_ALLOC_GRANULARITY;
+                    mem8.fill(0, address, address + physical);
+                }
+                return address;
+            } catch {
+                system.scheduler.setLastError(HEAP_OOM_ERROR);
+                return 0;
+            }
         }
 
         const zeroMemory = (dwFlags & HEAP_ZERO_MEMORY_FLAG) !== 0 || DEBUG_FORCE_ZERO_HEAP_FAST_PATH;

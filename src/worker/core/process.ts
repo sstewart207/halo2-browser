@@ -48,6 +48,12 @@ export class MemoryManager {
     private freeBlocks: Map<RegionKind, Array<{ addr: number; size: number }>> = new Map();
     // Track which bucket kind each allocation belongs to
     private allocBucket: Map<number, RegionKind> = new Map();
+    // HeapAlloc(0) records requested size 0 for HeapSize, but occupies a real
+    // aligned block. Native process-heap HeapAlloc(0) returns a unique freeable
+    // pointer; HeapSize reports 0. The free-list path ignores size <= 0, so the
+    // physical footprint is kept here for reclaim.
+    private zeroSizePhysical: Map<number, number> = new Map();
+    private static readonly ZERO_SIZE_HEAP_BLOCK = 16;
 
     private bucketState: Map<RegionKind, BucketState> = new Map();
     private reservedAddresses: Set<number> = new Set();
@@ -187,6 +193,19 @@ export class MemoryManager {
         return addr;
     }
 
+    /**
+     * Win32 HeapAlloc(dwBytes=0) semantics: a unique, aligned, freeable non-NULL
+     * block whose HeapSize is 0. Physical capacity is ZERO_SIZE_HEAP_BLOCK so the
+     * pointer is a real heap address rather than a sentinel.
+     */
+    allocZeroSize(kind?: RegionKind, perms?: RegionPerms): number {
+        const physical = MemoryManager.ZERO_SIZE_HEAP_BLOCK;
+        const addr = this.alloc(physical, kind, perms);
+        this.zeroSizePhysical.set(addr, physical);
+        this.allocations.set(addr, 0);
+        return addr;
+    }
+
     allocSurface(size: number): number {
         return this.alloc(size, 'SURFACE');
     }
@@ -267,6 +286,7 @@ export class MemoryManager {
     free(ptr: number): void {
         const size = this.allocations.get(ptr);
         if (size === undefined) return;
+        const physical = this.zeroSizePhysical.get(ptr) ?? size;
 
         // HEAP allocs are not registered in addressSpace.regions (skipped in alloc),
         // so skip releaseRegion for them to avoid O(n) scan of a non-existent entry.
@@ -274,15 +294,16 @@ export class MemoryManager {
         if (bucketKind !== 'HEAP') {
             this.addressSpace.releaseRegion(ptr);
         }
-        this.currentBytes -= size;
+        this.currentBytes -= physical;
         this.allocations.delete(ptr);
+        this.zeroSizePhysical.delete(ptr);
         this.reservedAddresses.delete(ptr);
 
         if (bucketKind) {
             this.allocBucket.delete(ptr);
-            this.releaseToFreeList(bucketKind, ptr, size);
+            this.releaseToFreeList(bucketKind, ptr, physical);
         }
-        this.logLargeEvent('free', ptr, size);
+        this.logLargeEvent('free', ptr, physical);
 
         memoryEventBuffer.record({
             timestamp: performance.now(),
@@ -394,6 +415,11 @@ export class MemoryManager {
         return this.allocations.get(ptr);
     }
 
+    /** Physical capacity of a live block, including zero-size HeapAlloc footprints. */
+    getPhysicalSize(ptr: number): number | undefined {
+        return this.zeroSizePhysical.get(ptr) ?? this.allocations.get(ptr);
+    }
+
     /**
      * Snapshot of live HEAP-bucket allocations for a faithful HeapWalk.
      *
@@ -465,6 +491,7 @@ export class MemoryManager {
         this.allocations.clear();
         this.freeBlocks.clear();
         this.allocBucket.clear();
+        this.zeroSizePhysical.clear();
         this.reservedAddresses.clear();
         this.totalAllocated = 0;
         this.currentBytes = 0;
