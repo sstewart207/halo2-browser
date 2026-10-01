@@ -145,12 +145,63 @@ export class D3D9Device {
     private surfaceCopyLog: string[] = [];
     private pipelineErrors: string[] = [];
     private upDrawDiagnostics: object[] = [];
+    private drawDiagnostics: Record<string, unknown>[] = [];
+    private drawPassCensus = new Map<string, Record<string, unknown>>();
     private lastBackBufferUp: object | null = null;
     private backBufferPasses = new Map<string, object>();
     private drawTypeCounts = new Map<string, number>();
     private noteDrawType(kind: string, primitive: number): void {
         const key = `${kind}:${primitive}:${this.currentRtIndex === null ? 'BB' : 'RT'}`;
         this.drawTypeCounts.set(key, (this.drawTypeCounts.get(key) ?? 0) + 1);
+    }
+
+    /**
+     * Record one draw's full binding + blend state.
+     *
+     * `upDrawDiagnostics` only saw DrawPrimitiveUP, so UI text drawn with
+     * DrawIndexedPrimitive / DrawPrimitive left no trace at all. This is the
+     * shared recorder: every draw kind lands in one ring, and backbuffer draws
+     * also feed backBufferPasses so rtDebug can name the pass that produced
+     * the final image.
+     */
+    private recordDrawDiagnostic(kind: string, primitiveType: number, primitiveCount: number,
+        vertexDataPtr: number, stride: number): void {
+        const shader = this.getActivePsShader();
+        const diagnostic: Record<string, unknown> = {
+            kind, rt: this.currentRtIndex, vs: this.activeVertexShader, ps: this.activePixelShader,
+            decl: this.activeVertexDecl, fvf: this.stateTracker.getFVF(), primitiveType, primitiveCount, stride,
+            texture0: this.stateTracker.getTexture(0),
+            alphaBlendEnable: this.getRS(27), srcBlend: this.getRS(19), destBlend: this.getRS(20),
+            alphaTestEnable: this.getRS(15), alphaTestRef: this.getRS(16), cullMode: this.getRS(22),
+            colorWrite: this.getRS(168), zEnable: this.getRS(7),
+            psVersion: shader ? `${shader.prog.major}.${shader.prog.minor}` : null,
+            psOps: shader?.prog.instructions.length ?? 0,
+        };
+        const maxFloats = Math.max(0, Math.min(8, Math.floor(stride / 4),
+            Math.floor((this.memory.byteLength - vertexDataPtr) / 4)));
+        diagnostic.vertexFloats = Array.from({ length: maxFloats }, (_, i) =>
+            new DataView(this.memory.buffer, this.memory.byteOffset + vertexDataPtr + i * 4, 4).getFloat32(0, true));
+
+        this.drawDiagnostics.push(diagnostic);
+        if (this.drawDiagnostics.length > 256) this.drawDiagnostics.shift();
+        // Persistent per-pass census. The ring above only spans ~1.5 frames of
+        // scene geometry, so a UI pass that fires rarely (text) scrolls out
+        // before anyone can look at it. This keeps first/last-seen counts.
+        const passKey = `${kind}:${this.activeVertexShader}:${this.activePixelShader}:` +
+            `${this.activeVertexDecl}:${stride}:${this.stateTracker.getTexture(0)}`;
+        const seen = this.drawPassCensus.get(passKey);
+        if (seen) {
+            seen.count = (seen.count as number) + 1;
+            seen.lastRt = this.currentRtIndex;
+        } else if (this.drawPassCensus.size < 256) {
+            this.drawPassCensus.set(passKey, { ...diagnostic, count: 1, firstRt: this.currentRtIndex, lastRt: this.currentRtIndex });
+        }
+        if (this.currentRtIndex === null) {
+            const key = `${kind}:${this.activeVertexShader}:${this.activePixelShader}:${primitiveType}:${stride}`;
+            if (this.backBufferPasses.size < 48 || this.backBufferPasses.has(key)) {
+                this.backBufferPasses.set(key, diagnostic);
+            }
+        }
     }
     private recordPipelineError(message: string): void {
         if (this.pipelineErrors.includes(message) || this.pipelineErrors.length >= 40) return;
@@ -296,8 +347,8 @@ export class D3D9Device {
         }
     }
     /** HARNESS rtDebug verb: what SetRenderTarget saw + which textures were created as RTs. */
-    getRtDebug(): { resolves: string[]; creates: string[]; copies: string[]; pipelineErrors: string[]; lastBackBufferUp: object | null; backBufferPasses: object[]; drawTypes: Record<string, number>; upDraws: object[]; currentRtIndex: number | null } {
-        return { resolves: [...this.rtResolveLog], creates: [...this.rtCreateLog], copies: [...this.surfaceCopyLog], pipelineErrors: [...this.pipelineErrors], lastBackBufferUp: this.lastBackBufferUp, backBufferPasses: [...this.backBufferPasses.values()], drawTypes: Object.fromEntries(this.drawTypeCounts), upDraws: [...this.upDrawDiagnostics], currentRtIndex: this.currentRtIndex };
+    getRtDebug(): { resolves: string[]; creates: string[]; copies: string[]; pipelineErrors: string[]; lastBackBufferUp: object | null; backBufferPasses: object[]; drawTypes: Record<string, number>; upDraws: object[]; draws: Record<string, unknown>[]; passCensus: Record<string, unknown>[]; currentRtIndex: number | null } {
+        return { resolves: [...this.rtResolveLog], creates: [...this.rtCreateLog], copies: [...this.surfaceCopyLog], pipelineErrors: [...this.pipelineErrors], lastBackBufferUp: this.lastBackBufferUp, backBufferPasses: [...this.backBufferPasses.values()], drawTypes: Object.fromEntries(this.drawTypeCounts), upDraws: [...this.upDrawDiagnostics], draws: [...this.drawDiagnostics], passCensus: [...this.drawPassCensus.values()], currentRtIndex: this.currentRtIndex };
     }
 
     /** HARNESS: last `n` per-present summaries (newest last). See frameLog verb. */
@@ -2343,6 +2394,11 @@ export class D3D9Device {
     drawPrimitive(primitiveType: number, startVertex: number, primitiveCount: number): number {
         d3d9PerfInc("drawPrimitive");
         this.noteDrawType("primitive", primitiveType);
+        {
+            const ss = this.stateTracker.getStreamSource();
+            if (ss) this.recordDrawDiagnostic("primitive", primitiveType, primitiveCount,
+                ss.offset + startVertex * ss.stride, ss.stride);
+        }
         this.captureDrawIfArmed(primitiveType, primitiveCount);
         if (primitiveType === D3DPT_POINTLIST) {
             const ss = this.stateTracker.getStreamSource();
@@ -2628,6 +2684,11 @@ export class D3D9Device {
     ): number {
         d3d9PerfInc("drawIndexedPrimitive");
         this.noteDrawType("indexed", primitiveType);
+        {
+            const ss = this.stateTracker.getStreamSource();
+            if (ss) this.recordDrawDiagnostic("indexed", primitiveType, primitiveCount,
+                ss.offset + minVertexIndex * ss.stride, ss.stride);
+        }
         this.captureDrawIfArmed(primitiveType, primitiveCount);
         if (primitiveType !== D3DPT_TRIANGLELIST && primitiveType !== D3DPT_TRIANGLESTRIP) return 0;
         if (primitiveCount <= 0) return 0;
