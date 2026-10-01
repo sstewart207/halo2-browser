@@ -1,7 +1,7 @@
 // Module management functions for kernel32
 // GetModuleHandle*, LoadLibrary*, GetProcAddress, FreeLibrary, GetModuleFileName*
 
-import { ThunkImplementation } from '../../../core/thunking/thunk-dispatcher';
+import { ThunkImplementation, ThunkResult } from '../../../core/thunking/thunk-dispatcher';
 import { System } from '../../../core/system';
 import { Marshaler } from '../../../core/memory/marshaler';
 import { Logger, LogCategory, LogLevel } from '../../../core/logger';
@@ -13,6 +13,8 @@ import { resolveThunkedDllAlias } from '../../../core/dll-aliases';
 import { THUNKED_DLL_PSEUDO_BASE } from '../../../core/hle-system-catalog';
 import { getProcAddressRegistry } from '../../../core/diagnostics/get-proc-address-registry';
 import { buildHleExportImage } from '../hle-image';
+import { readDelayImport } from '../delay-import';
+import { Mem } from '../../../core/memory/mem-accessor';
 
 export const exports: Record<string, ThunkImplementation> = {};
 
@@ -1443,6 +1445,83 @@ function initModuleFunctions(): void {
     };
 
     exports['GetProcAddress'] = getProcAddressImpl;
+
+    exports['ResolveDelayLoadedAPI'] = async (ctx, mem, args): Promise<ThunkResult> => {
+        const [base, descriptor, dllHook, systemHook, thunk, flags] = args;
+        const system = System.getInstance();
+        const process = system.process!;
+        const fail = (error: number): ThunkResult => {
+            system.scheduler.setLastError(error);
+            return { value: 0, stackCleanup: 24 };
+        };
+        const target = flags === 0 ? readDelayImport(mem, base, descriptor, thunk) : null;
+        if (!target) return fail(87);
+        let module = Mem.readUint32(target.moduleHandleAddress) ?? 0;
+        let dllInits: NonNullable<ThunkResult['dllInits']> = [];
+        if (!module) {
+            const loaded = await exports['LoadLibraryA'](ctx, mem, [target.dllNameAddress]);
+            module = typeof loaded === 'number' ? loaded : loaded.value;
+            if (typeof loaded === 'object') dllInits = loaded.dllInits ?? [];
+        }
+        const resolved = module ? getProcAddressImpl(ctx, mem, [module, target.procedureAddressOrOrdinal]) : null;
+        const address = resolved?.value ?? 0;
+        const error = module ? 127 : 126;
+        Logger.log(LogCategory.KERNEL32, `ResolveDelayLoadedAPI: ${Marshaler.readString(mem, target.dllNameAddress)}!${target.byName ? Marshaler.readString(mem, target.procedureAddressOrOrdinal) : '#' + target.procedureAddressOrOrdinal} -> 0x${address.toString(16)}`);
+        if (module) Mem.writeUint32(target.moduleHandleAddress, module);
+        if (address) Mem.writeUint32(thunk, address);
+        if (!address) system.scheduler.setLastError(error);
+        if (dllInits.length === 0 && (address || (!dllHook && !systemHook))) {
+            return { value: address, stackCleanup: 24 };
+        }
+        const callbacks = process.dispatcher.callbackManager;
+        if (!callbacks) return fail(50);
+        return {
+            value: address, stackCleanup: 24,
+            startCallbackChain: ({ esp, returnAddr }) => {
+                const frame = callbacks.saveSuspendedThunkContext({ esp, returnAddr } as Parameters<typeof callbacks.saveSuspendedThunkContext>[0], 24, 'DelayLoad');
+                if (!frame) return false;
+                const finish = (value: number): number => {
+                    if (value) Mem.writeUint32(thunk, value);
+                    return value >>> 0;
+                };
+                const runSystemHook = (): number | null => {
+                    if (!systemHook) return finish(0);
+                    callbacks.invokeCallback(systemHook, [target.dllNameAddress, target.procedureAddressOrOrdinal], 0, finish, false, 'DelayLoad-SystemHook', frame);
+                    return null;
+                };
+                const resolveOrHook = (): number | null => {
+                    if (address) return finish(address);
+                    if (!dllHook) return runSystemHook();
+                    // DELAYLOAD_INFO (PE32), as defined by delayloadhandler.h.
+                    const info = process.memory.alloc(36, 'THUNK_DATA', 'rw');
+                    [36, descriptor, thunk, target.dllNameAddress, target.byName ? 1 : 0,
+                        target.procedureAddressOrOrdinal, module, 0, error]
+                        .forEach((value, index) => Mem.writeUint32(info + index * 4, value));
+                    callbacks.invokeCallback(dllHook, [4, info], 0, value => value ? finish(value) : runSystemHook(), false, 'DelayLoad-DllHook', frame);
+                    return null;
+                };
+                let index = 0;
+                const initNext = (result: number): number | null => {
+                    if (!result) {
+                        system.scheduler.setLastError(1114);
+                        return finish(0);
+                    }
+                    index++;
+                    if (index >= dllInits.length) return resolveOrHook();
+                    const next = dllInits[index];
+                    callbacks.invokeCallback(next.entryPoint, [next.baseAddress, 1, 0], 0, initNext, false, 'DelayLoad-DllMain', frame);
+                    return null;
+                };
+                if (dllInits.length) {
+                    const first = dllInits[0];
+                    callbacks.invokeCallback(first.entryPoint, [first.baseAddress, 1, 0], 0, initNext, false, 'DelayLoad-DllMain', frame);
+                } else {
+                    resolveOrHook(); // Failure path necessarily starts a hook callback.
+                }
+                return true;
+            },
+        };
+    };
 }
 
 initModuleFunctions();

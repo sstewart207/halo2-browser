@@ -1,4 +1,28 @@
-# Halo 2 browser checkpoint - 2026-09-30
+# Halo 2 browser checkpoint - 2026-09-30 (paused)
+
+Paused at the user's request with 3% usage remaining. Native game code executes locally in Chrome, but no Halo menu/video/gameplay is verified. Preserve all game files and logs outside Git; native Windows install and Defender settings are unchanged.
+
+## Latest verified progress
+
+- `def977e` fixed the CRT trap by allocating page tables outside Halo's PE image. `0xe7618007` was a page-table entry written over an API pointer. Older resolver/decryption hypotheses below are superseded.
+- Registry root canonicalization makes HKCR registrations visible to COM activation.
+- A private trial uses the already-installed native msxml3.dll and msxml3r.dll. Explicit API-set aliases/import signatures, real semaphore/mutex APIs, UTF-16 wcsrchr, safe memcpy_s, FindResourceExW, and mapped LoadResource data advanced MSXML initialization.
+- Chrome executes native DllMain, DllGetClassObject and IClassFactory::CreateInstance. DOMDocument30 / IXMLDOMDocument creation returns S_OK.
+- Next observed failure is the unimplemented ResolveDelayLoadedAPI thunk at native msxml3.dll+0x6b5f5; crash handling subsequently exits C0000409. NtQuerySystemInformation and other API gaps remain.
+
+## Resume first
+
+A new ResolveDelayLoadedAPI implementation and PE32 delay-import decoder are saved. It handles names/ordinals, RVA/legacy-VA descriptors, LoadLibrary/GetProcAddress, IAT patching, and deferred native DLL initialization/failure hooks. **It passes TypeScript and parser tests, but its native Chrome integration has not been tested.** Do that first; do not claim it solved startup yet.
+
+Fresh Chrome reload, set `window.__BS__.harness.logBufferSize(20000)` before boot, then open the private `halo2-msxml-res.wgb` trial. Check live stubs, logs and UI. Source changes can reload into an empty worker. Default diagnostics retain only 50 lines. Campaign maps are not in the trial.
+
+Validation: **39 tests pass / 268 assertions**, TypeScript clean, actual installed executable version test ran read-only. Last Chrome verification includes memcpy_s and CreateMutexExW, but precedes the new delay resolver. No production build performed. Some supplementary API entries are ABI definitions only, and the CRT invalid-parameter handler remains limited.
+
+Always pass `--repo sstewart207/halo2-browser` to gh; its inferred repository may be the public upstream. Preserve unrelated bun.lock/generated/index changes. Parent AGENTS.md and HANDOFF.md hold full setup and pause instructions. Resume only when the user asks.
+
+---
+
+# Earlier checkpoint evidence (superseded where noted above)
 
 ## Status
 

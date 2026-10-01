@@ -880,6 +880,15 @@ const syncModule = (() => {
         return handle;
     };
 
+    exports['CreateMutexExW'] = (ctx, mem, args) => {
+        const [attributes, name, flags] = args;
+        if ((flags & ~1) !== 0) {
+            System.getInstance().scheduler.setLastError(87);
+            return 0;
+        }
+        return exports['CreateMutexW'](ctx, mem, [attributes, flags & 1, name]);
+    };
+
     exports['OpenMutexA'] = (ctx, mem, args) => {
         const lpName = args[2];
         const name = lpName ? readStringA(lpName) : '';
@@ -967,6 +976,26 @@ const syncModule = (() => {
             return 0;
         }
         const handle = namedObjects.acquire('semaphore', name);
+        if (handle === undefined) {
+            System.getInstance().scheduler.setLastError(2);
+            return 0;
+        }
+        return handle;
+    };
+
+    exports['CreateSemaphoreExW'] = (ctx, mem, args) => {
+        const [attributes, initialCount, maximumCount, name, flags] = args;
+        if (flags !== 0 || (initialCount | 0) < 0 || (maximumCount | 0) <= 0 ||
+            (initialCount | 0) > (maximumCount | 0)) {
+            System.getInstance().scheduler.setLastError(87);
+            return 0;
+        }
+        return exports['CreateSemaphoreW'](ctx, mem, [attributes, initialCount, maximumCount, name]);
+    };
+
+    exports['OpenSemaphoreW'] = (_ctx, _mem, args) => {
+        const name = args[2] ? readStringW(args[2]) : '';
+        const handle = name ? namedObjects.acquire('semaphore', name) : undefined;
         if (handle === undefined) {
             System.getInstance().scheduler.setLastError(2);
             return 0;

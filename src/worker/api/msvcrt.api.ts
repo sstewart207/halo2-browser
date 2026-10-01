@@ -33,6 +33,8 @@ export const msvcrtModule: ModuleDescriptor = {
     name: "msvcrt",
     functions: [
         makeFunc("malloc", 1),
+        makeFunc("_resetstkoflw", 0),
+        makeFunc("memcpy_s", 4),
         makeFunc("_malloc_dbg", 4),
         makeFunc("_malloc", 1),
         makeFunc("??2@YAPAXI@Z", 1),

@@ -14,6 +14,20 @@ export interface CrtStringHost {
 export function registerCrtStringExports(exports: Record<string, ThunkImplementation>, host: CrtStringHost): void {
     let strtokPtr = 0; // static state for strtok
 
+    exports["wcsrchr"] = (_ctx, mem, args) => {
+        const pointer = (args[0] ?? 0) >>> 0;
+        const character = (args[1] ?? 0) & 0xffff;
+        if (!pointer || pointer + 2 > mem.length) return 0;
+        const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
+        let match = 0;
+        for (let address = pointer; address + 2 <= mem.length; address += 2) {
+            const value = view.getUint16(address, true);
+            if (value === character) match = address;
+            if (value === 0) return match >>> 0;
+        }
+        return 0; // invalid unterminated guest buffer
+    };
+
     exports["strstr"] = (_c, _m, a) => {
         const haystack = a[0] ?? 0, needle = a[1] ?? 0;
         if (!haystack || !needle) return 0;
