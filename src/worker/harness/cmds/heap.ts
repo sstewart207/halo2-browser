@@ -12,6 +12,10 @@
  *               OOM the game hit, with the numbers that produced it.
  *   topAllocs — the largest live HEAP allocations (texture backing, surfaces,
  *               VirtualAlloc commits), biggest first.
+ *   sizeHistogram — live MB and block count per size class, across ALL live
+ *               allocations. Use this, not topAllocs, to find where the mass is:
+ *               topN hides a guest that is holding a gigabyte in thousands of
+ *               medium blocks.
  *   largeLive — NET-LIVE ≥64KB blocks from the large-alloc ring, each with the
  *               caller backtrace captured at alloc time. This is the attribution:
  *               which emulator subsystem called the allocation. A block that was
@@ -93,6 +97,30 @@ export function registerHeapCommands(svc: HarnessService): void {
             size: a.size,
         }));
 
+        // Size histogram over EVERY live allocation, not just the >=64KB blocks the
+        // large-alloc ring records. The top-N list is useless for the real question:
+        // when a guest holds ~1.7GB across ~17k blocks with no single block over
+        // 128MB, "the biggest ones" says nothing about where the mass is. Buckets
+        // answer that directly — if one size class holds most of the MB, that class
+        // is the thing to attribute.
+        const BUCKETS: Array<[string, number]> = [
+            ["<64KB", 64 * 1024],
+            ["64KB-256KB", 256 * 1024],
+            ["256KB-1MB", 1024 * 1024],
+            ["1MB-8MB", 8 * 1024 * 1024],
+            [">8MB", Infinity],
+        ];
+        const hist = BUCKETS.map(([label, lo]) => ({ label, mb: 0, n: 0 }));
+        for (const a of allocs) {
+            const idx = BUCKETS.findIndex(([, lo]) => a.size < lo);
+            const slot = hist[idx === -1 ? hist.length - 1 : idx];
+            slot.mb += a.size / MB;
+            slot.n += 1;
+        }
+        const sizeHistogram = hist
+            .filter(s => s.n > 0)
+            .map(s => ({ label: s.label, mb: +s.mb.toFixed(2), blocks: s.n }));
+
         // Net-live large (≥64KB) blocks. getLargeAllocHistory with a full-range
         // radius replays the whole ring; a later 'free' for an address cancels
         // the earlier 'alloc' so only blocks still held are reported.
@@ -154,6 +182,7 @@ export function registerHeapCommands(svc: HarnessService): void {
                 : null,
             slabTop: slabTop != null ? hx(slabTop) : null,
             topAllocs,
+            sizeHistogram,
             largeLive,
             apiTotals,
             totals: {
