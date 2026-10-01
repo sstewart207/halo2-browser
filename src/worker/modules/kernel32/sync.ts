@@ -710,6 +710,44 @@ const syncModule = (() => {
         return handle;
     };
 
+    // Named pipes: the browser has no IPC peers, so a server end can be created and listened on but no
+    // client ever connects. The pipe handle is a waitable object so a blocking ConnectNamedPipe parks
+    // its thread instead of failing and spinning. Pipe data I/O is not modeled.
+    const namedPipes = new Map<number, string>();
+
+    // HANDLE CreateNamedPipeW(name, dwOpenMode, dwPipeMode, nMaxInstances, nOutBuf, nInBuf, nDefaultTimeOut, psa)
+    exports['CreateNamedPipeW'] = (ctx, mem, args) => {
+        const INVALID_HANDLE = 0xffffffff;
+        const ERROR_INVALID_NAME = 123;
+        const name = args[0] ? readStringW(args[0]) : '';
+        const sched = System.getInstance().scheduler;
+        if (!/^\\\\[^\\]+\\pipe\\.+/i.test(name)) {
+            sched.setLastError(ERROR_INVALID_NAME);
+            return INVALID_HANDLE;
+        }
+        const handle = sched.createEvent(false, false);
+        namedPipes.set(handle >>> 0, name);
+        Logger.log(LogCategory.KERNEL32, `CreateNamedPipeW("${name}") -> 0x${handle.toString(16)}`);
+        return handle;
+    };
+
+    // BOOL ConnectNamedPipe(HANDLE hNamedPipe, LPOVERLAPPED lpOverlapped)
+    exports['ConnectNamedPipe'] = (ctx, mem, args) => {
+        const ERROR_INVALID_HANDLE = 6;
+        const ERROR_IO_PENDING = 997;
+        const handle = args[0] >>> 0;
+        const sched = System.getInstance().scheduler;
+        if (!namedPipes.has(handle)) {
+            sched.setLastError(ERROR_INVALID_HANDLE);
+            return 0;
+        }
+        if (args[1] >>> 0) {
+            sched.setLastError(ERROR_IO_PENDING); // overlapped: completes when a client connects
+            return 0;
+        }
+        return exports['WaitForSingleObject']!(ctx, mem, [handle, 0xffffffff]);
+    };
+
     exports['CreateIoCompletionPort'] = (ctx, mem, args) => {
         const fileHandle = args[0] >>> 0;
         const existingPortHandle = args[1] >>> 0;
