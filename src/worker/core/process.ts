@@ -68,24 +68,71 @@ export class MemoryManager {
     // from corruption (address only ever allocated by one subsystem).
     private static readonly LARGE_ALLOC_THRESHOLD = 0x10000; // 64KB = VirtualAlloc granularity
     private static readonly LARGE_ALLOC_LOG_SIZE = 4096;
-    private largeAllocLog: Array<{ op: 'alloc' | 'free' | 'alias'; addr: number; size: number; time: number; bt: string }> = [];
+    private largeAllocLog: Array<{ op: 'alloc' | 'free' | 'alias'; addr: number; size: number; time: number; bt: string; js: string; tag: string }> = [];
     private largeAllocLogIdx = 0;
+    /** Allocation-site tag for the NEXT logLargeEvent (see alloc's `tag`). */
+    private pendingAllocTag = '';
 
     private alignUp(value: number, align: number): number {
         return (value + (align - 1)) & ~(align - 1);
     }
 
-    /** Record a ≥64KB block lifecycle event with a lightweight caller backtrace. */
+    /** Record a ≥64KB block lifecycle event with a lightweight caller backtrace.
+     *
+     *  `bt` = the GUEST call stack (__guestBtLite) — who in the game asked for this.
+     *  `js` = the EMULATOR call stack, captured at Error.stackTraceLimit depth — which
+     *  emulator subsystem actually called into the allocator. Without `js` a block is
+     *  attributable only to guest code, which cannot distinguish "the guest asked for
+     *  128MB via VirtualAlloc" from "an HLE module allocated 128MB on the guest's
+     *  behalf" — the exact ambiguity that makes a guest-heap-exhaustion hunt guess.
+     *  Only captured for large blocks, so the cost is bounded and off the hot path.
+     */
     private logLargeEvent(op: 'alloc' | 'free' | 'alias', addr: number, size: number): void {
         if (size < MemoryManager.LARGE_ALLOC_THRESHOLD) return;
         let bt = '';
         try { bt = (globalThis as any).__guestBtLite?.() ?? ''; } catch { /* best-effort */ }
-        const entry = { op, addr: addr >>> 0, size, time: performance.now(), bt };
+        const js = MemoryManager.captureHostCaller();
+        const tag = this.pendingAllocTag;
+        this.pendingAllocTag = '';
+        const entry = { op, addr: addr >>> 0, size, time: performance.now(), bt, js, tag };
         if (this.largeAllocLog.length < MemoryManager.LARGE_ALLOC_LOG_SIZE) {
             this.largeAllocLog.push(entry);
         } else {
             this.largeAllocLog[this.largeAllocLogIdx] = entry;
             this.largeAllocLogIdx = (this.largeAllocLogIdx + 1) % MemoryManager.LARGE_ALLOC_LOG_SIZE;
+        }
+    }
+
+    /**
+     * Compact string of the first few HOST (emulator) frames above this call, i.e. the
+     * subsystem that reached MemoryManager — `kernel32/memory.ts:alloc`, `d3d9-device.ts`
+     * and so on. Deliberately not a full Error: allocating Errors on every ≥64KB guest
+     * allocation is itself a measurable cost, and the head frames are all that's read.
+     */
+    private static captureHostCaller(): string {
+        // The authoritative part: the WinAPI thunk currently being serviced, published by
+        // ThunkDispatcher around the impl() call. Exact string — no stack inference.
+        const thunk = (globalThis as any).__currentThunkName as string | undefined;
+        const head = thunk ? `api=${thunk}` : 'api=<not-a-thunk>';
+        // V8-only knob; the repo's lib set doesn't declare ErrorConstructor.stackTraceLimit.
+        const Err = Error as unknown as { stackTraceLimit?: number };
+        const prevLimit = Err.stackTraceLimit;
+        try {
+            Err.stackTraceLimit = 12;
+            const raw = new Error().stack ?? '';
+            const lines = raw.split('\n').slice(2); // drop "Error" + captureHostCaller itself
+            const frames = lines
+                .map(l => l.trim())
+                // Drop the MemoryManager/Process frames so the first entry is the subsystem.
+                .filter(l => !/at (MemoryManager|Process)\./.test(l))
+                .slice(0, 3)
+                .join(' <- ')
+                .slice(0, 320);
+            return frames ? `${head} | ${frames}` : head;
+        } catch {
+            return head;
+        } finally {
+            Err.stackTraceLimit = prevLimit;
         }
     }
 
@@ -97,7 +144,7 @@ export class MemoryManager {
      * caller backtrace shows whether the address was freed before reuse (UAF) or
      * handed out while live (double-hand-out / corruption).
      */
-    getLargeAllocHistory(addr: number, radius: number = 0x20000): Array<{ op: string; addr: string; size: string; t: string; overlaps: boolean; bt: string }> {
+    getLargeAllocHistory(addr: number, radius: number = 0x20000): Array<{ op: string; addr: string; size: string; t: string; overlaps: boolean; bt: string; js: string; tag: string }> {
         const target = addr >>> 0;
         const lo = Math.max(0, target - radius);
         const hi = target + radius;
@@ -111,6 +158,8 @@ export class MemoryManager {
                 t: (e.time / 1000).toFixed(3) + 's',
                 overlaps: e.addr <= target && (e.addr + e.size) > target,
                 bt: e.bt,
+                js: e.js,
+                tag: e.tag,
             }));
     }
 
@@ -133,7 +182,14 @@ export class MemoryManager {
         }
     }
 
-    alloc(size: number, kind?: RegionKind, perms?: RegionPerms, alignment?: number): number {
+    /**
+     * `tag` is an optional free-text marker recorded on the large-alloc log entry this
+     * call produces, e.g. VirtualAlloc passes its MEM_RESERVE/MEM_COMMIT type. The log
+     * stream is lossy under load, so anything needed to decide a fix must be captured
+     * HERE rather than scraped from log text afterwards.
+     */
+    alloc(size: number, kind?: RegionKind, perms?: RegionPerms, alignment?: number, tag?: string): number {
+        this.pendingAllocTag = tag ?? '';
         // Sanity guard against corrupted/garbage sizes only. The real ceiling is the
         // bucket's free space (a too-large request fails there → caller gets NULL). A 256MB
         // cap here under-served guests with >256MB RAM: a legit 300MB GlobalAlloc threw,
@@ -456,8 +512,8 @@ export class MemoryManager {
      *              allocs live past large allocs that were freed but can't be
      *              retreated into the bump.
      */
-    getBucketStats(): Array<{ kind: string; base: number; limit: number; next: number; used: number; liveUsed: number; free: number; freeBlocks: number; freeBytes: number }> {
-        const rows: Array<{ kind: string; base: number; limit: number; next: number; used: number; liveUsed: number; free: number; freeBlocks: number; freeBytes: number }> = [];
+    getBucketStats(): Array<{ kind: string; base: number; limit: number; next: number; slabTop?: number; used: number; liveUsed: number; free: number; freeBlocks: number; freeBytes: number }> {
+        const rows: Array<{ kind: string; base: number; limit: number; next: number; slabTop?: number; used: number; liveUsed: number; free: number; freeBlocks: number; freeBytes: number }> = [];
         for (const [kind, state] of this.bucketState.entries()) {
             const total = state.limit - state.base;
             const used = state.next - state.base;
@@ -471,6 +527,7 @@ export class MemoryManager {
                 base: state.base,
                 limit: state.limit,
                 next: state.next,
+                slabTop: state.slabTop,
                 used,
                 liveUsed: used - freeBytes,
                 free: total - used,

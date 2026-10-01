@@ -1608,8 +1608,16 @@ export class ThunkDispatcher {
                 ? this.cachedDataView.getUint32(espAtEntry, true) >>> 0 : 0;
             apiCensus.record(thunkName, impl.length, censusCaller);
 
+            // Publish the in-flight API name for allocation attribution. A guest heap
+            // block can only be attributed to "some WinAPI" at best from a JS stack
+            // (Vite's dev function-name inference is unreliable), but the thunk name here
+            // is the exact string we resolved. MemoryManager's large-alloc log reads it
+            // so `heapReport` can say WHICH api handed out the block.
+            (globalThis as any).__currentThunkName = thunkName;
             result = impl(ctx, this.cachedMem8, this.reusableArgs);
+            (globalThis as any).__currentThunkName = '';
         } catch (e) {
+            (globalThis as any).__currentThunkName = '';
             this._slowPathHandleThunkError(functionId, thunkName, e, cpu);
             if (profileThunk) profiler.endAsync(thunkName);
             this.setBoundaryAndNotify(cpu, ThunkBoundaryKind.THUNK_STUB, 0);

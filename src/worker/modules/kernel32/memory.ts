@@ -1742,6 +1742,14 @@ export const exports: Record<string, ThunkImplementation> = (() => {
         const PAGE_SIZE = 0x1000; // 4KB page size
         const ALLOC_GRANULARITY = 0x10000; // 64KB — Windows allocation granularity
 
+        // Recorded on the large-alloc log entry so a guest-heap-exhaustion hunt can tell
+        // "the game committed 128MB" from "the game only RESERVED 128MB of address space"
+        // without scraping the (lossy, rate-limited) log stream.
+        const vaTag = (t: number) =>
+            `VirtualAlloc type=0x${(t >>> 0).toString(16)}` +
+            ((t & MEM_RESERVE) && !(t & MEM_COMMIT) ? ' RESERVE-only' : '') +
+            ((t & MEM_COMMIT) ? ' COMMIT' : '');
+
         if (!(flAllocationType & MEM_COMMIT) && !(flAllocationType & MEM_RESERVE)) {
             Logger.warn(LogCategory.KERNEL32, 'VirtualAlloc: Invalid allocation type');
             return 0;
@@ -1811,7 +1819,7 @@ export const exports: Record<string, ThunkImplementation> = (() => {
                 // If two pools share the same >> 16 index (within same 64KB chunk),
                 // Free() decrements the WRONG pool's Taken counter → premature VirtualFree
                 // → use-after-free of GNames/other critical data.
-                address = process.memory.alloc(alignedSize, 'HEAP', perms, ALLOC_GRANULARITY);
+                address = process.memory.alloc(alignedSize, 'HEAP', perms, ALLOC_GRANULARITY, vaTag(flAllocationType));
             } else if (isFreeLowGap(address, alignedSize)) {
                 // RAM-backed user VA between low memory and the main image sits outside every
                 // allocator bucket, but VirtualQuery reports it MEM_FREE, so hinted allocations

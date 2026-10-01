@@ -26,6 +26,7 @@ import { registerPerfCommands } from "./cmds/perf";
 import { registerFadeProbeCommands } from "./cmds/fadeprobe";
 import { registerAudioCommands } from "./cmds/audio";
 import { registerDbgCommands } from "./cmds/dbg";
+import { registerHeapCommands } from "./cmds/heap";
 
 let installed = false;
 
@@ -49,6 +50,7 @@ export function installHarnessCommands(): void {
     registerFadeProbeCommands(harnessService);
     registerAudioCommands(harnessService);
     registerDbgCommands(harnessService);
+    registerHeapCommands(harnessService);
 }
 
 // Install on import so a bare `import './harness/commands'` is sufficient.
