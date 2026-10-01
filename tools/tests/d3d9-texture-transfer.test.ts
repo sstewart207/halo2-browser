@@ -86,3 +86,38 @@ test('shader constant queries preserve native float bits and reject overflowing 
     expect(device.readShaderConstants(false, 1, 2, 64)).toBe(false);
     expect(device.readShaderConstants(false, 0xffffffff, 1, 64)).toBe(false);
 });
+
+
+test('extra D3D9 vertex streams retain independent offsets, uploads and bindings', () => {
+    const device = Object.create(D3D9Device.prototype) as any;
+    device.extraVertexStreams = new Map();
+    const bindingChanges: [string, number][] = [];
+    const uploads: number[] = [];
+    const buffers = new Map();
+    device.vertexBuffers = {
+        getIndex: (ptr: number) => ptr === 0 ? null : ptr,
+        getData: () => new Uint8Array(128), getSize: () => 128,
+        getGpuBuffer: (index: number) => buffers.get(index),
+        setGpuBuffer: (index: number, buffer: object) => buffers.set(index, buffer),
+        isDirty: () => true, setDirty: () => {},
+    };
+    device.resourceBindings = {set: (name: string, ptr: number) => bindingChanges.push([name, ptr])};
+    device.vsDeclRegistry = new Map([[4, [{stream: 1}, {stream: 1}, {stream: 3}]]]);
+    device.activeVertexDecl = 4;
+    device.backend = {getDevice: () => ({createBuffer: (descriptor: object) => descriptor})};
+    device.commandRecorder = {queueUpload: (_buffer: object, data: Uint8Array) => uploads.push(data.length)};
+    const oldUsage = (globalThis as any).GPUBufferUsage;
+    (globalThis as any).GPUBufferUsage = {VERTEX: 32, COPY_DST: 8};
+    try {
+        expect(device.setStreamSource(1, 11, 16, 16)).toBe(0);
+        expect(device.setStreamSource(3, 33, 32, 24)).toBe(0);
+        expect(device._lrValid).toBe(false);
+        expect(device.prepareExtraVertexStreams().map(({slot, offset, size}: any) => [slot, offset, size]))
+            .toEqual([[1, 16, 112], [3, 32, 96]]);
+        expect(uploads).toEqual([128, 128]);
+        expect(device.setStreamSource(1, 0, 0, 0)).toBe(0);
+        expect(bindingChanges.at(-1)).toEqual(['stream1', 0]);
+        expect(device.extraVertexStreams.has(1)).toBe(false);
+        expect(device.setStreamSource(16, 33, 0, 24)).toBe(0x8876086c);
+    } finally { (globalThis as any).GPUBufferUsage = oldUsage; }
+});

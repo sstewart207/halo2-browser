@@ -133,7 +133,16 @@ export function emitPsMain(prog: SmProgram, a: PsAnalysis, alphaTest: AlphaTest 
     for (const n of [...a.readsTexcoord].sort((x, y) => x - y)) {
         body.push(`var t${n}: vec4<f32> = in.${texField(n)};`);
     }
-    if (!ps1x) body.push(`var oC0: vec4<f32> = vec4<f32>(0.0);`);
+    if (!ps1x) {
+        const outputs = new Set<number>([0]);
+        for (const instruction of prog.instructions) {
+            if (instruction.dst?.reg.type === RegType.COLOROUT) outputs.add(instruction.dst.reg.num);
+            for (const source of instruction.src) if (source.reg.type === RegType.COLOROUT) outputs.add(source.reg.num);
+        }
+        for (const output of outputs) body.push(`var oC${output}: vec4<f32> = vec4<f32>(0.0);`);
+        // Current backend exposes only color target 0. Secondary output math must
+        // still be valid WGSL; binding/presenting MRT attachments remains unfinished.
+    }
     for (const [num, vals] of a.defConsts) {
         body.push(`let dc${num} = vec4<f32>(${fmt(vals[0])}, ${fmt(vals[1])}, ${fmt(vals[2])}, ${fmt(vals[3])});`);
     }

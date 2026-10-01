@@ -1,3 +1,15 @@
+# NEWEST-18: Original GPU shader failures isolated; semantic and vertex-stream fixes under live test
+
+Live verification after multi-stream fix: frame431/432, draws272-278,149commands; rtDebug.pipelineErrors=[] and no WebGPU errors in worker log sample. Actual viewport still black. Current live StretchRect source135161760 and destination435377352 both800x600 bgra8unorm,100% non-black, average native BGRA[35,35,35,0], max35: uniform clear gray, NOT scene graphics. Next trace backbuffer/presentation and rendering state. Both original semantic and stride-layout rejection classes removed. Commit this verified chunk; do not include bun.lock.
+
+October 1. Development remains active at user request. Last pushed commit ad66601; new changes are local until live verification. Preserve pre-existing bun.lock. No menu/gameplay accepted; viewport still black.
+
+Worker WebGPU errors were missed by page-console diagnostics. Added rtDebug.pipelineErrors (first 40 unique original shader/pipeline errors) and d3d9TexturePixels(ptr) GPU readback statistics. Original errors: PS input register v3 emitted in.col3 despite only COLOR0/1 fields; secondary output oC1 referenced without declaration. Shader Model 3 declaration semantics now map arbitrary register numbers to position/color/texcoord semantic IR; COLOROUT temporaries are declared. Packed semantics currently explicitly unsupported rather than silently overwritten. MRT outputs still not implemented.
+
+Clean Chrome boot after semantic fix: these shader errors disappeared, revealing pipeline attribute size16 > stream0 stride12. Halo uses multiple vertex streams; device previously ignored SetStreamSource >0, linker excluded other-stream declaration elements and substituted float4 input in stream0. Local new fix retains independent stream bindings, uploads/binds used streams, links per-stream layouts, adds all stream strides to cache identity, disables arena/last-resolve shortcuts for multi-stream identities, clears extra bindings on Reset. Live verification underway on Chrome1897425369 localhost5174. 907 tests pass, 4699 assertions /95 files; typecheck clean. Prior single-stream boot ~741 draws/152 commands per frame still black. Pointer reuse means historical copy handles must be re-read before GPU texture sampling.
+
+Next: inspect original pipelineErrors after multi-stream boot, actual viewport and current live render-target pixel stats. State-block handling/GetStreamSource, MRT, GetRenderTarget restoration remain compatibility gaps; do not claim entire D3D9 stream API complete. No RAM increase, security changes or assets published.
+
 # October 1: honest video failure, texture transfers and real GPU surface copies
 
 Halo now continues beyond the native MF.dll proxy trap through its normal unavailable-video error path. Frames advance with approximately 420-470 draws and 149 commands per frame. **The actual game viewport remains black: no menu or gameplay is accepted.**

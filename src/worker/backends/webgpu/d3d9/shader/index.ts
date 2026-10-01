@@ -16,6 +16,7 @@ import { analyzeVs, emitVsMain, VsAnalysis } from "./vs-codegen";
 import { analyzePs, emitPsMain, PsAnalysis } from "./ps-codegen";
 import { colField, texField, AlphaTest, alphaTestSnippet } from "./sm-wgsl";
 import { TexType } from "./sm-enums";
+import { normalizeSm3Semantics } from './sm3-semantics';
 
 export { parseShader } from "./sm-parser";
 
@@ -54,13 +55,13 @@ export interface CompiledPs {
 }
 
 export function compileVertexShader(tokens: Uint32Array): CompiledVs {
-    const prog = parseShader(tokens);
+    const prog = normalizeSm3Semantics(parseShader(tokens));
     if (prog.isPixelShader) throw new Error("Expected a vertex shader");
     return { prog, analysis: analyzeVs(prog) };
 }
 
 export function compilePixelShader(tokens: Uint32Array): CompiledPs {
-    const prog = parseShader(tokens);
+    const prog = normalizeSm3Semantics(parseShader(tokens));
     if (!prog.isPixelShader) throw new Error("Expected a pixel shader");
     return { prog, analysis: analyzePs(prog) };
 }

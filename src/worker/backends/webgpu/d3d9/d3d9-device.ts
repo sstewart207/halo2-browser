@@ -3,7 +3,7 @@ import { WebGPUBackend } from "../webgpu-backend";
 import { RenderFramePool } from "../render-frame";
 import { LruCache } from "../../../core/collections/lru-cache";
 import { D3D9StateTracker } from "./d3d9-state-tracker";
-import { D3D9CommandRecorder } from "./d3d9-command-recorder";
+import { D3D9CommandRecorder, type StreamVertexBinding } from "./d3d9-command-recorder";
 import { DynamicVbPool } from "./dynamic-vb-pool";
 import { D3D9BackendExecutor, UniformData } from "./d3d9-backend-executor";
 import { VertexBufferStore, IndexBufferStore, TextureStore } from "./d3d9-resources";
@@ -139,6 +139,12 @@ type ClearState = {
 export class D3D9Device {
     private surfaceCopier?: SurfaceCopier;
     private surfaceCopyLog: string[] = [];
+    private pipelineErrors: string[] = [];
+    private recordPipelineError(message: string): void {
+        if (this.pipelineErrors.includes(message) || this.pipelineErrors.length >= 40) return;
+        this.pipelineErrors.push(message);
+        Logger.error(LogCategory.D3D9, message);
+    }
     noteSurfaceCopy(message: string): void {
         if (this.surfaceCopyLog[this.surfaceCopyLog.length - 1] === message) return;
         this.surfaceCopyLog.push(message);
@@ -185,6 +191,7 @@ export class D3D9Device {
     private memory: Uint8Array;
 
     private stateTracker = new D3D9StateTracker();
+    private extraVertexStreams = new Map<number, {index: number; offset: number; stride: number}>();
     private commandRecorder = new D3D9CommandRecorder(new RenderFramePool(2));
     private backendExecutor: D3D9BackendExecutor;
 
@@ -277,8 +284,8 @@ export class D3D9Device {
         }
     }
     /** HARNESS rtDebug verb: what SetRenderTarget saw + which textures were created as RTs. */
-    getRtDebug(): { resolves: string[]; creates: string[]; copies: string[]; currentRtIndex: number | null } {
-        return { resolves: [...this.rtResolveLog], creates: [...this.rtCreateLog], copies: [...this.surfaceCopyLog], currentRtIndex: this.currentRtIndex };
+    getRtDebug(): { resolves: string[]; creates: string[]; copies: string[]; pipelineErrors: string[]; currentRtIndex: number | null } {
+        return { resolves: [...this.rtResolveLog], creates: [...this.rtCreateLog], copies: [...this.surfaceCopyLog], pipelineErrors: [...this.pipelineErrors], currentRtIndex: this.currentRtIndex };
     }
 
     /** HARNESS: last `n` per-present summaries (newest last). See frameLog verb. */
@@ -978,8 +985,15 @@ export class D3D9Device {
 
     setStreamSource(streamNumber: number, vbPtr: number, offset: number, stride: number): number {
         d3d9PerfInc("setStreamSource");
-        // We only support stream 0 for now
-        if (streamNumber !== 0) return 0;
+        if (!Number.isInteger(streamNumber) || streamNumber < 0 || streamNumber >= 16) return 0x8876086c;
+        if (streamNumber !== 0) {
+            const index = this.vertexBuffers.getIndex(vbPtr);
+            this.resourceBindings.set(`stream${streamNumber}`, index === null ? 0 : vbPtr);
+            if (index === null) this.extraVertexStreams.delete(streamNumber);
+            else this.extraVertexStreams.set(streamNumber, {index, offset, stride});
+            this._lrValid = false;
+            return 0;
+        }
 
         const index = this.vertexBuffers.getIndex(vbPtr);
         this.resourceBindings.set('stream0', index === null ? 0 : vbPtr);
@@ -991,6 +1005,31 @@ export class D3D9Device {
         if (d3d9WasmArena.isInitialized()) d3d9WasmArena.setStreamSource(index, offset, stride);
         if (!this.stateTracker.setStreamSource(index, offset, stride)) d3d9PerfSkip("setStreamSource");
         return 0;
+    }
+
+    /** Upload each declaration stream independently; vertex attributes keep their original slot. */
+    private prepareExtraVertexStreams(): StreamVertexBinding[] {
+        const elements = this.vsDeclRegistry.get(this.activeVertexDecl) ?? [];
+        const slots = new Set(elements.map(e => e.stream).filter(slot => slot > 0));
+        const bindings: StreamVertexBinding[] = [];
+        for (const slot of slots) {
+            const source = this.extraVertexStreams.get(slot);
+            if (!source) throw new Error(`Missing D3D9 vertex stream ${slot}`);
+            const data = this.vertexBuffers.getData(source.index);
+            const size = this.vertexBuffers.getSize(source.index);
+            if (!data || source.offset >= size) throw new Error(`Invalid D3D9 vertex stream ${slot}`);
+            let buffer = this.vertexBuffers.getGpuBuffer(source.index);
+            if (!buffer) {
+                buffer = this.backend.getDevice()!.createBuffer({size, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST});
+                this.vertexBuffers.setGpuBuffer(source.index, buffer);
+            }
+            if (this.vertexBuffers.isDirty(source.index)) {
+                this.commandRecorder.queueUpload(buffer, data);
+                this.vertexBuffers.setDirty(source.index, false);
+            }
+            bindings.push({slot, buffer, offset: source.offset, size: size - source.offset});
+        }
+        return bindings;
     }
 
     /** Tail-guard canary written past every VB/IB guest allocation and
@@ -1961,6 +2000,7 @@ export class D3D9Device {
 
         this.submitFrame(false);
         this.resourceBindings.clear();
+        this.extraVertexStreams.clear();
         this.currentRtIndex = null;
         this.currentRtFace = -1;
         this.setStreamSource(0, 0, 0, 0);
@@ -2251,6 +2291,7 @@ export class D3D9Device {
         this.commandRecorder.recordDraw({
             pipelineId,
             gpuBuffer,
+            extraStreams: this.isProgrammable() ? this.prepareExtraVertexStreams() : undefined,
             bufferOffset: streamSource.offset,
             bufferSize: this.vertexBuffers.getSize(vbIndex) - streamSource.offset,
             vertexCount: primitiveCount * 3,
@@ -2525,6 +2566,7 @@ export class D3D9Device {
         this.commandRecorder.recordDrawIndexed({
             pipelineId,
             vbGpuBuffer: vbBuffer,
+            extraStreams: this.isProgrammable() ? this.prepareExtraVertexStreams() : undefined,
             vbOffset: streamSource.offset,
             vbSize: this.vertexBuffers.getSize(vbIndex) - streamSource.offset,
             ibGpuBuffer: ibBuffer,
@@ -2878,6 +2920,11 @@ export class D3D9Device {
             : null;
         const streamSource = this.stateTracker.getStreamSource();
         const stride = strideOverride ?? streamSource?.stride ?? null;
+        const multiStream = strideOverride === undefined && !!declElements?.some(e => e.stream > 0);
+        const streamStrides = multiStream ? Array.from({length: 16}, (_, slot) =>
+            slot === 0 ? stride : this.extraVertexStreams.get(slot)?.stride ?? null) : undefined;
+        const streamKey = streamStrides?.join(',') ?? '';
+        if (multiStream) arenaKey = undefined;
         const stateBits = this.stateTracker.computePipelineKey() & 0x7FF0000;
 
         const alphaTest = this.getAlphaTest();
@@ -2893,7 +2940,7 @@ export class D3D9Device {
         // Fast path: identical pipeline identity as the previous draw → return without building the
         // key string or touching the Map (the dominant case within a batch). Shared by both the
         // legacy and arena-keyed paths below — whichever cache backed `_lrPipelineId` last time.
-        if (this._lrValid
+        if (!multiStream && this._lrValid
             && this._lrVs === this.activeVertexShader && this._lrPs === this.activePixelShader
             && this._lrDecl === this.activeVertexDecl && this._lrStride === stride
             && this._lrStateBits === stateBits && this._lrTopo === topology
@@ -2922,13 +2969,13 @@ export class D3D9Device {
             }
             d3d9PerfBackendInc("progPipelineCacheMisses");
             if (this.frameSnapshot.frameCounters) this.frameSnapshot.frameCounters.cacheMisses++;
-            const built = this.buildProgrammablePipeline(vs, ps, declElements, stride, stateBits, topology, forceCullNone, alphaTest, cubeMask, projKey);
+            const built = this.buildProgrammablePipeline(vs, ps, declElements, stride, stateBits, topology, forceCullNone, alphaTest, cubeMask, projKey, streamStrides);
             this.arenaPipelineCache.set(arenaKey, built);
             this._storeLastResolve(stride, stateBits, topology, forceCullNone, blendKey, alphaKey, cubeMask, projKey, built);
             return built;
         }
 
-        const cacheKey = `${this.activeVertexShader}:${this.activePixelShader}:${this.activeVertexDecl}:${stride}:${stateBits}:${topology}:${forceCullNone ? 1 : 0}:${blendKey}:${alphaKey}:cm${cubeMask}:pj${projKey}`;
+        const cacheKey = `${this.activeVertexShader}:${this.activePixelShader}:${this.activeVertexDecl}:${stride}:${stateBits}:${topology}:${forceCullNone ? 1 : 0}:${blendKey}:${alphaKey}:cm${cubeMask}:pj${projKey}:streams${streamKey}`;
         const cached = this.progPipelineCache.get(cacheKey);
         if (cached !== undefined) {
             d3d9PerfBackendInc("progPipelineCacheHits");
@@ -2939,7 +2986,7 @@ export class D3D9Device {
         d3d9PerfBackendInc("progPipelineCacheMisses");
         if (this.frameSnapshot.frameCounters) this.frameSnapshot.frameCounters.cacheMisses++;
 
-        const pipelineId = this.buildProgrammablePipeline(vs, ps, declElements, stride, stateBits, topology, forceCullNone, alphaTest, cubeMask, projKey);
+        const pipelineId = this.buildProgrammablePipeline(vs, ps, declElements, stride, stateBits, topology, forceCullNone, alphaTest, cubeMask, projKey, streamStrides);
         this.progPipelineCache.set(cacheKey, pipelineId);
         this._storeLastResolve(stride, stateBits, topology, forceCullNone, blendKey, alphaKey, cubeMask, projKey, pipelineId);
         return pipelineId;
@@ -2958,12 +3005,19 @@ export class D3D9Device {
         alphaTest: ReturnType<D3D9Device["getAlphaTest"]>,
         cubeMask: number,
         projectedStages: number,
+        streamStrides?: (number | null)[],
     ): number {
         try {
-            const link = linkProgram({ vs, ps, declElements, streamStride: stride, alphaTest, cubeMask, projectedStages });
+            const link = linkProgram({ vs, ps, declElements, streamStride: stride, streamStrides, alphaTest, cubeMask, projectedStages });
             const gpuDevice = this.backend.getDevice()!;
             const format = this.backend.getFormat()!;
             const module = gpuDevice.createShaderModule({ code: link.wgsl });
+            const identity = `VS=${this.activeVertexShader} PS=${this.activePixelShader} decl=${this.activeVertexDecl} stride=${stride}`;
+            void module.getCompilationInfo().then(info => {
+                for (const message of info.messages) {
+                    if (message.type === 'error') this.recordPipelineError(`[D3D9] ${identity}: shader ${message.lineNum}:${message.linePos} ${message.message}`);
+                }
+            });
             // Cube-sampler stages need a cube-dimension bind-group layout; pick the variant that
             // matches the shader's declared texN dimensions (link.cubeMask == our effective mask).
             const { pipelineLayout } = this.backendExecutor.getProgrammableLayout(link.cubeMask);
@@ -2977,15 +3031,16 @@ export class D3D9Device {
             const zEnable = (stateBits >> 25) & 1;
             const zWrite = (stateBits >> 26) & 1;
 
-            const pipeline = gpuDevice.createRenderPipeline({
+            gpuDevice.pushErrorScope('validation');
+            let pipeline: GPURenderPipeline;
+            try {
+            pipeline = gpuDevice.createRenderPipeline({
+                label: identity,
                 layout: pipelineLayout,
                 vertex: {
                     module,
                     entryPoint: "vs_main",
-                    buffers: [{
-                        arrayStride: (stride && stride > 0) ? stride : link.arrayStride,
-                        attributes: link.vertexAttributes,
-                    }],
+                    buffers: link.vertexBuffers,
                 },
                 fragment: { module, entryPoint: "fs_main", targets: [buildColorTargetState(format, this.getRS)] },
                 primitive: { topology, frontFace: "cw", cullMode },
@@ -2995,6 +3050,11 @@ export class D3D9Device {
                     depthCompare: zEnable !== 0 ? "less-equal" : "always",
                 },
             });
+            } finally {
+                void gpuDevice.popErrorScope().then(error => {
+                    if (error) this.recordPipelineError(`[D3D9] ${identity}: ${error.message}`);
+                });
+            }
             return this.backendExecutor.registerPipeline(pipeline, link.hasTexture, true);
         } catch (e) {
             Logger.error(LogCategory.D3D9, `[D3D9] programmable pipeline build failed: ${e}`);
@@ -3740,6 +3800,37 @@ export class D3D9Device {
 
     getBoundTexturePtr(stage: number): number {
         return this.boundTexturePtrs[stage] ?? 0;
+    }
+
+    /** Diagnostic readback of authoritative rendered GPU pixels, not stale CPU backing. */
+    async readTexturePixelStats(ptr: number) {
+        const index = this.textures.getIndex(ptr), gpu = this.backend.getDevice();
+        if (index === null || !gpu) throw new Error('texture/device not found');
+        const texture = this.textures.getGpuTexture(index);
+        if (!texture || !(texture.usage & GPUTextureUsage.COPY_SRC) ||
+            !['bgra8unorm', 'rgba8unorm', 'bgra8unorm-srgb', 'rgba8unorm-srgb'].includes(texture.format)) {
+            throw new Error('pixel stats require a COPY_SRC RGBA8/BGRA8 GPU texture');
+        }
+        const width = texture.width, height = texture.height;
+        const stride = Math.ceil(width * 4 / 256) * 256;
+        const buffer = gpu.createBuffer({ size: stride * height, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+        try {
+            const encoder = gpu.createCommandEncoder();
+            encoder.copyTextureToBuffer({ texture }, { buffer, bytesPerRow: stride }, [width, height]);
+            gpu.queue.submit([encoder.finish()]);
+            await buffer.mapAsync(GPUMapMode.READ);
+            const bytes = new Uint8Array(buffer.getMappedRange());
+            const sums = [0, 0, 0, 0]; let nonBlack = 0; let max = 0;
+            for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+                const i = y * stride + x * 4;
+                for (let c = 0; c < 4; c++) sums[c] += bytes[i + c];
+                const value = Math.max(bytes[i], bytes[i + 1], bytes[i + 2]);
+                if (value > 0) nonBlack++;
+                max = Math.max(max, value);
+            }
+            return { ptr, width, height, format: texture.format, nonBlackPct: nonBlack * 100 / (width * height),
+                average: sums.map(n => n / (width * height)), max };
+        } finally { buffer.destroy(); }
     }
 
     getAllRenderStates(): Array<{ state: number; value: number }> {

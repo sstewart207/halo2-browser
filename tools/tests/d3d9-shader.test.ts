@@ -311,3 +311,55 @@ describe("alpha test", () => {
         expect(res.wgsl).toContain("discard");
     });
 });
+
+
+describe("SM3 semantic register mapping", () => {
+    const declaration = (type: RegType, num: number, usage: number, index = 0) =>
+        [Op.DCL | (2 << 24), usage | (index << 16), dst(type, num)];
+    const move = (outType: RegType, outNum: number, inType: RegType, inNum: number) =>
+        [Op.MOV | (2 << 24), dst(outType, outNum), src(inType, inNum)];
+    test("links reordered position and interpolator registers by semantic", () => {
+        const vs = compileVertexShader(new Uint32Array([
+            version(false, 3, 0), ...declaration(RegType.INPUT, 0, 0),
+            ...declaration(RegType.OUTPUT, 5, 0), ...declaration(RegType.OUTPUT, 1, 5, 2),
+            ...move(RegType.OUTPUT, 5, RegType.INPUT, 0),
+            ...move(RegType.OUTPUT, 1, RegType.INPUT, 0), END,
+        ]));
+        const ps = compilePixelShader(new Uint32Array([
+            version(true, 3, 0), ...declaration(RegType.INPUT, 3, 5, 2),
+            ...move(RegType.COLOROUT, 0, RegType.INPUT, 3),
+            ...move(RegType.COLOROUT, 1, RegType.INPUT, 3), END,
+        ]));
+        const linked = linkProgram({vs, ps, declElements: [
+            {stream: 0, offset: 0, type: 3, usage: 0, usageIndex: 0},
+        ], streamStride: 16});
+        expect(vs.prog.instructions[0].dst!.reg.type).toBe(RegType.RASTOUT);
+        expect(ps.prog.instructions[0].src[0].reg.type).toBe(RegType.TEXTURE);
+        expect(ps.prog.instructions[0].src[0].reg.num).toBe(2);
+        expect(linked.wgsl).toContain('in.tex2');
+        expect(linked.wgsl).not.toContain('in.col3');
+        expect(linked.wgsl).toContain('var oC1');
+    });
+    test("does not silently overwrite packed semantic declarations", () => {
+        expect(() => compilePixelShader(new Uint32Array([
+            version(true, 3, 0), ...declaration(RegType.INPUT, 1, 5, 0),
+            ...declaration(RegType.INPUT, 1, 5, 1), END,
+        ]))).toThrow('Packed SM3');
+    });
+});
+
+
+test('D3D9 separates a 12-byte position stream from a 16-byte texture stream', () => {
+    const vs = compileVertexShader(new Uint32Array([
+        version(false, 3, 0), ...dcl(0, 0, 0), ...dcl(5, 0, 1),
+        Op.DCL | (2 << 24), 0, dst(RegType.OUTPUT, 0),
+        Op.MOV | (2 << 24), dst(RegType.OUTPUT, 0), src(RegType.INPUT, 0), END,
+    ]));
+    const linked = linkProgram({vs, ps: null, declElements: [
+        {stream: 0, offset: 0, type: 2, usage: 0, usageIndex: 0},
+        {stream: 1, offset: 0, type: 3, usage: 5, usageIndex: 0},
+    ], streamStride: 12, streamStrides: [12, 16]});
+    expect(linked.vertexBuffers.map(b => b!.arrayStride)).toEqual([12, 16]);
+    expect(linked.vertexBuffers[0]!.attributes).toHaveLength(1);
+    expect(linked.vertexBuffers[1]!.attributes).toHaveLength(1);
+});

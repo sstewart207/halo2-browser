@@ -192,8 +192,7 @@ export function createStateExports(): Record<string, ThunkImplementation> {
         }
 
         Logger.verbose(LogCategory.D3D9, `SetStreamSource(Stream=${StreamNumber}, Offset=${OffsetInBytes}, Stride=${Stride})`);
-        device.setStreamSource(StreamNumber, pStreamData, OffsetInBytes, Stride);
-        return D3D_OK;
+        return device.setStreamSource(StreamNumber, pStreamData, OffsetInBytes, Stride);
     };
 
     exports['IDirect3DDevice9_SetIndices'] = (ctx, mem, args) => {
