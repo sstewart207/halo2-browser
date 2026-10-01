@@ -140,6 +140,7 @@ export class D3D9Device {
     private surfaceCopier?: SurfaceCopier;
     private surfaceCopyLog: string[] = [];
     private pipelineErrors: string[] = [];
+    private upDrawDiagnostics: object[] = [];
     private recordPipelineError(message: string): void {
         if (this.pipelineErrors.includes(message) || this.pipelineErrors.length >= 40) return;
         this.pipelineErrors.push(message);
@@ -284,8 +285,8 @@ export class D3D9Device {
         }
     }
     /** HARNESS rtDebug verb: what SetRenderTarget saw + which textures were created as RTs. */
-    getRtDebug(): { resolves: string[]; creates: string[]; copies: string[]; pipelineErrors: string[]; currentRtIndex: number | null } {
-        return { resolves: [...this.rtResolveLog], creates: [...this.rtCreateLog], copies: [...this.surfaceCopyLog], pipelineErrors: [...this.pipelineErrors], currentRtIndex: this.currentRtIndex };
+    getRtDebug(): { resolves: string[]; creates: string[]; copies: string[]; pipelineErrors: string[]; upDraws: object[]; currentRtIndex: number | null } {
+        return { resolves: [...this.rtResolveLog], creates: [...this.rtCreateLog], copies: [...this.surfaceCopyLog], pipelineErrors: [...this.pipelineErrors], upDraws: [...this.upDrawDiagnostics], currentRtIndex: this.currentRtIndex };
     }
 
     /** HARNESS: last `n` per-present summaries (newest last). See frameLog verb. */
@@ -297,7 +298,15 @@ export class D3D9Device {
      *  swap-chain backbuffer; an RT texture's pointer = render-to-texture. The module handler resolves
      *  the surface pointer → its parent texture pointer (surfaceMeta) before calling us. Switching the
      *  target eagerly flushes the commands accumulated for the previous target as their own pass. */
-    setRenderTarget(_index: number, texturePtr: number, face: number = -1): number {
+    private primaryRenderSurface = 0;
+    getRenderTargetSurface(): number { return this.primaryRenderSurface; }
+
+    setRenderTarget(index: number, texturePtr: number, face: number = -1, surfacePtr = 0): number {
+        // Disabling a secondary target must never switch the primary target.
+        // Additional color attachments are not implemented yet.
+        if (index !== 0) return index < 4 && texturePtr === 0 && surfacePtr === 0 ? 0 : 0x8876086a;
+        this.resourceBindings.set('renderSurface0', surfacePtr);
+        this.primaryRenderSurface = surfacePtr;
         this.rtSetsThisFrame++;
         let newTarget: number | null = null;
         let newFace = -1;
@@ -2001,6 +2010,7 @@ export class D3D9Device {
         this.submitFrame(false);
         this.resourceBindings.clear();
         this.extraVertexStreams.clear();
+        this.primaryRenderSurface = 0;
         this.currentRtIndex = null;
         this.currentRtFace = -1;
         this.setStreamSource(0, 0, 0, 0);
@@ -2326,6 +2336,11 @@ export class D3D9Device {
 
     drawPrimitiveUP(primitiveType: number, primitiveCount: number, vertexDataPtr: number, stride: number): number {
         d3d9PerfInc("drawPrimitiveUP");
+        const upDiagnostic = {rt: this.currentRtIndex, vs: this.activeVertexShader, ps: this.activePixelShader,
+            decl: this.activeVertexDecl, fvf: this.stateTracker.getFVF(), primitiveType, primitiveCount, stride,
+            psConstants: Array.from(this.psConstants.subarray(0, 4))};
+        this.upDrawDiagnostics.push(upDiagnostic);
+        if (this.upDrawDiagnostics.length > 16) this.upDrawDiagnostics.shift();
         if (primitiveCount <= 0) return 0;
         this.captureDrawIfArmed(primitiveType, primitiveCount); // harness capture (UP renders non-trilist too)
 
@@ -3803,10 +3818,10 @@ export class D3D9Device {
     }
 
     /** Diagnostic readback of authoritative rendered GPU pixels, not stale CPU backing. */
-    async readTexturePixelStats(ptr: number) {
+    async readTexturePixelStats(ptr: number, preview = false) {
         const index = this.textures.getIndex(ptr), gpu = this.backend.getDevice();
-        if (index === null || !gpu) throw new Error('texture/device not found');
-        const texture = this.textures.getGpuTexture(index);
+        if ((ptr !== 0 && index === null) || !gpu) throw new Error('texture/device not found');
+        const texture = ptr === 0 ? this.backendExecutor.getBackBufferTexture() : this.textures.getGpuTexture(index!);
         if (!texture || !(texture.usage & GPUTextureUsage.COPY_SRC) ||
             !['bgra8unorm', 'rgba8unorm', 'bgra8unorm-srgb', 'rgba8unorm-srgb'].includes(texture.format)) {
             throw new Error('pixel stats require a COPY_SRC RGBA8/BGRA8 GPU texture');
@@ -3828,8 +3843,25 @@ export class D3D9Device {
                 if (value > 0) nonBlack++;
                 max = Math.max(max, value);
             }
+            let png: string | undefined;
+            if (preview) {
+                const rgba = new Uint8ClampedArray(width * height * 4);
+                const bgra = texture.format.startsWith('bgra');
+                for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+                    const from = y * stride + x * 4, to = (y * width + x) * 4;
+                    rgba[to] = bytes[from + (bgra ? 2 : 0)]; rgba[to + 1] = bytes[from + 1];
+                    rgba[to + 2] = bytes[from + (bgra ? 0 : 2)];
+                    rgba[to + 3] = 255; // Diagnostic RGB preview only; original alpha is reported below.
+                }
+                const canvas = new OffscreenCanvas(width, height);
+                canvas.getContext('2d')!.putImageData(new ImageData(rgba, width, height), 0, 0);
+                const encoded = new Uint8Array(await (await canvas.convertToBlob({type: 'image/png'})).arrayBuffer());
+                let binary = '';
+                for (let i = 0; i < encoded.length; i += 8192) binary += String.fromCharCode(...encoded.subarray(i, i + 8192));
+                png = 'data:image/png;base64,' + btoa(binary);
+            }
             return { ptr, width, height, format: texture.format, nonBlackPct: nonBlack * 100 / (width * height),
-                average: sums.map(n => n / (width * height)), max };
+                average: sums.map(n => n / (width * height)), max, png };
         } finally { buffer.destroy(); }
     }
 

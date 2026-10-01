@@ -253,22 +253,26 @@ export function createDeviceExports(): Record<string, ThunkImplementation> {
         // in surfaceMeta). A surface with no texture parent (the implicit backbuffer from
         // GetBackBuffer / a NULL restore) → texturePtr 0 = render to the swap-chain.
         const meta = surfacePtr ? surfaceMeta.get(surfacePtr) : undefined;
+        if ((args[1] >>> 0) === 0 && !surfacePtr) return D3DERR_INVALIDCALL;
+        if (surfacePtr && (!meta || resourceToDevice.get(surfacePtr) !== device)) return D3DERR_INVALIDCALL;
         const texturePtr = surfacePtr ? (meta?.texturePtr ?? 0) : 0;
         // A cube-face surface carries its face index (GetCubeMapSurface recorded it); -1 = 2D RT.
         const face = meta?.face ?? -1;
         device.noteRtResolve(surfacePtr, !!meta, texturePtr);
         Logger.verbose(LogCategory.D3D9, `SetRenderTarget(index=${args[1]}, surface=0x${surfacePtr.toString(16)} -> tex=0x${texturePtr.toString(16)} face=${face})`);
-        device.setRenderTarget(args[1] >>> 0, texturePtr >>> 0, face);
-        return D3D_OK;
+        return device.setRenderTarget(args[1] >>> 0, texturePtr >>> 0, face, surfacePtr);
     };
 
     exports['IDirect3DDevice9_GetRenderTarget'] = (_ctx, mem, args) => {
         const device = devices.get(args[0]);
         const ppRenderTarget = args[2];
         if (!device || !ppRenderTarget) return D3DERR_INVALIDCALL;
-        // Return NULL: games that save/restore the RT pass this back to SetRenderTarget, where
-        // texturePtr 0 correctly restores the swap-chain backbuffer.
-        return Mem.writeUint32(ppRenderTarget, 0) ? D3D_OK : D3DERR_INVALIDCALL;
+        if ((args[1] >>> 0) !== 0) return Mem.writeUint32(ppRenderTarget, 0) ? 0x88760866 : D3DERR_INVALIDCALL;
+        const surface = device.getRenderTargetSurface();
+        if (!surface) return exports['IDirect3DDevice9_GetBackBuffer'](_ctx, mem, [args[0], 0, 0, 0, ppRenderTarget]);
+        if (!Mem.writeUint32(ppRenderTarget, surface)) return D3DERR_INVALIDCALL;
+        d3d9ResourceLifetime.addRef(surface);
+        return D3D_OK;
     };
 
     exports['IDirect3DDevice9_BeginScene'] = (ctx, mem, args) => {

@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { textureUpdateLevelOffset } from '../../src/worker/modules/d3d9/texture-transfer';
 import { D3D9Device } from '../../src/worker/backends/webgpu/d3d9/d3d9-device';
 import { D3D9VolumeData } from '../../src/worker/backends/webgpu/d3d9/d3d9-volume';
+import { createDeviceExports } from '../../src/worker/modules/d3d9/device';
 import { createStateExports } from '../../src/worker/modules/d3d9/state';
 import { devices } from '../../src/worker/modules/d3d9/shared-state';
 import { d3d9ResourceLifetime } from '../../src/worker/backends/webgpu/d3d9/resource-lifetime';
@@ -120,4 +121,31 @@ test('extra D3D9 vertex streams retain independent offsets, uploads and bindings
         expect(device.extraVertexStreams.has(1)).toBe(false);
         expect(device.setStreamSource(16, 33, 0, 24)).toBe(0x8876086c);
     } finally { (globalThis as any).GPUBufferUsage = oldUsage; }
+});
+
+
+test('GetRenderTarget preserves the real surface and acquires a caller reference', () => {
+    const memory = new Uint8Array(256); Mem.bind(() => memory);
+    devices.set(12, {getRenderTargetSurface: () => 44} as never);
+    d3d9ResourceLifetime.register(44, () => {});
+    try {
+        const get = createDeviceExports().IDirect3DDevice9_GetRenderTarget;
+        expect(get({} as never, memory, [12, 0, 64])).toBe(0);
+        expect(Mem.readUint32(64)).toBe(44);
+        expect(d3d9ResourceLifetime.count(44)).toBe(2);
+        expect(get({} as never, memory, [12, 1, 64])).toBe(0x88760866);
+        expect(Mem.readUint32(64)).toBe(0);
+    } finally { devices.delete(12); d3d9ResourceLifetime.release(44); d3d9ResourceLifetime.release(44); }
+});
+
+test('clearing a secondary render target leaves the primary target unchanged', () => {
+    const device = Object.create(D3D9Device.prototype) as any;
+    device.currentRtIndex = 21;
+    device.currentRtFace = -1;
+    device.primaryRenderSurface = 44;
+    expect(device.setRenderTarget(1, 0)).toBe(0);
+    expect(device.currentRtIndex).toBe(21);
+    expect(device.primaryRenderSurface).toBe(44);
+    expect(device.setRenderTarget(1, 123, -1, 124)).toBe(0x8876086a);
+    expect(device.currentRtIndex).toBe(21);
 });

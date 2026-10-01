@@ -58,12 +58,12 @@ export function registerTextureCommands(svc: HarnessService): void {
     /** d3d9TexturePixels(ptr): read authoritative color render-target statistics. */
     svc.register('d3d9TexturePixels', async (args) => {
         const ptr = Number(args[0]);
-        if (!Number.isInteger(ptr) || ptr <= 0 || ptr > 0xffffffff) {
+        if (!Number.isInteger(ptr) || ptr < 0 || ptr > 0xffffffff) {
             throw new HarnessError('expected a texture pointer', HarnessErrorCode.BAD_ARGS);
         }
         for (const device of d3d9Devices.values()) {
-            if (device.getTexturesDebugInfo().some(texture => texture.handle === ptr)) {
-                return device.readTexturePixelStats(ptr);
+            if (ptr === 0 || device.getTexturesDebugInfo().some(texture => texture.handle === ptr)) {
+                return device.readTexturePixelStats(ptr, args[1] === true);
             }
         }
         throw new HarnessError('D3D9 texture not found', HarnessErrorCode.NOT_FOUND);
