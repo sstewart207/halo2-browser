@@ -1165,9 +1165,7 @@ function initModuleFunctions(): void {
             }
         }
 
-        if (verbose) {
-            Logger.verbose(LogCategory.KERNEL32, `LoadLibraryW("${dllName}") -> NOT FOUND`);
-        }
+        Logger.log(LogCategory.KERNEL32, `LoadLibraryW("${dllName}") -> NOT FOUND (err=126)`);
         system.process!.lastError = 126; // ERROR_MOD_NOT_FOUND
         return { value: 0, stackCleanup: 4 };
     };

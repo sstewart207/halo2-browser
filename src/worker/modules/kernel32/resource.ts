@@ -547,7 +547,7 @@ export const exports: Record<string, ThunkImplementation> = {
 
         if (!entry) {
             Logger.log(LogCategory.KERNEL32,
-                `FindResourceW: Resource ${typeDesc}/${nameDesc} not found`);
+                `FindResourceW: Resource ${typeDesc}/${nameDesc} not found in module 0x${hModule.toString(16)}`);
             return 0;
         }
 
