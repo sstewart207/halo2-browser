@@ -109,10 +109,10 @@ export const oleaut32Module: ModuleDescriptor = {
         makeFunc("VarBstrFromCy", 5),
 
         // Error info (ordinal + named alias)
-        makeFunc("ord_200", 1, { ordinal: 200 }), // GetErrorInfo
-        makeFunc("GetErrorInfo", 1),
-        makeFunc("ord_201", 1, { ordinal: 201 }), // SetErrorInfo
-        makeFunc("SetErrorInfo", 1),
+        makeFunc("ord_200", 2, { ordinal: 200 }), // GetErrorInfo(DWORD dwReserved, IErrorInfo**)
+        makeFunc("GetErrorInfo", 2),
+        makeFunc("ord_201", 2, { ordinal: 201 }), // SetErrorInfo(DWORD dwReserved, IErrorInfo*)
+        makeFunc("SetErrorInfo", 2),
         makeFunc("ord_202", 1, { ordinal: 202 }), // CreateErrorInfo
         makeFunc("CreateErrorInfo", 1),
 

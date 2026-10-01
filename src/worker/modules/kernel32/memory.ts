@@ -605,6 +605,17 @@ export const exports: Record<string, ThunkImplementation> = (() => {
 
     // Track reserved pages (address -> size in bytes)
     const reservedPages: Map<number, number> = new Map();
+    let virtualAllocFailures = 0;
+
+    const LOW_GAP_BASE = 0x00100000; // above the registered low-memory region
+    const LOW_GAP_END = 0x00400000;  // default main image base
+    const isFreeLowGap = (addr: number, size: number): boolean => {
+        if (addr < LOW_GAP_BASE || addr + size > LOW_GAP_END) return false;
+        for (const [base, len] of virtualAllocRegions) {
+            if (addr < base + len && base < addr + size) return false;
+        }
+        return true;
+    };
 
     // Track VirtualAlloc root regions (base -> size), regardless of RESERVE/COMMIT mix.
     // VirtualFree validation must use this map (exact base for MEM_RELEASE, range containment for MEM_DECOMMIT).
@@ -1789,12 +1800,21 @@ export const exports: Record<string, ThunkImplementation> = (() => {
                 // Free() decrements the WRONG pool's Taken counter → premature VirtualFree
                 // → use-after-free of GNames/other critical data.
                 address = process.memory.alloc(alignedSize, 'HEAP', perms, ALLOC_GRANULARITY);
+            } else if (isFreeLowGap(address, alignedSize)) {
+                // RAM-backed user VA between low memory and the main image sits outside every
+                // allocator bucket, but VirtualQuery reports it MEM_FREE, so hinted allocations
+                // (e.g. Detours trampoline regions below the target module) must succeed there.
             } else {
                 process.memory.allocAt(address, alignedSize, 'HEAP', perms);
             }
         } catch (error) {
             System.getInstance().scheduler.setLastError(ERROR_INVALID_ADDRESS);
-            Logger.warn(LogCategory.KERNEL32, `VirtualAlloc: Allocation failed: ${error}`);
+            // A hint-probing guest can fail tens of thousands of times; keep the first and a periodic sample.
+            const failures = ++virtualAllocFailures;
+            if (failures <= 16 || failures % 4096 === 0) {
+                Logger.warn(LogCategory.KERNEL32,
+                    `VirtualAlloc: Allocation failed (#${failures}, type=0x${flAllocationType.toString(16)}, size=0x${alignedSize.toString(16)}): ${error}`);
+            }
             return 0;
         }
 

@@ -235,8 +235,9 @@ export class Oleaut32 implements IModule {
 
         // ---- Error Info ----
 
+        // GetErrorInfo(dwReserved, IErrorInfo**): S_FALSE with a NULL object means no error info is set.
         this.exports["ord_200"] = (ctx, mem, args) => {
-            const pperrinfo = args[0] >>> 0;
+            const pperrinfo = args[1] >>> 0;
             if (pperrinfo) Mem.writeUint32(pperrinfo, 0);
             return 0x00000001;
         };

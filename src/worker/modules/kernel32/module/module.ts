@@ -330,8 +330,12 @@ function resolveThunkedExportAddress(
 
     const byQualifiedName = tg.getExportAddress(`${dllName}:${exportName}`);
     if (byQualifiedName !== undefined) return byQualifiedName >>> 0;
-    const byShortName = tg.getExportAddress(exportName);
-    if (byShortName !== undefined) return byShortName >>> 0;
+    // Ordinal-style names are only meaningful inside one DLL (ord_4 is connect in ws2_32 but
+    // SysAllocStringLen in oleaut32), so they must never resolve through the DLL-less table.
+    if (!/^ord_\d+$/i.test(exportName)) {
+        const byShortName = tg.getExportAddress(exportName);
+        if (byShortName !== undefined) return byShortName >>> 0;
+    }
 
     const inApi = apiRegistry.hasExportedFunction(dllName, exportName);
     const pendingKey = `${dllName}:${exportName}`.toLowerCase();
