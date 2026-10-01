@@ -42,8 +42,8 @@ export const oleaut32Module: ModuleDescriptor = {
         makeFunc("VariantCopy", 2),
         makeFunc("ord_12", 4, { ordinal: 12 }),   // VariantChangeType
         makeFunc("VariantChangeType", 4),
-        makeFunc("ord_13", 6, { ordinal: 13 }),   // VariantChangeTypeEx
-        makeFunc("VariantChangeTypeEx", 6),
+        makeFunc("ord_147", 5, { ordinal: 147 }), // VariantChangeTypeEx
+        makeFunc("VariantChangeTypeEx", 5),
 
         // Active object registration (ordinal + named alias)
         makeFunc("ord_33", 3, { ordinal: 33 }),   // RegisterActiveObject

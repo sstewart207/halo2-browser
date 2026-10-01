@@ -184,8 +184,11 @@ export class Oleaut32 implements IModule {
         };
         this.exports["ord_12"] = variantChangeType;
         this.exports["VariantChangeType"] = variantChangeType;
-        this.exports["VariantChangeTypeEx"] = (ctx, mem, args) =>
-            variantChangeType(ctx, mem, [args[0], args[1], args[3]]);
+        // VariantChangeTypeEx(dest, src, lcid, wFlags, vt)
+        const variantChangeTypeEx = (ctx: unknown, mem: Uint8Array, args: number[]) =>
+            variantChangeType(ctx, mem, [args[0], args[1], args[4]]);
+        this.exports["ord_147"] = variantChangeTypeEx;
+        this.exports["VariantChangeTypeEx"] = variantChangeTypeEx;
 
         // ---- Active Object Registration ----
 
@@ -340,6 +343,7 @@ export class Oleaut32 implements IModule {
 
         const toI4 = (): number | null => {
             switch (srcVt) {
+                case VT_EMPTY: return 0;
                 case VT_I2: return view.getInt16(src + 8, true);
                 case VT_I4: return view.getInt32(src + 8, true);
                 case VT_UI4: return view.getUint32(src + 8, true) | 0;
@@ -357,6 +361,7 @@ export class Oleaut32 implements IModule {
 
         const toR8 = (): number | null => {
             switch (srcVt) {
+                case VT_EMPTY: return 0;
                 case VT_I2: return view.getInt16(src + 8, true);
                 case VT_I4: return view.getInt32(src + 8, true);
                 case VT_UI4: return view.getUint32(src + 8, true);
@@ -375,6 +380,7 @@ export class Oleaut32 implements IModule {
         const toBstr = (): number | null => {
             let text = "";
             switch (srcVt) {
+                case VT_EMPTY: break;
                 case VT_I2: text = String(view.getInt16(src + 8, true)); break;
                 case VT_I4: text = String(view.getInt32(src + 8, true)); break;
                 case VT_UI4: text = String(view.getUint32(src + 8, true)); break;

@@ -1817,6 +1817,36 @@ export const exports: Record<string, ThunkImplementation> = (() => {
         return INVALID_FILE_ATTRIBUTES;
     };
 
+    // BOOL GetFileAttributesEx(path, GET_FILEEX_INFO_LEVELS, WIN32_FILE_ATTRIBUTE_DATA*)
+    // The VFS keeps no timestamps, so the three FILETIMEs are reported as zero.
+    const getFileAttributesEx = (mem: Uint8Array, filename: string, level: number, lpInfo: number): number => {
+        const scheduler = System.getInstance().scheduler;
+        if (level !== 0 || !lpInfo || lpInfo + 36 > mem.length) {
+            scheduler.setLastError(ERROR_INVALID_PARAMETER);
+            return 0;
+        }
+        const vfs = System.getInstance().fileSystem;
+        const resolved = vfs.resolvePath(filename);
+        const isDir = vfs.directoryExists(resolved);
+        if (!isDir && !vfs.fileExists(resolved)) {
+            scheduler.setLastError(ERROR_FILE_NOT_FOUND);
+            return 0;
+        }
+        const size = isDir ? 0 : vfs.getFileSize(filename);
+        const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
+        mem.fill(0, lpInfo, lpInfo + 36);
+        view.setUint32(lpInfo, isDir ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_ARCHIVE, true);
+        view.setUint32(lpInfo + 28, Math.floor(size / 0x100000000), true);
+        view.setUint32(lpInfo + 32, size >>> 0, true);
+        return 1;
+    };
+
+    exports['GetFileAttributesExA'] = (ctx, mem, args) =>
+        getFileAttributesEx(mem, args[0] ? readStringA(mem, args[0]) : '', args[1], args[2]);
+
+    exports['GetFileAttributesExW'] = (ctx, mem, args) =>
+        getFileAttributesEx(mem, args[0] ? readStringW(mem, args[0]) : '', args[1], args[2]);
+
     exports['SetFileAttributesA'] = (ctx, mem, args) => {
         const lpFileName = args[0];
         const dwFileAttributes = args[1];

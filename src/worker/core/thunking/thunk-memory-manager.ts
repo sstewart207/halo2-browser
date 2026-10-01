@@ -554,8 +554,14 @@ export class ThunkMemoryManager {
         // MOV EAX, [EDI + ctx.filterAddr]
         mem[off++] = 0x8B; mem[off++] = 0x87;
         dv.setUint32(off, ctx + EH3_FILTER_CTX_LAYOUT.FILTER_ADDR, true); off += 4;
+        // Filters may clobber callee-saved registers (the real _EH*_CallFilter wrappers save them);
+        // EDI must survive because it addresses the filter context below.
+        // PUSH EDI; PUSH EBX; PUSH ESI
+        mem[off++] = 0x57; mem[off++] = 0x53; mem[off++] = 0x56;
         // CALL EAX
         mem[off++] = 0xFF; mem[off++] = 0xD0;
+        // POP ESI; POP EBX; POP EDI
+        mem[off++] = 0x5E; mem[off++] = 0x5B; mem[off++] = 0x5F;
 
         // CMP EAX, 1
         mem[off++] = 0x83; mem[off++] = 0xF8; mem[off++] = 0x01;

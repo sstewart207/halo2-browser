@@ -3,37 +3,24 @@
  */
 
 import { Logger, LogCategory } from "../core/logger";
-import { Mem } from "../core/memory/mem-accessor";
 import { evaluateSimpleFilter } from "../core/seh-dispatch";
 import type { ThunkImplementation, ThunkResult } from "../core/thunking/thunk-dispatcher";
+import { SEH_SCRATCH_LAYOUT } from "../core/thunking/seh-layout";
 import { getCPU } from "../core/thunking/thunk-utils";
 import type { Process } from "../core/process";
-
-const DEFAULT_SECURITY_COOKIE = 0xbb40e64e;
 
 export interface Vc9SehHost {
     process: Process;
     notifySehAborted: (reason: string) => void;
 }
 
-function readSecurityCookie(mem: Uint8Array): number {
-    // Scan for __security_cookie in .data — fallback to default
-    for (let addr = 0x10000000; addr < 0x18000000 && addr + 4 <= mem.length; addr += 4) {
-        const v = Mem.readUint32(addr) ?? 0;
-        if (v !== 0 && v !== 0xffffffff && (v & 0xffff0000) === 0xbb400000) return v >>> 0;
-    }
-    return DEFAULT_SECURITY_COOKIE;
-}
-
-function decodeDword(encoded: number, cookie: number): number {
-    return (encoded ^ cookie) >>> 0;
-}
-
 export function registerVc9SehExports(exports: Record<string, ThunkImplementation>, host: Vc9SehHost): void {
+    // (CookiePointer, CookieCheckFunction, ExceptionRecord, EstablisherFrame, ContextRecord, DispatcherContext)
     exports["_except_handler4_common"] = (_ctx, mem, args): ThunkResult | number => {
-        const pExcRec = args[0] >>> 0;
-        const frameAddr = args[1] >>> 0;
-        const pContext = args[2] >>> 0;
+        const cookiePtr = args[0] >>> 0;
+        const pExcRec = args[2] >>> 0;
+        const frameAddr = args[3] >>> 0;
+        const pContext = args[4] >>> 0;
 
         const cpu = getCPU(host.process.v86);
         if (!cpu) return 1;
@@ -42,9 +29,11 @@ export function registerVc9SehExports(exports: Record<string, ThunkImplementatio
         const excFlags = pExcRec + 4 < mem.length ? dv.getUint32(pExcRec + 4, true) : 0;
         if (excFlags & 0x06) return 1; // unwind — ContinueSearch
 
-        if (frameAddr + 16 > mem.length) return 1;
+        if (frameAddr + 16 > mem.length || cookiePtr + 4 > mem.length) return 1;
 
-        const scopeTable = dv.getUint32(frameAddr + 8, true);
+        const cookie = dv.getUint32(cookiePtr, true);
+        // Only the scope table pointer is encoded; the table entries themselves are plain.
+        const scopeTable = (dv.getUint32(frameAddr + 8, true) ^ cookie) >>> 0;
         let trylevel = dv.getInt32(frameAddr + 12, true);
         const frameEbp = frameAddr + 16;
 
@@ -54,15 +43,15 @@ export function registerVc9SehExports(exports: Record<string, ThunkImplementatio
             return 1;
         }
 
-        const cookie = readSecurityCookie(mem);
         const entriesBase = scopeTable + 16;
-
         Logger.verbose(LogCategory.SYSTEM,
             `_except_handler4_common: frame=0x${frameAddr.toString(16)} scope=0x${scopeTable.toString(16)} ` +
-            `trylevel=${trylevel} cookie=0x${cookie.toString(16)}`);
+            `trylevel=${trylevel}`);
 
-        const epAddr = (frameAddr - 12) >>> 0;
-        if (epAddr >= 4 && frameAddr <= mem.length) {
+        // EXCEPTION_POINTERS must not live in the guest frame: [ebp-0x18] holds the saved ESP that
+        // the __except block reloads. Only [ebp-0x14] (= frame-4) points at it.
+        const epAddr = (host.process.dispatcher.getSehScratchAddr() + SEH_SCRATCH_LAYOUT.EXCEPTION_POINTERS) >>> 0;
+        if (epAddr >= 4 && epAddr + 8 <= mem.length && frameAddr >= 4) {
             dv.setUint32(epAddr, pExcRec, true);
             dv.setUint32(epAddr + 4, pContext, true);
             dv.setUint32((frameAddr - 4) >>> 0, epAddr, true);
@@ -75,12 +64,9 @@ export function registerVc9SehExports(exports: Record<string, ThunkImplementatio
             const entryBase = entriesBase + trylevel * 12;
             if (entryBase + 12 > mem.length) break;
 
-            const previousTryLevel = (dv.getUint32(entryBase, true) ^ cookie) | 0;
-            const prevSigned = previousTryLevel > 0x7fffffff ? previousTryLevel - 0x100000000 : previousTryLevel;
-            const filterEnc = dv.getUint32(entryBase + 4, true);
-            const handlerEnc = dv.getUint32(entryBase + 8, true);
-            const filterAddr = decodeDword(filterEnc, cookie);
-            const handlerAddr = decodeDword(handlerEnc, cookie);
+            const prevSigned = dv.getInt32(entryBase, true);
+            const filterAddr = dv.getUint32(entryBase + 4, true);
+            const handlerAddr = dv.getUint32(entryBase + 8, true);
 
             if (filterAddr === 0 || filterAddr + 6 > mem.length) {
                 trylevel = prevSigned;
@@ -106,9 +92,16 @@ export function registerVc9SehExports(exports: Record<string, ThunkImplementatio
                 continue;
             }
             if (filterResult === -1) return 0;
-            // Complex filter — ContinueSearch (Stage B: static stub)
-            Logger.warn(LogCategory.SYSTEM, `_except_handler4_common: complex filter 0x${filterAddr.toString(16)}`);
-            return 1;
+            // Complex filter: run it in the guest via the shared filter stub. The EH4 frame has the
+            // same trylevel/EBP/EXCEPTION_POINTERS layout the stub expects.
+            const redirected = host.process.dispatcher.prepareEh3ComplexFilterRedirect(
+                cpu, frameAddr, prevSigned, trylevel, filterAddr, handlerAddr);
+            if (!redirected) {
+                Logger.error(LogCategory.SYSTEM,
+                    `_except_handler4_common: cannot run complex filter 0x${filterAddr.toString(16)}`);
+                return 1;
+            }
+            return { value: 0, skipStackCheck: true };
         }
         return 1;
     };

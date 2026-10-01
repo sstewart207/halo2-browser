@@ -359,7 +359,7 @@ export const msvcrtModule: ModuleDescriptor = {
         makeFunc("_decode_pointer", 1),
         makeFunc("_lock", 1),
         makeFunc("_unlock", 1),
-        makeFunc("_except_handler4_common", 4),
+        makeFunc("_except_handler4_common", 6),
         makeFunc("sprintf_s", 16),
         makeFunc("_snprintf_s", 16),
         makeFunc("strncpy_s", 4),
