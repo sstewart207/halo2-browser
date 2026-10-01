@@ -1,4 +1,6 @@
 import { V86 } from "v86";
+import * as v86Module from "v86";
+import { liftV86MemoryClamp } from "./core/cpu/v86-memory-patch";
 import { ThunkGenerator } from "./core/thunking/thunk-generator";
 import { Process } from "./core/process";
 import { System } from "./core/system";
@@ -1757,6 +1759,13 @@ const loadBundle = (payload: { data?: Uint8Array; url?: string; blob?: Blob; blo
 };
 
 const initV86 = async (canvas: OffscreenCanvas) => {
+  // Lift v86's signed-int32 2GB clamp BEFORE any V86 is constructed. Must happen here:
+  // the clamp lives inside CPU.create_memory, which runs from V86's constructor, so a
+  // patch installed afterwards would be too late for the memory it is meant to size.
+  // libv86.mjs exports `CPU` but the vendored .d.ts does not declare it (see
+  // v86-memory-patch.ts), so it is read off the module namespace with a cast.
+  liftV86MemoryClamp((v86Module as unknown as { CPU?: any }).CPU);
+
   // Try to apply RAM configuration from pending bundle if available
   let ramSize = EMU_MEMORY_SIZE;
   // Explicit page-set override, replayed from localStorage BEFORE any game loads (see
