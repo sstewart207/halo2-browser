@@ -15,7 +15,7 @@ Run the single-player campaign in the browser without streaming or remote game e
 - Verify actual main-menu pixels before campaign, audio, controller and saving acceptance.
 - Record verified [engine and tooling references](docs/halo2-research-leads.md).
 
-**Latest validation: 912 tests pass, TypeScript clean.** Chrome verifies real GPU copy pixels and local decoding of 120 non-black WMV intro frames in a separate decoder probe. Halo integration remains incomplete. Tests do not establish working gameplay. See [checkpoint details](docs/halo2-browser-checkpoint.md).
+**Latest validation: 915 tests pass, TypeScript clean.** Chrome verifies real GPU copy pixels and local decoding of 120 non-black WMV intro frames in a separate decoder probe. Halo integration remains incomplete. Tests do not establish working gameplay. See [checkpoint details](docs/halo2-browser-checkpoint.md).
 
 See the [checkpoint branch](https://github.com/sstewart207/halo2-browser/tree/codex/halo2-browser-checkpoint), [pull requests](https://github.com/sstewart207/halo2-browser/pulls), and [issues](https://github.com/sstewart207/halo2-browser/issues).
 

@@ -39,7 +39,7 @@ export class DynamicVbPool {
     releases = 0;
     destroys = 0;
 
-    constructor(device: GPUDevice) {
+    constructor(device: GPUDevice, private usage = GPUBufferUsage.VERTEX) {
         this.device = device;
     }
 
@@ -54,7 +54,7 @@ export class DynamicVbPool {
         this.creates++;
         return this.device.createBuffer({
             size: cap,
-            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+            usage: this.usage | GPUBufferUsage.COPY_DST,
         });
     }
 

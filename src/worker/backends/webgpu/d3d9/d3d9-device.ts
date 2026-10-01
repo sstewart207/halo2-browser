@@ -4,6 +4,7 @@ import { RenderFramePool } from "../render-frame";
 import { LruCache } from "../../../core/collections/lru-cache";
 import { D3D9StateTracker } from "./d3d9-state-tracker";
 import { D3D9CommandRecorder, type StreamVertexBinding } from "./d3d9-command-recorder";
+import { expandIndexedStrip } from "./indexed-strip";
 import { DynamicVbPool } from "./dynamic-vb-pool";
 import { D3D9BackendExecutor, UniformData } from "./d3d9-backend-executor";
 import { VertexBufferStore, IndexBufferStore, TextureStore } from "./d3d9-resources";
@@ -141,6 +142,8 @@ export class D3D9Device {
     private surfaceCopyLog: string[] = [];
     private pipelineErrors: string[] = [];
     private upDrawDiagnostics: object[] = [];
+    private lastBackBufferUp: object | null = null;
+    private backBufferPasses = new Map<string, object>();
     private drawTypeCounts = new Map<string, number>();
     private noteDrawType(kind: string, primitive: number): void {
         const key = `${kind}:${primitive}:${this.currentRtIndex === null ? 'BB' : 'RT'}`;
@@ -290,8 +293,8 @@ export class D3D9Device {
         }
     }
     /** HARNESS rtDebug verb: what SetRenderTarget saw + which textures were created as RTs. */
-    getRtDebug(): { resolves: string[]; creates: string[]; copies: string[]; pipelineErrors: string[]; drawTypes: Record<string, number>; upDraws: object[]; currentRtIndex: number | null } {
-        return { resolves: [...this.rtResolveLog], creates: [...this.rtCreateLog], copies: [...this.surfaceCopyLog], pipelineErrors: [...this.pipelineErrors], drawTypes: Object.fromEntries(this.drawTypeCounts), upDraws: [...this.upDrawDiagnostics], currentRtIndex: this.currentRtIndex };
+    getRtDebug(): { resolves: string[]; creates: string[]; copies: string[]; pipelineErrors: string[]; lastBackBufferUp: object | null; backBufferPasses: object[]; drawTypes: Record<string, number>; upDraws: object[]; currentRtIndex: number | null } {
+        return { resolves: [...this.rtResolveLog], creates: [...this.rtCreateLog], copies: [...this.surfaceCopyLog], pipelineErrors: [...this.pipelineErrors], lastBackBufferUp: this.lastBackBufferUp, backBufferPasses: [...this.backBufferPasses.values()], drawTypes: Object.fromEntries(this.drawTypeCounts), upDraws: [...this.upDrawDiagnostics], currentRtIndex: this.currentRtIndex };
     }
 
     /** HARNESS: last `n` per-present summaries (newest last). See frameLog verb. */
@@ -407,6 +410,7 @@ export class D3D9Device {
     private vertexConversionBufferSize: number = 0;
     /** Reuse pool for DrawPrimitiveUP vertex buffers (lazily created — needs the device). */
     private vbPool: DynamicVbPool | null = null;
+    private ibPool: DynamicVbPool | null = null;
 
     // Reusable buffer for texture ARGB→RGBA conversion to avoid GC pressure
     private textureConversionBuffer: Uint8Array | null = null;
@@ -2367,6 +2371,18 @@ export class D3D9Device {
         const upDiagnostic = {rt: this.currentRtIndex, vs: this.activeVertexShader, ps: this.activePixelShader,
             decl: this.activeVertexDecl, fvf: this.stateTracker.getFVF(), primitiveType, primitiveCount, stride,
             psConstants: Array.from(this.psConstants.subarray(0, 4))};
+        if (this.currentRtIndex === null) {
+            const shader = this.getActivePsShader();
+            this.lastBackBufferUp = {...upDiagnostic, colorWrite: this.getRS(168), zEnable: this.getRS(7),
+                texture0: this.stateTracker.getTexture(0), viewport: {...this.viewport},
+                vertexFloats: Array.from({length: Math.max(0, Math.min(8, Math.floor(stride / 4),
+                    Math.floor((this.memory.byteLength - vertexDataPtr) / 4)))}, (_, index) =>
+                    new DataView(this.memory.buffer, this.memory.byteOffset + vertexDataPtr + index * 4, 4).getFloat32(0, true)),
+                psVersion: shader ? `${shader.prog.major}.${shader.prog.minor}` : null,
+                psOps: shader?.prog.instructions.map(instruction => opName(instruction.opcode))};
+            const key = `${this.activeVertexShader}:${this.activePixelShader}:${primitiveType}:${stride}`;
+            if (this.backBufferPasses.size < 24 || this.backBufferPasses.has(key)) this.backBufferPasses.set(key, this.lastBackBufferUp);
+        }
         this.upDrawDiagnostics.push(upDiagnostic);
         if (this.upDrawDiagnostics.length > 16) this.upDrawDiagnostics.shift();
         if (primitiveCount <= 0) return 0;
@@ -2538,7 +2554,8 @@ export class D3D9Device {
         d3d9PerfInc("drawIndexedPrimitive");
         this.noteDrawType("indexed", primitiveType);
         this.captureDrawIfArmed(primitiveType, primitiveCount);
-        if (primitiveType !== D3DPT_TRIANGLELIST) return 0;
+        if (primitiveType !== D3DPT_TRIANGLELIST && primitiveType !== D3DPT_TRIANGLESTRIP) return 0;
+        if (primitiveCount <= 0) return 0;
         const streamSource = this.stateTracker.getStreamSource();
         if (!streamSource) return 0;
         const indexSource = this.stateTracker.getIndexSource();
@@ -2594,7 +2611,7 @@ export class D3D9Device {
         // resolveProgrammablePipeline). Only reachable for D3DPT_TRIANGLELIST (early-return
         // above), so topology=0/forceCullNone=false, matching the resolve call below.
         let arenaKey: number | undefined;
-        if (d3d9WasmArena.isInitialized()) {
+        if (d3d9WasmArena.isInitialized() && primitiveType === D3DPT_TRIANGLELIST) {
             arenaKey = d3d9WasmArena.recordDrawIndexed(0, primitiveCount * 3, startIndex, baseVertexIndex, streamSource.stride, false);
         }
 
@@ -2607,6 +2624,16 @@ export class D3D9Device {
         } else {
             pipelineId = this.getPipelineId();
         }
+        const converted = primitiveType === D3DPT_TRIANGLESTRIP
+            ? expandIndexedStrip(ibData, this.indexBuffers.getFormat(ibIndex) === D3DFMT_INDEX16 ? 2 : 4, startIndex, primitiveCount)
+            : null;
+        if (primitiveType === D3DPT_TRIANGLESTRIP && !converted) return 0x8876086c;
+        if (converted) {
+            this.ibPool ??= new DynamicVbPool(device, GPUBufferUsage.INDEX);
+            ibBuffer = this.ibPool.acquire(converted.byteLength);
+            device.queue.writeBuffer(ibBuffer, 0, converted);
+            this.commandRecorder.getCurrentFrame().registerPooledBuffer(ibBuffer);
+        }
         this.commandRecorder.recordDrawIndexed({
             pipelineId,
             vbGpuBuffer: vbBuffer,
@@ -2614,9 +2641,9 @@ export class D3D9Device {
             vbOffset: streamSource.offset,
             vbSize: this.vertexBuffers.getSize(vbIndex) - streamSource.offset,
             ibGpuBuffer: ibBuffer,
-            ibFormat: this.indexBuffers.getFormat(ibIndex) === D3DFMT_INDEX16 ? "uint16" : "uint32",
+            ibFormat: !converted && this.indexBuffers.getFormat(ibIndex) === D3DFMT_INDEX16 ? "uint16" : "uint32",
             indexCount: primitiveCount * 3,
-            startIndex,
+            startIndex: converted ? 0 : startIndex,
             baseVertex: baseVertexIndex,
             bindStateIndex,
         });
@@ -3361,9 +3388,12 @@ export class D3D9Device {
         // issued queue.submit, so by WebGPU queue ordering the next frame's writeBuffer
         // into a recycled buffer is sequenced after this frame's draws that read it —
         // safe to reuse without a GPU fence.
-        if (this.vbPool && frame.pooledBuffers.length > 0) {
+        if (frame.pooledBuffers.length > 0) {
             const pooled = frame.pooledBuffers;
-            for (let i = 0; i < pooled.length; i++) this.vbPool.release(pooled[i]);
+            for (const buffer of pooled) {
+                if (buffer.usage & GPUBufferUsage.INDEX) this.ibPool?.release(buffer);
+                else this.vbPool?.release(buffer);
+            }
             pooled.length = 0;
         }
 
