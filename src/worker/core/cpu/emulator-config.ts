@@ -5,9 +5,18 @@
 // HEAP + 1GB of HEAP_HI = 1.5GB of guest heap, on top of SURFACE/ROM/thunks.
 //
 // The browser really does commit this much WASM memory, so it is not free — but for a
-// single-purpose app that is the right trade. 2GB is also EmulatorConfig.validateRam's
-// ceiling and the practical limit for a 32-bit x86 guest.
-export const EMU_MEMORY_SIZE = 2 * 1024 * 1024 * 1024; // 2 GB
+// single-purpose app that is the right trade. 2GB yields 512MB of primary HEAP plus
+// 1GB of HEAP_HI = 1.5GB of guest heap.
+//
+// **2GB is a hard ceiling imposed by v86, not by us.** vendor/v86's CPU.create_memory
+// clamps any request whose signed 32-bit form goes negative:
+//     0 > (size | 0)  ->  size = Math.pow(2, 31) - 131072
+// so 3GB silently becomes 2147352576 (confirmed: maxEnd in the address space is exactly
+// that). Raising this past 2GB therefore requires patching v86 and rebuilding the WASM,
+// which also moves nothing else but is not a casual change. Until then the real problem
+// is that the game needs slightly MORE than 1.5GB of guest heap, so the win is in
+// reducing what the guest allocates — not in handing it a bigger arena.
+export const EMU_MEMORY_SIZE = 2 * 1024 * 1024 * 1024; // 2 GB (v86's ceiling)
 export const EMU_VGA_MEMORY_SIZE = 8 * 1024 * 1024;
 // The emulated machine reports one logical processor (GetSystemInfo) at this nominal clock; the browser
 // exposes no real CPU frequency. Keep every API that reports CPU speed on this constant.

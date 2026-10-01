@@ -1767,11 +1767,12 @@ const initV86 = async (canvas: OffscreenCanvas) => {
   //
   // RAM above 1GB is what materializes the HEAP_HI overflow arena (guest heap backing
   // at 0x40000000+, above the JIT guard band), so this is how a memory-hungry title gets
-  // more guest address space. Clamped to the same 64MB..2GB range EmulatorConfig uses;
-  // 2GB is the practical ceiling for a 32-bit guest.
+  // more guest address space. Clamped to the same 64MB..4GB range EmulatorConfig uses.
+  // 3GB is the useful setting for Halo 2: it yields 512MB + 1.5GB = 2GB of guest heap,
+  // against a measured need of ~1.5GB.
   const dbgRam = (globalThis as any).__ramBytes;
   if (typeof dbgRam === 'number' && Number.isFinite(dbgRam) && dbgRam > 0) {
-    const clamped = Math.max(64 * 1024 * 1024, Math.min(2 * 1024 * 1024 * 1024, Math.floor(dbgRam)));
+    const clamped = Math.max(64 * 1024 * 1024, Math.min(4 * 1024 * 1024 * 1024, Math.floor(dbgRam)));
     ramSize = clamped;
     Logger.log(LogCategory.SYSTEM,
       `EmulatorConfig: RAM override __ramBytes applied: ${(ramSize / 1024 / 1024).toFixed(0)} MB`);
