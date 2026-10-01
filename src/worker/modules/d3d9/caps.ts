@@ -48,6 +48,7 @@ const REAL_CAPS9 = hexToBytes(REAL_CAPS9_HEX);
 //     tween path that silently does nothing. D3D8 already omits this bit.
 {
     const dv = new DataView(REAL_CAPS9.buffer, REAL_CAPS9.byteOffset, REAL_CAPS9.byteLength);
+    dv.setUint32(240, 2, true); // NumSimultaneousRTs: implemented programmable MRT attachments
     dv.setUint32(160, 8, true); // MaxActiveLights: match FFP_MAX_LIGHTS
     const vpCaps = dv.getUint32(156, true);
     dv.setUint32(156, vpCaps & ~0x00000040, true); // clear D3DVTXPCAPS_TWEENING

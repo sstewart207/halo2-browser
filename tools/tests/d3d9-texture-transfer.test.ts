@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { textureUpdateLevelOffset } from '../../src/worker/modules/d3d9/texture-transfer';
 import { D3D9Device } from '../../src/worker/backends/webgpu/d3d9/d3d9-device';
 import { D3D9VolumeData } from '../../src/worker/backends/webgpu/d3d9/d3d9-volume';
+import { writeDeviceCaps9 } from '../../src/worker/modules/d3d9/caps';
 import { createDeviceExports } from '../../src/worker/modules/d3d9/device';
 import { createStateExports } from '../../src/worker/modules/d3d9/state';
 import { devices } from '../../src/worker/modules/d3d9/shared-state';
@@ -126,7 +127,7 @@ test('extra D3D9 vertex streams retain independent offsets, uploads and bindings
 
 test('GetRenderTarget preserves the real surface and acquires a caller reference', () => {
     const memory = new Uint8Array(256); Mem.bind(() => memory);
-    devices.set(12, {getRenderTargetSurface: () => 44} as never);
+    devices.set(12, {getRenderTargetSurface: (index: number) => index === 0 ? 44 : 0} as never);
     d3d9ResourceLifetime.register(44, () => {});
     try {
         const get = createDeviceExports().IDirect3DDevice9_GetRenderTarget;
@@ -143,9 +144,40 @@ test('clearing a secondary render target leaves the primary target unchanged', (
     device.currentRtIndex = 21;
     device.currentRtFace = -1;
     device.primaryRenderSurface = 44;
+    device.secondaryRtIndex = null;
+    device.textures = {getIndex: () => 22, isRenderTarget: () => true};
+    const refs: string[] = [];
+    device.submitFrame = () => refs.push('submit');
+    device.resourceBindings = {set: (slot: string) => refs.push(slot)};
     expect(device.setRenderTarget(1, 0)).toBe(0);
     expect(device.currentRtIndex).toBe(21);
     expect(device.primaryRenderSurface).toBe(44);
-    expect(device.setRenderTarget(1, 123, -1, 124)).toBe(0x8876086a);
+    expect(device.setRenderTarget(1, 123, -1, 124)).toBe(0);
+    expect(device.secondaryRtIndex).toBe(22);
+    expect(device.getRenderTargetSurface(1)).toBe(124);
     expect(device.currentRtIndex).toBe(21);
+    expect(refs).toEqual(['submit', 'renderTarget1', 'renderSurface1']);
+});
+
+
+test('GetBackBuffer reuses the swap chain surface and adds a separate caller reference', () => {
+    const memory = new Uint8Array(256); Mem.bind(() => memory);
+    devices.set(13, {getImplicitBackBufferSurface: () => 55} as never);
+    d3d9ResourceLifetime.register(55, () => {});
+    try {
+        const get = createDeviceExports().IDirect3DDevice9_GetBackBuffer;
+        expect(get({} as never, memory, [13, 0, 0, 0, 64])).toBe(0);
+        expect(Mem.readUint32(64)).toBe(55);
+        expect(d3d9ResourceLifetime.release(55)).toBe(1);
+        expect(get({} as never, memory, [13, 0, 0, 0, 68])).toBe(0);
+        expect(Mem.readUint32(68)).toBe(55);
+        expect(d3d9ResourceLifetime.release(55)).toBe(1);
+    } finally { devices.delete(13); d3d9ResourceLifetime.release(55); }
+});
+
+
+test('D3D9 caps advertise the two implemented programmable color attachments', () => {
+    const memory = new Uint8Array(512); Mem.bind(() => memory);
+    expect(writeDeviceCaps9(64)).toBe(true);
+    expect(Mem.readUint32(64 + 240)).toBe(2);
 });

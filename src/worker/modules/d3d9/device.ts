@@ -267,8 +267,10 @@ export function createDeviceExports(): Record<string, ThunkImplementation> {
         const device = devices.get(args[0]);
         const ppRenderTarget = args[2];
         if (!device || !ppRenderTarget) return D3DERR_INVALIDCALL;
-        if ((args[1] >>> 0) !== 0) return Mem.writeUint32(ppRenderTarget, 0) ? 0x88760866 : D3DERR_INVALIDCALL;
-        const surface = device.getRenderTargetSurface();
+        const index = args[1] >>> 0;
+        if (index >= 2) return D3DERR_INVALIDCALL;
+        const surface = device.getRenderTargetSurface(index);
+        if (!surface && index !== 0) return Mem.writeUint32(ppRenderTarget, 0) ? 0x88760866 : D3DERR_INVALIDCALL;
         if (!surface) return exports['IDirect3DDevice9_GetBackBuffer'](_ctx, mem, [args[0], 0, 0, 0, ppRenderTarget]);
         if (!Mem.writeUint32(ppRenderTarget, surface)) return D3DERR_INVALIDCALL;
         d3d9ResourceLifetime.addRef(surface);
@@ -472,7 +474,13 @@ export function createDeviceExports(): Record<string, ThunkImplementation> {
             return D3DERR_INVALIDCALL;
         }
 
-        // Create a valid COM object for the back buffer surface
+        const cachedSurface = device.getImplicitBackBufferSurface();
+        if (cachedSurface) {
+            if (!Mem.writeUint32(ppBackBuffer, cachedSurface)) return D3DERR_INVALIDCALL;
+            d3d9ResourceLifetime.addRef(cachedSurface);
+            return D3D_OK;
+        }
+        // The swap chain owns its implicit surface independently of each caller.
         const vtables = getVTables();
         const vtableAddr = vtables['IDirect3DSurface9']?.address;
         if (!vtableAddr) {
@@ -488,6 +496,7 @@ export function createDeviceExports(): Record<string, ThunkImplementation> {
         surfaceMeta.set(surfacePtr, { format: D3DFMT_X8R8G8B8, type: D3DRTYPE_SURFACE, usage: 1,
             pool: D3DPOOL_DEFAULT, multiSampleType: 0, multiSampleQuality: 0,
             width: canvas?.width || 800, height: canvas?.height || 600 });
+        device.retainImplicitBackBufferSurface(surfacePtr);
 
         if (ppBackBuffer) {
             const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);

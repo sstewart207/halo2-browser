@@ -141,6 +141,11 @@ export class D3D9Device {
     private surfaceCopyLog: string[] = [];
     private pipelineErrors: string[] = [];
     private upDrawDiagnostics: object[] = [];
+    private drawTypeCounts = new Map<string, number>();
+    private noteDrawType(kind: string, primitive: number): void {
+        const key = `${kind}:${primitive}:${this.currentRtIndex === null ? 'BB' : 'RT'}`;
+        this.drawTypeCounts.set(key, (this.drawTypeCounts.get(key) ?? 0) + 1);
+    }
     private recordPipelineError(message: string): void {
         if (this.pipelineErrors.includes(message) || this.pipelineErrors.length >= 40) return;
         this.pipelineErrors.push(message);
@@ -285,8 +290,8 @@ export class D3D9Device {
         }
     }
     /** HARNESS rtDebug verb: what SetRenderTarget saw + which textures were created as RTs. */
-    getRtDebug(): { resolves: string[]; creates: string[]; copies: string[]; pipelineErrors: string[]; upDraws: object[]; currentRtIndex: number | null } {
-        return { resolves: [...this.rtResolveLog], creates: [...this.rtCreateLog], copies: [...this.surfaceCopyLog], pipelineErrors: [...this.pipelineErrors], upDraws: [...this.upDrawDiagnostics], currentRtIndex: this.currentRtIndex };
+    getRtDebug(): { resolves: string[]; creates: string[]; copies: string[]; pipelineErrors: string[]; drawTypes: Record<string, number>; upDraws: object[]; currentRtIndex: number | null } {
+        return { resolves: [...this.rtResolveLog], creates: [...this.rtCreateLog], copies: [...this.surfaceCopyLog], pipelineErrors: [...this.pipelineErrors], drawTypes: Object.fromEntries(this.drawTypeCounts), upDraws: [...this.upDrawDiagnostics], currentRtIndex: this.currentRtIndex };
     }
 
     /** HARNESS: last `n` per-present summaries (newest last). See frameLog verb. */
@@ -298,13 +303,31 @@ export class D3D9Device {
      *  swap-chain backbuffer; an RT texture's pointer = render-to-texture. The module handler resolves
      *  the surface pointer → its parent texture pointer (surfaceMeta) before calling us. Switching the
      *  target eagerly flushes the commands accumulated for the previous target as their own pass. */
+    private secondaryRtIndex: number | null = null;
+    private secondaryRenderSurface = 0;
     private primaryRenderSurface = 0;
-    getRenderTargetSurface(): number { return this.primaryRenderSurface; }
+    private implicitBackBufferSurface = 0;
+    getImplicitBackBufferSurface(): number { return this.implicitBackBufferSurface; }
+    retainImplicitBackBufferSurface(ptr: number): void {
+        this.resourceBindings.set('implicitBackBuffer', ptr);
+        this.implicitBackBufferSurface = ptr;
+    }
+    getRenderTargetSurface(index = 0): number { return index === 0 ? this.primaryRenderSurface : this.secondaryRenderSurface; }
 
     setRenderTarget(index: number, texturePtr: number, face: number = -1, surfacePtr = 0): number {
-        // Disabling a secondary target must never switch the primary target.
-        // Additional color attachments are not implemented yet.
-        if (index !== 0) return index < 4 && texturePtr === 0 && surfacePtr === 0 ? 0 : 0x8876086a;
+        if (index !== 0) {
+            if (index !== 1) return 0x8876086c;
+            const next = texturePtr === 0 ? null : this.textures.getIndex(texturePtr);
+            if (texturePtr !== 0 && (next === null || !this.textures.isRenderTarget(next))) return 0x8876086c;
+            if (next === this.secondaryRtIndex) return 0;
+            this.submitFrame(false);
+            this.resourceBindings.set('renderTarget1', texturePtr);
+            this.resourceBindings.set('renderSurface1', surfacePtr);
+            this.secondaryRtIndex = next;
+            this.secondaryRenderSurface = surfacePtr;
+            this._lrValid = false;
+            return 0;
+        }
         this.resourceBindings.set('renderSurface0', surfacePtr);
         this.primaryRenderSurface = surfacePtr;
         this.rtSetsThisFrame++;
@@ -2011,6 +2034,9 @@ export class D3D9Device {
         this.resourceBindings.clear();
         this.extraVertexStreams.clear();
         this.primaryRenderSurface = 0;
+        this.secondaryRtIndex = null;
+        this.secondaryRenderSurface = 0;
+        this.implicitBackBufferSurface = 0;
         this.currentRtIndex = null;
         this.currentRtFace = -1;
         this.setStreamSource(0, 0, 0, 0);
@@ -2241,6 +2267,7 @@ export class D3D9Device {
 
     drawPrimitive(primitiveType: number, startVertex: number, primitiveCount: number): number {
         d3d9PerfInc("drawPrimitive");
+        this.noteDrawType("primitive", primitiveType);
         this.captureDrawIfArmed(primitiveType, primitiveCount);
         if (primitiveType === D3DPT_POINTLIST) {
             const ss = this.stateTracker.getStreamSource();
@@ -2336,6 +2363,7 @@ export class D3D9Device {
 
     drawPrimitiveUP(primitiveType: number, primitiveCount: number, vertexDataPtr: number, stride: number): number {
         d3d9PerfInc("drawPrimitiveUP");
+        this.noteDrawType("UP", primitiveType);
         const upDiagnostic = {rt: this.currentRtIndex, vs: this.activeVertexShader, ps: this.activePixelShader,
             decl: this.activeVertexDecl, fvf: this.stateTracker.getFVF(), primitiveType, primitiveCount, stride,
             psConstants: Array.from(this.psConstants.subarray(0, 4))};
@@ -2508,6 +2536,7 @@ export class D3D9Device {
         primitiveCount: number
     ): number {
         d3d9PerfInc("drawIndexedPrimitive");
+        this.noteDrawType("indexed", primitiveType);
         this.captureDrawIfArmed(primitiveType, primitiveCount);
         if (primitiveType !== D3DPT_TRIANGLELIST) return 0;
         const streamSource = this.stateTracker.getStreamSource();
@@ -2632,12 +2661,13 @@ export class D3D9Device {
         this.lastActualPresent = performance.now();
         // Defensive: if the guest left an RT bound at Present, flush its work to that RT, then
         // return authority to the backbuffer so the present actually copies the scene to the canvas.
-        if (this.currentRtIndex !== null) {
-            this.submitFrame(false);
-            this.currentRtIndex = null;
-            this.currentRtFace = -1;
-        }
-        this.submitFrame(true);
+        const savedRt = this.currentRtIndex, savedFace = this.currentRtFace, savedSecondary = this.secondaryRtIndex;
+        if (savedRt !== null || savedSecondary !== null) this.submitFrame(false);
+        this.currentRtIndex = null;
+        this.currentRtFace = -1;
+        this.secondaryRtIndex = null;
+        try { this.submitFrame(true); }
+        finally { this.currentRtIndex = savedRt; this.currentRtFace = savedFace; this.secondaryRtIndex = savedSecondary; }
         this.updateFps();
         System.getInstance().services.render.notifyPresent("d3d9");
         frameCapture.onFrameEnd(); // harness CaptureBus frame boundary (D3D9)
@@ -2895,7 +2925,7 @@ export class D3D9Device {
             fragment: {
                 module: shaderModule,
                 entryPoint: "fs_main",
-                targets: [buildColorTargetState(format, this.getRS)],
+                targets: Array.from({length: this.secondaryRtIndex !== null ? 2 : 1}, (_, index) => buildColorTargetState(format, index === 0 ? this.getRS : state => this.getRS(state === 168 ? 190 : state))),
             },
             primitive: {
                 topology,
@@ -2939,7 +2969,7 @@ export class D3D9Device {
         const streamStrides = multiStream ? Array.from({length: 16}, (_, slot) =>
             slot === 0 ? stride : this.extraVertexStreams.get(slot)?.stride ?? null) : undefined;
         const streamKey = streamStrides?.join(',') ?? '';
-        if (multiStream) arenaKey = undefined;
+        if (multiStream || this.secondaryRtIndex !== null) arenaKey = undefined;
         const stateBits = this.stateTracker.computePipelineKey() & 0x7FF0000;
 
         const alphaTest = this.getAlphaTest();
@@ -2949,7 +2979,7 @@ export class D3D9Device {
         // Per-stage D3DTTFF_PROJECTED key — part of the pipeline identity: the same ps_1_x shader
         // compiles to a projective-divide sample vs a plain sample depending on the stage flag.
         const projKey = this.projectedStageKey();
-        const blendKey = computeBlendKey(this.getRS);
+        const blendKey = computeBlendKey(this.getRS) + (this.secondaryRtIndex !== null ? `:cw1=${this.getRS(190) & 15}` : "");
         const alphaKey = this.alphaTestKey();
 
         // Fast path: identical pipeline identity as the previous draw → return without building the
@@ -2990,7 +3020,7 @@ export class D3D9Device {
             return built;
         }
 
-        const cacheKey = `${this.activeVertexShader}:${this.activePixelShader}:${this.activeVertexDecl}:${stride}:${stateBits}:${topology}:${forceCullNone ? 1 : 0}:${blendKey}:${alphaKey}:cm${cubeMask}:pj${projKey}:streams${streamKey}`;
+        const cacheKey = `${this.activeVertexShader}:${this.activePixelShader}:${this.activeVertexDecl}:${stride}:${stateBits}:${topology}:${forceCullNone ? 1 : 0}:${blendKey}:${alphaKey}:cm${cubeMask}:pj${projKey}:streams${streamKey}:mrt${this.secondaryRtIndex !== null ? 2 : 1}`;
         const cached = this.progPipelineCache.get(cacheKey);
         if (cached !== undefined) {
             d3d9PerfBackendInc("progPipelineCacheHits");
@@ -3023,7 +3053,7 @@ export class D3D9Device {
         streamStrides?: (number | null)[],
     ): number {
         try {
-            const link = linkProgram({ vs, ps, declElements, streamStride: stride, streamStrides, alphaTest, cubeMask, projectedStages });
+            const link = linkProgram({ vs, ps, declElements, streamStride: stride, streamStrides, alphaTest, cubeMask, projectedStages, colorTargetCount: this.secondaryRtIndex !== null ? 2 : 1 });
             const gpuDevice = this.backend.getDevice()!;
             const format = this.backend.getFormat()!;
             const module = gpuDevice.createShaderModule({ code: link.wgsl });
@@ -3057,7 +3087,7 @@ export class D3D9Device {
                     entryPoint: "vs_main",
                     buffers: link.vertexBuffers,
                 },
-                fragment: { module, entryPoint: "fs_main", targets: [buildColorTargetState(format, this.getRS)] },
+                fragment: { module, entryPoint: "fs_main", targets: Array.from({length: this.secondaryRtIndex !== null ? 2 : 1}, (_, index) => buildColorTargetState(format, index === 0 ? this.getRS : state => this.getRS(state === 168 ? 190 : state))) },
                 primitive: { topology, frontFace: "cw", cullMode },
                 depthStencil: {
                     format: "depth24plus",
@@ -3072,7 +3102,7 @@ export class D3D9Device {
             }
             return this.backendExecutor.registerPipeline(pipeline, link.hasTexture, true);
         } catch (e) {
-            Logger.error(LogCategory.D3D9, `[D3D9] programmable pipeline build failed: ${e}`);
+            this.recordPipelineError(`[D3D9] programmable pipeline build failed: ${e}`);
             return -1;
         }
     }
@@ -3255,7 +3285,7 @@ export class D3D9Device {
         const size = this.backendExecutor.getCanvasSize();
         // When a render target is active, the pass renders into that texture (its own size +
         // depth) instead of the swap-chain offscreen, and never composites overlays / presents.
-        let target: { colorView: GPUTextureView; depthView: GPUTextureView } | null = null;
+        let target: { colorView: GPUTextureView; depthView: GPUTextureView; extraColorViews?: GPUTextureView[] } | null = null;
         let vpW = size.width, vpH = size.height;
         const rt = this.currentRtIndex;
         if (rt !== null) {
@@ -3268,6 +3298,14 @@ export class D3D9Device {
                 const w = this.textures.getWidth(rt), h = this.textures.getHeight(rt);
                 target = { colorView, depthView: this.getRtDepthView(w, h) };
                 vpW = w; vpH = h;
+            }
+        }
+
+        if (this.secondaryRtIndex !== null) {
+            const secondaryView = this.textures.getView(this.secondaryRtIndex);
+            if (secondaryView) {
+                if (!target) target = {colorView: this.backendExecutor.getBackBufferTexture()!.createView(), depthView: this.getRtDepthView(vpW, vpH)};
+                target.extraColorViews = [secondaryView];
             }
         }
 
@@ -3378,7 +3416,7 @@ export class D3D9Device {
     /** WebGPU forbids sampling a GPUTexture in the same render pass that writes it as an
      *  attachment (even via different views — e.g. cube face RT vs cube sampling view). */
     private isTextureConflictingWithActiveRt(textureIndex: number): boolean {
-        return this.currentRtIndex !== null && textureIndex === this.currentRtIndex;
+        return textureIndex === this.secondaryRtIndex || (this.currentRtIndex !== null && textureIndex === this.currentRtIndex);
     }
 
     private resolveCurrentTexture(): GPUTextureView | null {

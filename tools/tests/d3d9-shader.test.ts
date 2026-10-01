@@ -363,3 +363,17 @@ test('D3D9 separates a 12-byte position stream from a 16-byte texture stream', (
     expect(linked.vertexBuffers[0]!.attributes).toHaveLength(1);
     expect(linked.vertexBuffers[1]!.attributes).toHaveLength(1);
 });
+
+
+test('SM3 MRT emits independent color outputs for both render attachments', () => {
+    const vs = compileVertexShader(buildVs());
+    const ps = compilePixelShader(new Uint32Array([
+        version(true, 3, 0),
+        Op.MOV | (2 << 24), dst(RegType.COLOROUT, 0), src(RegType.CONST, 0),
+        Op.MOV | (2 << 24), dst(RegType.COLOROUT, 1), src(RegType.CONST, 1), END,
+    ]));
+    const linked = linkProgram({vs, ps, declElements: null, streamStride: 32, colorTargetCount: 2});
+    expect(linked.wgsl).toContain('@location(1) color1: vec4<f32>');
+    expect(linked.wgsl).toContain('return MrtOutput(oC0, oC1);');
+    expect(linked.wgsl).toContain('fn fs_main(in: Interp) -> MrtOutput');
+});

@@ -106,6 +106,7 @@ export interface LinkResult {
 }
 
 export interface LinkOptions {
+    colorTargetCount?: number;
     vs: CompiledVs;
     ps: CompiledPs | null;
     declElements: RawVertexElement[] | null;
@@ -212,7 +213,7 @@ export function linkProgram(opts: LinkOptions): LinkResult {
     lines.push("");
 
     if (ps) {
-        lines.push(emitPsMain(ps.prog, psA!, alphaTest, cubeMask, projectedStages));
+        lines.push(emitPsMain(ps.prog, psA!, alphaTest, cubeMask, projectedStages, opts.colorTargetCount ?? 1));
     } else {
         const dftStage = hasTexture ? fragSamplers[0] : null;
         const dftCube = dftStage !== null && ((cubeMask >> dftStage) & 1) !== 0;

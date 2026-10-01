@@ -362,6 +362,7 @@ export class D3D9BackendExecutor {
          *  never present). */
         target?: {
             colorView: GPUTextureView;
+            extraColorViews?: GPUTextureView[];
             depthView?: GPUTextureView;
             /** When set, used directly (shared FFP depth with stencil load/clear semantics). */
             depthStencil?: GPURenderPassDepthStencilAttachment;
@@ -421,6 +422,11 @@ export class D3D9BackendExecutor {
                 loadOp: (frame.hasClear && clearTarget) ? "clear" : "load",
                 storeOp: "store",
             }];
+
+            for (const view of target?.extraColorViews ?? []) colorAttachments.push({
+                view, clearValue: frame.clear.color,
+                loadOp: (frame.hasClear && clearTarget) ? 'clear' : 'load', storeOp: 'store',
+            });
 
             const depthStencilAttachment: GPURenderPassDepthStencilAttachment = target?.depthStencil ?? {
                 view: target ? target.depthView! : this.depthView!,
