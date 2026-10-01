@@ -94,7 +94,7 @@ export async function applyShellExecFake(commandLine: string, source: string): P
 
 const CSIDL_FLAG_CREATE = 0x8000;
 
-function getSpecialFolderPath(csidl: number): string {
+export function getSpecialFolderPath(csidl: number): string {
     switch (csidl & 0xff) {
         case 0x05: return "C:\\My Documents";                         // CSIDL_PERSONAL
         case 0x1a: return "C:\\Windows\\Application Data";            // CSIDL_APPDATA
@@ -106,7 +106,7 @@ function getSpecialFolderPath(csidl: number): string {
     }
 }
 
-function ensureSpecialFolderPath(path: string): void {
+export function ensureSpecialFolderPath(path: string): void {
     if (/^[A-Za-z]:\\?$/.test(path.trim())) return;
 
     const vfs = System.getInstance().fileSystem;
