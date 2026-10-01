@@ -1,3 +1,43 @@
+# Latest verified checkpoint: correct native shader compiler loads; D3DCompile returns E_OUTOFMEMORY
+
+September 30, 2026, late evening. Development remains resumed. This section supersedes NEWEST-4's shader diagnosis. No menu, video, campaign, audio, controls, saving or DualSense acceptance yet. Multiplayer deferred. Local browser execution only.
+
+## Verified correction and progress
+
+- NEWEST-4 incorrectly attributed D3DERR_INVALIDCALL to native d3dx9_31.dll. Its Halo import was native, but Cartographer patches the graphics path: the actual failing call came from xlive.dll+0x57e4e into the HLE d3dx9_43 compiler. API breakpoint snapshots captured that caller. The native31 compiler was never reached in that path. Do not repeat the old conclusion.
+- Read-only inspection of installed xlive.dll confirmed its d3dx9_43.dll!D3DXCompileShader import (guest IAT 0x1322a5b8 in this fixture). Added installed 32-bit d3dx9_43.dll and d3dcompiler_43.dll to a private fixture with exact native preferences. Their actual guest code executes locally.
+- Loading native d3dcompiler_43 initially failed on missing msvcrt:_mbstrlen ABI. Implemented real locale-aware character counting, invalid-sequence EILSEQ handling, null-input EINVAL/invalid-parameter callback and cdecl signature. Targeted tests cover C locale, UTF-8, Shift-JIS, invalid input and ABI. Johab validation is explicitly unsupported; broader existing CRT locale behavior is unchanged.
+- Chrome now loads native d3dcompiler_43.dll and completes its native DllMain. Non-pausing fast breakpoints hit the real d3dx9_43 compiler entry and subsequent stages. Preprocessing returned S_OK (EAX=0); the return immediately after D3DCompile is E_OUTOFMEMORY (EAX=0x8007000e), preserved after the D3DX result wrapper. Halo logs failed rasterizer initialization and exits with code 0. Earliest-fault capture is empty on this run. This narrows the failure to the actual compiler stage; its internal cause remains unknown.
+- Added h.debugState() to inspect live WASM debugger exports, JIT mode and breakpoints; added CPU registers to API call snapshots and exposed existing fast breakpoint option in DSL types.
+
+## Next investigation
+
+Trace native d3dcompiler_43 allocation/parser initialization without pausing the CPU. OOM is the compiler's returned error, not proof that host RAM is exhausted. Heap/VirtualAlloc requests in the retained trace succeeded. GetFullPathNameA('memory',0), then buffer size 10 produces C:\memory; source review confirms its successful return excludes NUL, so the suspected off-by-one is not present.
+
+Use continuous:true, pause:false, fast:true. A pause:true native breakpoint experiment perturbed execution and produced EIP 0x555 followed by recursive crash reporting; this does not reproduce on the unpaused run and must not be reported as the native compiler's root fault. clearBreaks removes breakpoints, but reload restores JIT after non-fast tracing disables it.
+
+Native43 observed base 0x13a10000; compiler entry RVA 0xe5fdb, after preprocessing 0xe6105, after D3DCompile 0xe6186, after result wrapping 0xe6198. D3DCompiler43 dynamically loaded at 0x14400000, D3DCompile RVA 0x66c20. Resolve live bases before reusing addresses.
+
+## Private fixture and resume
+
+Newest: work/halo2-browser/bundles/halo2-native-d3dx43.wgb, 671387462 bytes. Extends native31 fixture with C:/Windows/SysWOW64/d3dx9_43.dll (1998168 bytes) and d3dcompiler_43.dll (2106216 bytes). Manifest nativeDlls: d3dx9_31.dll, d3dx9_43.dll, d3dcompiler_43.dll. Prior native31 fixture remains intact. Never commit these DLLs or bundles.
+
+Vite 5174 and log server 3001 remain running. Chrome browser 3, user tab 1897424839; verify identity before reuse. Reload then h.logBufferSize(20000), h.streamLogs(), fire-and-forget h.openWgb('/__wgb/?path='+encodeURIComponent('<workspace>/work/halo2-browser/bundles/halo2-native-d3dx43.wgb')). Forward-slash absolute paths. Wait for PCC, screenshot before Run. Current tab shows graceful Game exited after the trace. No security changes or native-install modifications.
+
+Private evidence logs: bottleship-2026-10-01-05-1809-* contains native compiler load and OOM; final non-pausing trace confirms stage returns (recorded in this checkpoint). Logs stay outside Git. raw stream can drop batches; use bounded h.events(12,'breakHit') and h.faults(3,{first:true}), not large h.report()/logs dumps.
+
+Validation this session: 10 focused tests / 74 assertions across five files pass; TypeScript clean; production Vite build passes (existing vendor externalization/chunk warnings). Previous checkpoint's 53-test run remains historical, not a new full-suite run. Keep unrelated bun.lock and generated/index line-ending edits unstaged.
+
+## Research leads
+
+See repository docs/halo2-research-leads.md for verified primary sources: Cartographer is closest to our current hook/graphics investigation; OpenH2 has a real Armory map/script/audio demo and is a useful format/engine reference, not a drop-in original engine port. Mutation and H2Codez concern map/editor tooling; Halo-2-HD targets original Xbox. Halo CE build2342 decomp is a separate engine/version reference. A universal claim that no matching Halo 2 PDB exists has not been established.
+
+## GitHub checkpoint
+
+Private branch codex/halo2-browser-checkpoint; existing draft PR #7 and main-menu issue #1. Keep issue #1 open until real responsive menu and fresh boot are verified. Issues #2-#6 remain unaccepted later milestones. Always use gh --repo sstewart207/halo2-browser. Credits and original upstream licenses remain preserved.
+
+---
+
 # Latest verified checkpoint: graphics device and render textures work; native shader compilation is next
 
 September 30, 2026, late evening. User explicitly resumed Claude's work. This section supersedes all older pause/startup instructions. Base was Claude's pushed ddf3567. No menu, game video, gameplay, audio, controls, saves or DualSense acceptance yet.

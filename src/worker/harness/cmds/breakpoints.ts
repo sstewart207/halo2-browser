@@ -65,6 +65,16 @@ function armEip(addr: number, ctx: HarnessCtx, opts: { continuous?: boolean; pau
 }
 
 export function registerBreakpointCommands(svc: HarnessService): void {
+    /** Inspect the live WASM debugger, rather than assuming a breakpoint armed. */
+    svc.register("debugState", () => {
+        const w = (globalThis as any).preemption?.getWasmExports?.();
+        return {
+            available: !!w,
+            exports: ["dbg_enable", "dbg_add_bp", "dbg_clear", "set_jit_config", "get_jit_config", "jit_clear_cache_js"].filter(n => typeof w?.[n] === "function"),
+            jitDisabled: w?.get_jit_config?.(0) ?? null,
+            breakpoints: eipBreaks.list(),
+        };
+    });
     /** breakOn(eip, opts) — raw linear EIP. */
     svc.register("breakOn", (args, ctx) => {
         const addr = toAddr(args[0] as number | string);

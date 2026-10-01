@@ -116,9 +116,9 @@ export class HarnessChain {
     // ── breakpoints / exec control ──
     // Breakpoints block until hit — unbounded RPC envelope (the CLI's CDP budget /
     // an explicit clearBreaks bounds them). Pass {continuous:true} to return at once.
-    breakOn(eip: number | string, opts?: { continuous?: boolean; pause?: boolean }): this { return this.pushTimed("breakOn", [eip, opts], 0); }
-    breakOnExport(name: string, opts?: { continuous?: boolean; pause?: boolean }): this { return this.pushTimed("breakOnExport", [name, opts], 0); }
-    breakOnSymbol(name: string, opts?: { continuous?: boolean; pause?: boolean }): this { return this.pushTimed("breakOnSymbol", [name, opts], 0); }
+    breakOn(eip: number | string, opts?: { continuous?: boolean; pause?: boolean; fast?: boolean }): this { return this.pushTimed("breakOn", [eip, opts], 0); }
+    breakOnExport(name: string, opts?: { continuous?: boolean; pause?: boolean; fast?: boolean }): this { return this.pushTimed("breakOnExport", [name, opts], 0); }
+    breakOnSymbol(name: string, opts?: { continuous?: boolean; pause?: boolean; fast?: boolean }): this { return this.pushTimed("breakOnSymbol", [name, opts], 0); }
     breakOnApi(pattern: string, opts?: { continuous?: boolean }): this { return this.pushTimed("breakOnApi", [pattern, opts], 0); }
     watchMem(addr: number | string, opts?: { onWrite?: boolean }): this { return this.push("watchMem", [addr, opts]); }
     pause(): this { return this.push("pause", []); }

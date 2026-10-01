@@ -206,6 +206,7 @@ export const msvcrtModule: ModuleDescriptor = {
         makeFunc("labs", 1),
         makeFunc("_itoa", 3),
         makeFunc("mbstowcs", 3),
+        makeFunc("_mbstrlen", 1),
         makeFunc("wcstombs", 3),
         makeFunc("wctomb", 2),
         makeFunc("setlocale", 2),

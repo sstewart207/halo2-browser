@@ -324,6 +324,7 @@ export function readCallSnapshot(name: string, eip: number, esp: number): unknow
         threadId,
         lastThunks: recent,
         backtrace,
+        cpu: serializeCpu(),
     };
 }
 

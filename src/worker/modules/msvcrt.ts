@@ -359,6 +359,9 @@ export class Msvcrt implements IModule {
             compareCString: (a, b, ci, n) => this.compareCString(a, b, ci, n),
             ischartype: (ch, mask) => this.ischartype(ch, mask),
             setMbcp: (cp) => this.setMbcp(cp),
+            localeCodePage: () => this.currentLocale === "C" || this.currentLocale === "POSIX" ? 0 : EmulatorConfig.getInstance().ansiCodePage,
+            setErrno: (code) => { this.setErrno(code); },
+            invalidParameter: (ctx, mem) => { exports["_invalid_parameter_noinfo"]?.(ctx, mem, []); },
         });
 
         // --- Conversion functions — see crt-conv.ts ---
