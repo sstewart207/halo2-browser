@@ -1746,6 +1746,36 @@ export const exports: Record<string, ThunkImplementation> = (() => {
         }
     };
 
+    // DWORD GetFinalPathNameByHandleW(HANDLE hFile, LPWSTR lpszFilePath, DWORD cchFilePath, DWORD dwFlags)
+    // Default (VOLUME_NAME_DOS) form is "\\?\C:\dir\file". Returns the length without the NUL, or the
+    // required length including the NUL when the buffer is too small; 0 on failure.
+    exports['GetFinalPathNameByHandleW'] = (ctx, mem, args) => {
+        const hFile = args[0];
+        const lpszFilePath = args[1];
+        const cchFilePath = args[2];
+        const dwFlags = args[3];
+        const VOLUME_NAME_NONE = 0x4;
+        const scheduler = System.getInstance().scheduler;
+
+        const fileHandle = System.getInstance().resourceProvider.getFileHandle(hFile);
+        const vfsPath = fileHandle ? (fileHandle as FileHandleWrapper).vfsHandle?.path : undefined;
+        if (!vfsPath) {
+            scheduler.setLastError(6); // ERROR_INVALID_HANDLE
+            return 0;
+        }
+
+        const resolved = System.getInstance().fileSystem.resolvePath(vfsPath).replace(/\//g, '\\');
+        const text = (dwFlags & VOLUME_NAME_NONE) ? resolved.replace(/^[A-Za-z]:/, '') : `\\\\?\\${resolved}`;
+        if (cchFilePath < text.length + 1 || !lpszFilePath) {
+            return text.length + 1;
+        }
+        const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
+        for (let i = 0; i < text.length; i++) view.setUint16(lpszFilePath + i * 2, text.charCodeAt(i), true);
+        view.setUint16(lpszFilePath + text.length * 2, 0, true);
+        scheduler.setLastError(0);
+        return text.length;
+    };
+
     // All ANSI functions (ending with 'A') use UTF-8 encoding instead of system codepage (Windows-1251, Latin1, etc.)
     // This is a simplification for the emulator. Real Windows uses the current system ANSI codepage,
     // which may affect legacy applications with non-ASCII filenames.
