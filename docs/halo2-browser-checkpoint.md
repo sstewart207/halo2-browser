@@ -1,3 +1,37 @@
+# Latest paused checkpoint: PAUSED; compiler OOM traced to rejected HeapAlloc(0)
+
+September 30, 2026, late evening. User explicitly requested pause and handoff to GLM 5.3. STOP development until the user or their chosen agent resumes it. This supersedes NEWEST-5's active-development instruction. No implementation changes were made after bb6a256; this checkpoint documents a newly isolated cause. Halo menu/video/gameplay remains unverified.
+
+## Newly confirmed evidence
+
+The compiler's initial allocator setup, HeapCreate, shader-model setup and later front-end setup all succeed. Non-pausing Chrome trace then isolates this sequence in the installed native d3dcompiler_43.dll:
+
+1. Routine RVA d8c10 calls its DWORD-array allocator at RVA e3080 three times. The first requested element count is 24 (96 bytes), the second is 4 (16 bytes); both return non-null allocations.
+2. The third call, at RVA d8d91, passes ESI=0 elements. RVA e3080 multiplies ESI by four and calls imported kernel32!HeapAlloc with dwBytes=0.
+3. At RVA e30c1, immediately after HeapAlloc, EAX=0. Caller return point RVA d8d96 also records EAX=0, ESI=0. The caller tests the pointer and takes its OOM path at RVA d8d2f..d8d40, which returns 0x8007000e. The next recorded return at RVA d7cbd is EAX=0x8007000e. No fabricated allocation or shader substitution was used.
+4. Read-only source review confirms both JS HeapAlloc implementations explicitly reject dwBytes===0 and set OOM. The inline guest stub routes zero bytes to the trap; v86 Rust hypercall also routes zero to JS (comment currently says JS sets ERROR_NOT_ENOUGH_MEMORY). Thus this failure is expected from current emulator code.
+5. A small native Windows ctypes control experiment called process-heap HeapAlloc for 0, 1 and 16 bytes and freed every result. All returned non-null; HeapSize reported 0, 1, 16 respectively. Native zero-byte allocation is a valid freeable block. No game install or security setting was changed.
+
+This establishes the reproduced OOM's immediate cause: the emulator rejects a valid zero-byte heap allocation required by the compiler. Fixing it has NOT been attempted, and shader success/menu cannot yet be claimed. Later blockers may appear after the real fix.
+
+## Concrete next work for GLM
+
+- Read root AGENTS.md and this handoff. Work only in work/bottleship-research. Resume only under user authorization.
+- Implement generic zero-byte HeapAlloc semantics in src/worker/modules/kernel32/memory.ts, both normal export (~line1289) and registered JS fast path (~line2641). Return a real unique freeable allocation with suitable alignment instead of NULL/OOM. Preserve nonzero allocation behavior and HEAP_ZERO_MEMORY. Consider whether existing HeapSize metadata can represent requested size 0 separately from physical capacity; do not invent a pointer or break freeing.
+- Inspect src/worker/modules/kernel32/heap-slab-stubs.ts (~line78) and vendor/v86/src/rust/cpu/hypercall.rs (~line2169). They currently defer zero-size to JS, so a full v86 rebuild should not be needed just to make zero-byte allocations work. Update stale comments if appropriate; do not change compiled WASM casually.
+- Add focused regression checks exercising BOTH normal HeapAlloc and fast path: zero-byte allocation succeeds, two simultaneously live results are distinct, HeapFree works, nonzero and zero-memory behavior are preserved. Avoid tests that merely check source strings.
+- Typecheck/test, then fresh Chrome fixture boot and actual native compilation. Use continuous:true,pause:false,fast:true breakpoints. Resolve module bases. Prove D3DCompile result and shader buffer; then inspect actual rendered output. Passing tests is not menu/gameplay acceptance.
+
+## Private trace and exact locations
+
+Full bounded CPU/stack trace: work/halo2-browser/native43-zero-allocation-trace.json (private, outside Git). Observed native compiler base 0x14400000, so entry e3080=0x144e3080, after HeapAlloc e30c1=0x144e30c1, failing caller d8d96=0x144d8d96. Bases may move. Earlier successful stages: d83f6 HeapCreate->0x1234567e; d84be->0, d8709->0, d8759->0; d87f8->0x8007000e. Final trace contains exact count/return snapshots.
+
+Newest fixture is unchanged: work/halo2-browser/bundles/halo2-native-d3dx43.wgb, 671387462 bytes. Native DLL preferences d3dx9_31.dll,d3dx9_43.dll,d3dcompiler_43.dll. Vite5174/log3001 remain running. Chrome browser3/tab1897424839 currently exited after the failing trace; no guest gameplay is running. Fast non-pausing trace points remain armed in the stopped worker; reload clears them. Use normal supported Chrome tools, no shell UI automation or security bypasses. Existing prior checkpoint validation remains 10 tests/74 assertions, TypeScript/build passed; there was no new code or test run in this tracing-only continuation.
+
+User is handing off to GLM 5.3. No agent message was sent and no new chat was created. Preserve unrelated bun.lock/generated/index line-ending changes. Root is not Git. Git checkpoint bb6a256 is privately pushed; draft PR7/main-menu issue1 remain open. Commit/push this documentation separately, exclude raw trace/logs/bundles and preserve contributor credits.
+
+---
+
 # Latest verified checkpoint: correct native shader compiler loads; D3DCompile returns E_OUTOFMEMORY
 
 September 30, 2026, late evening. Development remains resumed. This section supersedes NEWEST-4's shader diagnosis. No menu, video, campaign, audio, controls, saving or DualSense acceptance yet. Multiplayer deferred. Local browser execution only.

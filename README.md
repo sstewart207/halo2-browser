@@ -2,7 +2,7 @@
 
 Private research by Shane Stewart into running **Halo 2 Project Cartographer locally in a browser**, using [BottleShip](https://github.com/jenissimo/bottleship).
 
-**Status: graphics initialization reached; no menu or gameplay yet.** Chrome creates a real 800×600 Direct3D9Ex device, loads Halo's precompiled pixel shaders and allocates render textures. The NT loader/semaphore startup crash is fixed. Cartographer's correct native D3DX43 and D3DCompiler43 now execute inside the guest. Preprocessing succeeds, but D3DCompile returns E_OUTOFMEMORY; its internal cause is still under investigation. Halo exits before drawing game frames. The earlier native D3DX31/INVALIDCALL diagnosis was superseded. Development resumed September 30 evening.
+**Status: graphics initialization reached; no menu or gameplay yet.** Chrome creates a real 800×600 Direct3D9Ex device, loads Halo's precompiled pixel shaders and allocates render textures. The NT loader/semaphore startup crash is fixed. Cartographer's correct native D3DX43 and D3DCompiler43 now execute inside the guest. Preprocessing succeeds, but D3DCompile returns E_OUTOFMEMORY; the latest trace isolates a valid zero-byte HeapAlloc request that our emulator rejects. The fix is pending. Halo exits before drawing game frames. The earlier native D3DX31/INVALIDCALL diagnosis was superseded. Development is paused at the user's request for handoff to GLM 5.3.
 
 ## Goal
 
