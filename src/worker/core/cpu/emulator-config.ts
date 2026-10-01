@@ -1,4 +1,13 @@
-export const EMU_MEMORY_SIZE = 1024 * 1024 * 1024; // 1 GB (increased from 512 MB for large allocations)
+// Emulated machine RAM. This project exists to run Halo 2 in the browser, so this is
+// sized for Halo 2 rather than as a general-purpose default: the game commits ~1.5GB
+// of guest memory during boot (128MB + 64MB + 52MB + ... VirtualAlloc arenas, plus
+// map/asset streaming), which does not fit the old 1GB. 2GB yields 512MB of primary
+// HEAP + 1GB of HEAP_HI = 1.5GB of guest heap, on top of SURFACE/ROM/thunks.
+//
+// The browser really does commit this much WASM memory, so it is not free — but for a
+// single-purpose app that is the right trade. 2GB is also EmulatorConfig.validateRam's
+// ceiling and the practical limit for a 32-bit x86 guest.
+export const EMU_MEMORY_SIZE = 2 * 1024 * 1024 * 1024; // 2 GB
 export const EMU_VGA_MEMORY_SIZE = 8 * 1024 * 1024;
 // The emulated machine reports one logical processor (GetSystemInfo) at this nominal clock; the browser
 // exposes no real CPU frequency. Keep every API that reports CPU speed on this constant.
@@ -64,11 +73,8 @@ export const MEM_SURFACE_SIZE = 0x14000000;   // 320MB default — ends at 0x400
 // here runs at full speed and moves no THUNK base, needs no v86 rebuild, and
 // leaves guest-visible addresses below 0x21000000 byte-identical.
 //
-// Sized to the RAM actually present: at the default 1GB this bucket has zero
-// size and is never registered, so other titles are bit-for-bit unaffected. A
-// memory-hungry title opts in via its manifest's emulator.memory.ram (e.g. 2GB),
-// which yields 1GB of extra heap. Halo 2 PC needs it — it commits ~460MB in the
-// first 50s and dies at ~72s on the 512MB ceiling.
+// Sized to the RAM actually present, so raising EMU_MEMORY_SIZE above 2GB just works
+// (at 3GB of emulated RAM this yields 512MB + 1.5GB = 2GB of guest heap).
 export const MEM_HEAP_HI_BASE = 0x40000000;  // Immediately after SURFACE
 export const MEM_HEAP_HI_SIZE = 0x60000000;  // 1.5GB ceiling; real size clamps to RAM
 
