@@ -242,6 +242,27 @@ export class Oleaut32 implements IModule {
             return 0x00000001;
         };
 
+        // HRESULT VarBstrCmp(BSTR left, BSTR right, LCID, ULONG flags) -> VARCMP_LT/EQ/GT. A NULL BSTR equals "".
+        // Comparison is by UTF-16 code unit (NORM_IGNORECASE folds case); LCID collation is not modeled.
+        const varBstrCmp: ThunkImplementation = (_ctx, mem, args) => {
+            const VARCMP_LT = 0, VARCMP_EQ = 1, VARCMP_GT = 2;
+            const NORM_IGNORECASE = 0x1;
+            const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
+            const readBstr = (p: number): string => {
+                if (!p || p < 4 || p + 2 > mem.length) return "";
+                const chars = Math.min(view.getUint32(p - 4, true) >>> 1, (mem.length - p) >>> 1);
+                let s = "";
+                for (let i = 0; i < chars; i++) s += String.fromCharCode(view.getUint16(p + i * 2, true));
+                return s;
+            };
+            let a = readBstr(args[0] >>> 0);
+            let b = readBstr(args[1] >>> 0);
+            if ((args[3] >>> 0) & NORM_IGNORECASE) { a = a.toLowerCase(); b = b.toLowerCase(); }
+            return a === b ? VARCMP_EQ : a < b ? VARCMP_LT : VARCMP_GT;
+        };
+        this.exports["ord_314"] = varBstrCmp;
+        this.exports["VarBstrCmp"] = varBstrCmp;
+
         this.exports["ord_201"] = () => S_OK;
 
         this.exports["ord_202"] = (ctx, mem, args) => {

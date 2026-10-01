@@ -47,6 +47,7 @@ import { Wintrust } from "./modules/wintrust";
 import { Crypt32 } from "./modules/crypt32";
 import { Ws2_32 } from "./modules/ws2_32";
 import { Psapi } from "./modules/psapi";
+import { Powrprof } from "./modules/powrprof";
 import { Iphlpapi } from "./modules/iphlpapi";
 import { Tapi32 } from "./modules/tapi32";
 import { Setupapi } from "./modules/setupapi";
@@ -1977,6 +1978,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       const setupapi = new Setupapi();
       const netapi32 = new Netapi32();
       const psapi = new Psapi();
+      const powrprof = new Powrprof();
       const imagehlp = new ImageHlp();
       const ifc20 = new IFC20();
       const gdiplus = new GdiPlus();
@@ -2011,6 +2013,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
           crypt32.name,
           ws2_32.name,
           psapi.name,
+          powrprof.name,
           imagehlp.name,
           iphlpapi.name,
           tapi32.name,
@@ -2081,6 +2084,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       crypt32.initialize(process);
       ws2_32.initialize(process);
       psapi.initialize(process);
+      powrprof.initialize(process);
       imagehlp.initialize(process);
       ifc20.initialize(process);
       gdiplus.initialize(process);
@@ -2143,6 +2147,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       process.registerModule(crypt32.name, crypt32);
       process.registerModule(ws2_32.name, ws2_32);
       process.registerModule(psapi.name, psapi);
+      process.registerModule(powrprof.name, powrprof);
       process.registerModule(iphlpapi.name, iphlpapi);
       process.registerModule(tapi32.name, tapi32);
       process.registerModule(setupapi.name, setupapi);
@@ -2209,6 +2214,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       process.dispatcher.registerModule(crypt32.name, crypt32.exports);
       process.dispatcher.registerModule(ws2_32.name, ws2_32.exports);
       process.dispatcher.registerModule(psapi.name, psapi.exports);
+      process.dispatcher.registerModule(powrprof.name, powrprof.exports);
       process.dispatcher.registerModule(iphlpapi.name, iphlpapi.exports);
       process.dispatcher.registerModule(tapi32.name, tapi32.exports);
       process.dispatcher.registerModule(setupapi.name, setupapi.exports);

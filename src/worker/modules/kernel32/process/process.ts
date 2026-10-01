@@ -1777,6 +1777,17 @@ export const exports: Record<string, ThunkImplementation> = {
     // Returns previous mask (1 = single CPU); 0 on failure
     'SetThreadAffinityMask': () => 1,
 
+    // DWORD SetThreadIdealProcessor(HANDLE hThread, DWORD dwIdealProcessor)
+    // One logical processor: the previous ideal processor is always 0; 32 (MAXIMUM_PROCESSORS) means
+    // "no preference" and anything larger is invalid (returns (DWORD)-1).
+    'SetThreadIdealProcessor': (ctx, mem, args) => {
+        if ((args[1] >>> 0) > 32) {
+            System.getInstance().scheduler.setLastError(87); // ERROR_INVALID_PARAMETER
+            return 0xffffffff;
+        }
+        return 0;
+    },
+
     // BOOL SetProcessDEPPolicy(DWORD dwFlags)
     // DEP is irrelevant in emulation — always succeed
     'SetProcessDEPPolicy': () => 1,

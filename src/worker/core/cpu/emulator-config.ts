@@ -1,5 +1,9 @@
 export const EMU_MEMORY_SIZE = 1024 * 1024 * 1024; // 1 GB (increased from 512 MB for large allocations)
 export const EMU_VGA_MEMORY_SIZE = 8 * 1024 * 1024;
+// The emulated machine reports one logical processor (GetSystemInfo) at this nominal clock; the browser
+// exposes no real CPU frequency. Keep every API that reports CPU speed on this constant.
+export const EMULATED_PROCESSOR_COUNT = 1;
+export const EMULATED_CPU_MHZ = 3000;
 // Largest single allocation the guest heap will accept. Purely a corrupted/garbage-size
 // guard — the real ceiling is the bucket's free space (an oversize request fails there →
 // caller gets NULL). Matches EMU_MEMORY_SIZE so any allocation that could physically fit
