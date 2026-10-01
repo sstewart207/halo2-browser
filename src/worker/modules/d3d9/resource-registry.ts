@@ -46,6 +46,10 @@ export type SurfaceMeta = {
     /** Cube-face index (0..5, D3DCUBEMAP_FACES order) when this surface is a cube map face.
      *  Disambiguates a cube face from a plain 2D mip surface (which uses texturePtr+level only). */
     face?: number;
+    /** Backing guest memory buffer for standalone offscreen plain surfaces. */
+    guestBufferPtr?: number;
+    /** Row pitch for standalone offscreen plain surfaces. */
+    pitch?: number;
 };
 
 export const textureMeta: Map<number, TextureMeta> = new Map();
@@ -91,6 +95,10 @@ export function destroyResource(ptr: number, kind: string): void {
         if (block?.wasmSlot !== undefined) d3d9WasmArena.releaseBlockSlot(block.wasmSlot);
         stateBlocks.delete(ptr);
     } else {
+        const meta = surfaceMeta.get(ptr);
+        if (meta?.guestBufferPtr) {
+            System.getInstance().process?.memory.free(meta.guestBufferPtr);
+        }
         surfaceMeta.delete(ptr);
     }
     resourceToDevice.delete(ptr);

@@ -361,6 +361,63 @@ export function createResourcesExports(): Record<string, ThunkImplementation> {
         return Mem.writeUint32(ppSurface, surfacePtr) ? D3D_OK : D3DERR_INVALIDCALL;
     };
 
+    exports['IDirect3DDevice9_CreateOffscreenPlainSurface'] = (_ctx, _mem, args) => {
+        const pDevice = args[0];
+        const width = args[1] >>> 0;
+        const height = args[2] >>> 0;
+        const format = args[3] >>> 0;
+        const pool = args[4] >>> 0;
+        const ppSurface = args[5];
+
+        if (!ppSurface) return D3DERR_INVALIDCALL;
+        initReturnPtr(ppSurface);
+
+        const device = devices.get(pDevice);
+        if (!device) return D3DERR_INVALIDCALL;
+
+        const vtables = getVTables();
+        const vtableAddr = vtables['IDirect3DSurface9']?.address;
+        if (!vtableAddr) return D3DERR_INVALIDCALL;
+
+        const w = Math.max(1, width);
+        const h = Math.max(1, height);
+        const layout = getD3DTextureLayout(format, w, h);
+        const pitch = layout.pitch;
+        const bytes = layout.bytes;
+
+        const process = System.getInstance().process;
+        if (!process) return D3DERR_INVALIDCALL;
+
+        let guestBufferPtr: number;
+        try {
+            guestBufferPtr = process.memory.alloc(bytes, "HEAP", undefined, undefined, "d3d9:offscreenPlainSurface");
+        } catch {
+            return 0x8876017c; // D3DERR_OUTOFVIDEOMEMORY
+        }
+
+        const surfacePtr = createComObject(vtableAddr);
+        resourceToDevice.set(surfacePtr, device);
+        surfaceMeta.set(surfacePtr, {
+            format,
+            type: D3DRTYPE_SURFACE,
+            usage: 0,
+            pool,
+            multiSampleType: D3DMULTISAMPLE_NONE,
+            multiSampleQuality: 0,
+            width: w,
+            height: h,
+            guestBufferPtr,
+            pitch,
+        });
+
+        Logger.log(
+            LogCategory.D3D9,
+            `CreateOffscreenPlainSurface(${w}x${h}, Format=${format}, Pool=${pool}) -> 0x${surfacePtr.toString(16)} (buf=0x${guestBufferPtr.toString(16)})`,
+        );
+
+        return Mem.writeUint32(ppSurface, surfacePtr) ? D3D_OK : D3DERR_INVALIDCALL;
+    };
+
     exports['IDirect3DDevice9_CreateQuery'] = (_ctx, _mem, args) => {
         const pDevice = args[0];
         const _type = args[1];
@@ -713,27 +770,40 @@ export function createResourcesExports(): Record<string, ThunkImplementation> {
 
         const meta = surfaceMeta.get(pSurface);
         const device = resourceToDevice.get(pSurface);
-        if (!meta || !device || !meta.texturePtr || !pLockedRect) {
+        if (!meta || !device || !pLockedRect) {
             return D3DERR_INVALIDCALL;
         }
 
-        const level = meta.level ?? 0;
-        const lockInfo = device.lockTexture(meta.texturePtr, level);
-        if (!lockInfo) {
+        let pBits: number;
+        let pitch: number;
+
+        if (meta.texturePtr) {
+            const level = meta.level ?? 0;
+            const lockInfo = device.lockTexture(meta.texturePtr, level);
+            if (!lockInfo) {
+                return D3DERR_INVALIDCALL;
+            }
+            pBits = lockInfo.ptr >>> 0;
+            pitch = lockInfo.pitch >>> 0;
+        } else if (meta.guestBufferPtr !== undefined) {
+            pBits = meta.guestBufferPtr >>> 0;
+            pitch = (meta.pitch ?? (meta.width * 4)) >>> 0;
+        } else {
             return D3DERR_INVALIDCALL;
         }
 
-        let pBits = lockInfo.ptr >>> 0;
         if (pRect) {
             const left = Mem.readInt32(pRect) ?? 0;
             const top = Mem.readInt32(pRect + 4) ?? 0;
-            pBits = (pBits + computeLockRectOffset(meta.format, meta.width, meta.height, lockInfo.pitch, left, top)) >>> 0;
+            pBits = (pBits + computeLockRectOffset(meta.format, meta.width, meta.height, pitch, left, top)) >>> 0;
         }
 
-        const wrotePitch = Mem.writeUint32(pLockedRect + 0, lockInfo.pitch >>> 0);
+        const wrotePitch = Mem.writeUint32(pLockedRect + 0, pitch >>> 0);
         const wroteBits = Mem.writeUint32(pLockedRect + 4, pBits);
         if (!wrotePitch || !wroteBits) {
-            device.unlockTexture(meta.texturePtr, level, mem);
+            if (meta.texturePtr) {
+                device.unlockTexture(meta.texturePtr, meta.level ?? 0, mem);
+            }
             return D3DERR_INVALIDCALL;
         }
 
@@ -745,12 +815,14 @@ export function createResourcesExports(): Record<string, ThunkImplementation> {
 
         const meta = surfaceMeta.get(pSurface);
         const device = resourceToDevice.get(pSurface);
-        if (!meta || !device || !meta.texturePtr) {
+        if (!meta || !device) {
             return D3DERR_INVALIDCALL;
         }
 
-        const level = meta.level ?? 0;
-        device.unlockTexture(meta.texturePtr, level, mem);
+        if (meta.texturePtr) {
+            const level = meta.level ?? 0;
+            device.unlockTexture(meta.texturePtr, level, mem);
+        }
         return D3D_OK;
     };
 

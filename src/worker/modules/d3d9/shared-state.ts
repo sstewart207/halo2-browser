@@ -76,6 +76,10 @@ export function getVTables(): Record<string, VTableInfo> {
     return vtables;
 }
 
+export function setVTablesForTesting(v: Record<string, VTableInfo> | null): void {
+    vtables = v;
+}
+
 /**
  * Reset shared state - clear vtables and device registry.
  * Called during system reset to ensure fresh state for new applications.

@@ -22,6 +22,8 @@ import {
     getD3DTextureLayout,
     getNativeBCTextureFormat,
     isBlockCompressedFormat,
+    bytesPerPixelFromBpp,
+    d3dFormatToSurfaceFormat,
 } from "../shared/texture-formats";
 import { TimeService } from "../../../runtime/time";
 import { System } from "../../../core/system";
@@ -1571,6 +1573,77 @@ export class D3D9Device {
             }
         }
         this.textures.setDirty(targetIndex, true);
+        return true;
+    }
+
+    /** Copy rectangular subset of pixels between surfaces (UpdateSurface). */
+    updateSurface(
+        src: { width: number; height: number; format: number; texturePtr?: number; level?: number; guestBufferPtr?: number; pitch?: number },
+        srcRect: { left: number; top: number; right: number; bottom: number },
+        dst: { width: number; height: number; format: number; texturePtr?: number; level?: number; guestBufferPtr?: number; pitch?: number },
+        dstPoint: { x: number; y: number },
+    ): boolean {
+        const copyWidth = srcRect.right - srcRect.left;
+        const copyHeight = srcRect.bottom - srcRect.top;
+        if (copyWidth <= 0 || copyHeight <= 0) return true;
+
+        this.submitFrame(false);
+
+        const sf = d3dFormatToSurfaceFormat(src.format);
+        const bpp = Math.max(1, bytesPerPixelFromBpp(sf.bpp));
+        const rowBytes = copyWidth * bpp;
+
+        let srcBase: number;
+        let srcPitch: number;
+        if (src.texturePtr) {
+            const srcIdx = this.textures.getIndex(src.texturePtr);
+            if (srcIdx === null) return false;
+            srcBase = this.textures.getGuestPtr(srcIdx);
+            srcPitch = this.textures.getPitch(srcIdx);
+        } else if (src.guestBufferPtr !== undefined) {
+            srcBase = src.guestBufferPtr;
+            srcPitch = src.pitch ?? (src.width * bpp);
+        } else {
+            return false;
+        }
+
+        let dstIndex: number | null = null;
+        let dstPitch: number;
+        let dstData: Uint8Array | undefined;
+        let dstGuestBase: number;
+
+        if (dst.texturePtr) {
+            const idx = this.textures.getIndex(dst.texturePtr);
+            if (idx === null) return false;
+            dstIndex = idx;
+            const level = dst.level ?? 0;
+            dstPitch = level === 0 ? this.textures.getPitch(idx) : getD3DTextureLayout(dst.format, Math.max(1, this.textures.getWidth(idx) >>> level), Math.max(1, this.textures.getHeight(idx) >>> level)).pitch;
+            dstData = level === 0 ? this.textures.getData(idx) : this.mipLevelData.get(`${dst.texturePtr}:${level}`);
+            dstGuestBase = level === 0 ? this.textures.getGuestPtr(idx) : -1;
+        } else if (dst.guestBufferPtr !== undefined) {
+            dstPitch = dst.pitch ?? (dst.width * bpp);
+            dstGuestBase = dst.guestBufferPtr;
+        } else {
+            return false;
+        }
+
+        for (let r = 0; r < copyHeight; r++) {
+            const srcRowOffset = srcBase + (srcRect.top + r) * srcPitch + srcRect.left * bpp;
+            const dstOffsetInRow = (dstPoint.y + r) * dstPitch + dstPoint.x * bpp;
+
+            if (dstGuestBase >= 0) {
+                const dstRowOffset = dstGuestBase + dstOffsetInRow;
+                this.memory.copyWithin(dstRowOffset, srcRowOffset, srcRowOffset + rowBytes);
+            }
+            if (dstData) {
+                dstData.set(this.memory.subarray(srcRowOffset, srcRowOffset + rowBytes), dstOffsetInRow);
+            }
+        }
+
+        if (dstIndex !== null) {
+            this.textures.setDirty(dstIndex, true);
+        }
+
         return true;
     }
 

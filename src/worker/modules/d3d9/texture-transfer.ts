@@ -56,6 +56,47 @@ export function createTextureTransferExports(): Record<string, ThunkImplementati
             const offset = textureUpdateLevelOffset(source, target);
             return offset !== null && device.copyTextureLevels(sourcePtr, targetPtr, offset, target.levels) ? 0 : invalid;
         },
+        IDirect3DDevice9_UpdateSurface: (_ctx, _memory, args) => {
+            const [devicePtr, sourcePtr, sourceRect, targetPtr, destPoint] = args;
+            const device = devices.get(devicePtr);
+            const source = surfaceMeta.get(sourcePtr), target = surfaceMeta.get(targetPtr);
+            if (!device || !source || !target) return invalid;
+
+            const readSrcRect = (ptr: number, width: number, height: number): CopyRect | null => {
+                if (!ptr) return [0, 0, width, height];
+                const values = Array.from({ length: 4 }, (_, i) => Mem.readUint32(ptr + i * 4));
+                if (values.some(v => v === null)) return null;
+                const rect = values as CopyRect;
+                return validCopyRect(rect, width, height) ? rect : null;
+            };
+
+            const src = readSrcRect(sourceRect, source.width, source.height);
+            if (!src) return invalid;
+
+            let dstX = 0;
+            let dstY = 0;
+            if (destPoint) {
+                const x = Mem.readInt32(destPoint);
+                const y = Mem.readInt32(destPoint + 4);
+                if (x === null || y === null || x < 0 || y < 0) return invalid;
+                dstX = x;
+                dstY = y;
+            }
+
+            const copyWidth = src[2] - src[0];
+            const copyHeight = src[3] - src[1];
+            if (dstX + copyWidth > target.width || dstY + copyHeight > target.height) {
+                return invalid;
+            }
+
+            const ok = device.updateSurface(
+                source,
+                { left: src[0], top: src[1], right: src[2], bottom: src[3] },
+                target,
+                { x: dstX, y: dstY },
+            );
+            return ok ? 0 : invalid;
+        },
         IDirect3DTexture9_AddDirtyRect: (_ctx, _memory, args) => {
             const ptr = args[0];
             const device = resourceToDevice.get(ptr), meta = textureMeta.get(ptr);
