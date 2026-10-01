@@ -2441,21 +2441,25 @@ export class D3D9Device {
         this.noteDrawType("UP", primitiveType);
         const upDiagnostic = {rt: this.currentRtIndex, vs: this.activeVertexShader, ps: this.activePixelShader,
             decl: this.activeVertexDecl, fvf: this.stateTracker.getFVF(), primitiveType, primitiveCount, stride,
-            psConstants: Array.from(this.psConstants.subarray(0, 4))};
+            texture0: this.stateTracker.getTexture(0),
+            vertexFloats: Array.from({length: Math.max(0, Math.min(8, Math.floor(stride / 4),
+                Math.floor((this.memory.byteLength - vertexDataPtr) / 4)))}, (_, index) =>
+                new DataView(this.memory.buffer, this.memory.byteOffset + vertexDataPtr + index * 4, 4).getFloat32(0, true)),
+            psConstants: Array.from(this.psConstants.subarray(0, 4)),
+            vsMatrix: Array.from(this.vsConstants.subarray(177 * 4, 182 * 4))};
         if (this.currentRtIndex === null) {
             const shader = this.getActivePsShader();
             this.lastBackBufferUp = {...upDiagnostic, colorWrite: this.getRS(168), zEnable: this.getRS(7),
-                texture0: this.stateTracker.getTexture(0), viewport: {...this.viewport},
-                vertexFloats: Array.from({length: Math.max(0, Math.min(8, Math.floor(stride / 4),
-                    Math.floor((this.memory.byteLength - vertexDataPtr) / 4)))}, (_, index) =>
-                    new DataView(this.memory.buffer, this.memory.byteOffset + vertexDataPtr + index * 4, 4).getFloat32(0, true)),
+                alphaBlendEnable: this.getRS(27), srcBlend: this.getRS(19), destBlend: this.getRS(20),
+                alphaTestEnable: this.getRS(15), cullMode: this.getRS(22),
+                viewport: {...this.viewport},
                 psVersion: shader ? `${shader.prog.major}.${shader.prog.minor}` : null,
                 psOps: shader?.prog.instructions.map(instruction => opName(instruction.opcode))};
             const key = `${this.activeVertexShader}:${this.activePixelShader}:${primitiveType}:${stride}`;
             if (this.backBufferPasses.size < 24 || this.backBufferPasses.has(key)) this.backBufferPasses.set(key, this.lastBackBufferUp);
         }
         this.upDrawDiagnostics.push(upDiagnostic);
-        if (this.upDrawDiagnostics.length > 16) this.upDrawDiagnostics.shift();
+        if (this.upDrawDiagnostics.length > 128) this.upDrawDiagnostics.shift();
         if (primitiveCount <= 0) return 0;
         this.captureDrawIfArmed(primitiveType, primitiveCount); // harness capture (UP renders non-trilist too)
 
@@ -3199,8 +3203,8 @@ export class D3D9Device {
                 });
             }
             return this.backendExecutor.registerPipeline(pipeline, link.hasTexture, true);
-        } catch (e) {
-            this.recordPipelineError(`[D3D9] programmable pipeline build failed: ${e}`);
+        } catch (e: any) {
+            this.recordPipelineError(`[D3D9] programmable pipeline build failed: ${e} ${e?.stack ?? ''} (VS=${this.activeVertexShader} PS=${this.activePixelShader} decl=${this.activeVertexDecl} stride=${stride})`);
             return -1;
         }
     }

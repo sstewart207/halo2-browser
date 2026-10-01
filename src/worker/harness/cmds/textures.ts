@@ -69,6 +69,30 @@ export function registerTextureCommands(svc: HarnessService): void {
         throw new HarnessError('D3D9 texture not found', HarnessErrorCode.NOT_FOUND);
     });
 
+    /** d3d9TextureCpuData(ptr): inspect CPU backing store of a D3D9 texture. */
+    svc.register('d3d9TextureCpuData', (args) => {
+        const ptr = Number(args[0]);
+        for (const device of d3d9Devices.values()) {
+            const idx = (device as any).textures.getIndex(ptr);
+            if (idx !== null) {
+                const data = (device as any).textures.getData(idx);
+                const w = (device as any).textures.getWidth(idx);
+                const h = (device as any).textures.getHeight(idx);
+                const fmt = (device as any).textures.getFormat(idx);
+                if (!data) return { idx, w, h, fmt, noData: true };
+                let nonZero = 0;
+                let nonZeroAlpha = 0;
+                for (let i = 0; i < data.length; i += 4) {
+                    if (data[i] || data[i+1] || data[i+2]) nonZero++;
+                    if (data[i+3]) nonZeroAlpha++;
+                }
+                const sample = Array.from(data.subarray(0, 32));
+                return { idx, w, h, fmt, bytes: data.length, totalPixels: w * h, nonZero, nonZeroAlpha, sample };
+            }
+        }
+        return null;
+    });
+
     /** dumpSurface(sel, {save?}) — DDraw surface -> PNG. */
     const dump = async (args: unknown[]) => {
         const ptr = resolvePtr(args[0]);
