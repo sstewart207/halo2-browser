@@ -741,6 +741,45 @@ export function createActCtxExports(): Record<string, ThunkImplementation> {
         return { value: 1, stackCleanup: 4 };
     };
 
+    // BOOL QueryActCtxW(dwFlags, hActCtx, pvSubInstance, ulInfoClass, pvBuffer, cbBuffer, SIZE_T* pcbWrittenOrRequired)
+    // Only ActivationContextBasicInformation (1) is modeled: { HANDLE hActCtx; DWORD dwFlags }.
+    exports['QueryActCtxW'] = (ctx, mem, args) => {
+        const QUERY_USE_ACTIVE_ACTCTX = 0x4;
+        const QUERY_ACTCTX_IS_HMODULE = 0x8;
+        const QUERY_ACTCTX_IS_ADDRESS = 0x10;
+        const ACTIVATION_CONTEXT_BASIC_INFORMATION = 1;
+        const ERROR_INSUFFICIENT_BUFFER = 122;
+        const BASIC_INFO_SIZE = 8;
+
+        const dwFlags = args[0] >>> 0;
+        const hActCtx = args[1] >>> 0;
+        const ulInfoClass = args[3] >>> 0;
+        const pvBuffer = args[4] >>> 0;
+        const cbBuffer = args[5] >>> 0;
+        const pcbWritten = args[6] >>> 0;
+        const fail = (code: number) => {
+            System.getInstance().scheduler.setLastError(code);
+            return { value: 0, stackCleanup: 28 };
+        };
+
+        if (ulInfoClass !== ACTIVATION_CONTEXT_BASIC_INFORMATION) return fail(ERROR_INVALID_PARAMETER);
+        if (pcbWritten) Mem.writeUint32(pcbWritten, BASIC_INFO_SIZE);
+        if (!pvBuffer || cbBuffer < BASIC_INFO_SIZE) return fail(ERROR_INSUFFICIENT_BUFFER);
+
+        // The loader only associates a context with a module that carries an activation manifest we
+        // created; an address/module lookup without one reports a NULL context, as on Windows.
+        let handle = 0;
+        if (dwFlags & QUERY_USE_ACTIVE_ACTCTX) {
+            handle = resolveActiveActCtxHandle() ?? 0;
+        } else if (!(dwFlags & (QUERY_ACTCTX_IS_HMODULE | QUERY_ACTCTX_IS_ADDRESS))) {
+            if (hActCtx !== 0 && !contextsByHandle.has(hActCtx)) return fail(ERROR_INVALID_PARAMETER);
+            handle = hActCtx;
+        }
+        Mem.writeUint32(pvBuffer, handle);
+        Mem.writeUint32(pvBuffer + 4, 0);
+        return { value: 1, stackCleanup: 28 };
+    };
+
     exports['FindActCtxSectionStringW'] = (ctx, mem, args) => {
         const dwFlags = args[0] >>> 0;
         const ulSectionId = args[2] >>> 0;

@@ -715,7 +715,7 @@ function initModuleFunctions(): void {
             return { value: resolveHleModuleBase(thunkedName, mem, hash), stackCleanup: 4 };
         }
 
-        Logger.verbose(LogCategory.KERNEL32, `GetModuleHandleW("${name}") -> 0 (not found)`);
+        Logger.log(LogCategory.KERNEL32, `GetModuleHandleW("${name}") -> 0 (not found)`);
         system.process!.lastError = 126; // ERROR_MOD_NOT_FOUND
         return { value: 0, stackCleanup: 4 };
     };
@@ -785,7 +785,7 @@ function initModuleFunctions(): void {
             }
 
             if (moduleHandle === 0) {
-                Logger.verbose(LogCategory.KERNEL32, `GetModuleHandleExW("${name}") -> 0 (not found)`);
+                Logger.log(LogCategory.KERNEL32, `GetModuleHandleExW("${name}") -> 0 (not found)`);
                 system.process!.lastError = 126; // ERROR_MOD_NOT_FOUND
                 if (phModule !== 0 && phModule + 4 <= mem.length) {
                     const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
@@ -864,7 +864,7 @@ function initModuleFunctions(): void {
             }
 
             if (moduleHandle === 0) {
-                Logger.verbose(LogCategory.KERNEL32, `GetModuleHandleExA("${name}") -> 0 (not found)`);
+                Logger.log(LogCategory.KERNEL32, `GetModuleHandleExA("${name}") -> 0 (not found)`);
                 system.process!.lastError = 126;
                 if (phModule !== 0 && phModule + 4 <= mem.length) {
                     const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
@@ -1110,6 +1110,7 @@ function initModuleFunctions(): void {
         ensureProcessLocalCaches();
         const cached = getCachedLoadLibraryHandle(dllName);
         if (cached !== undefined) {
+            Logger.log(LogCategory.KERNEL32, `LoadLibraryW("${dllName}") -> 0x${cached.toString(16)} (cached)`);
             return { value: cached, stackCleanup: 4 };
         }
 
@@ -1121,6 +1122,7 @@ function initModuleFunctions(): void {
         if (moduleRegistry) {
             const existing = moduleRegistry.getByName(dllName);
             if (existing) {
+                Logger.log(LogCategory.KERNEL32, `LoadLibraryW("${dllName}") -> 0x${existing.baseAddress.toString(16)} (already loaded)`);
                 rememberLoadLibraryHandle(dllName, existing.baseAddress);
                 return { value: existing.baseAddress, stackCleanup: 4 };
             }
@@ -1130,6 +1132,7 @@ function initModuleFunctions(): void {
         const thunkedName = getThunkedModuleName(dllName);
         const thunkedBase = getThunkedDllBase(dllName);
         if (thunkedBase !== undefined) {
+            Logger.log(LogCategory.KERNEL32, `LoadLibraryW("${dllName}") -> thunked DLL`);
             const blocked = tryBlockThunkedDllLoad(dllName, thunkedName, 4, "LoadLibraryW");
             if (blocked) return blocked;
             const hleBaseW = resolveHleModuleBase(thunkedName, mem, thunkedBase);
@@ -1153,6 +1156,7 @@ function initModuleFunctions(): void {
             try {
                 const module = await loader.loadDll(dllName, true);
                 if (module) {
+                    Logger.log(LogCategory.KERNEL32, `LoadLibraryW("${dllName}") -> 0x${module.baseAddress.toString(16)} (loaded from VFS)`);
                     rememberLoadLibraryHandle(dllName, module.baseAddress);
                     const dllInits = loader.getPendingDllInits();
                     if (dllInits.length > 0) {
