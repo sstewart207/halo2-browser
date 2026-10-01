@@ -2,7 +2,7 @@
 
 Private research by Shane Stewart into running **Halo 2 Project Cartographer locally in a browser**, using [BottleShip](https://github.com/jenissimo/bottleship).
 
-**Status: startup blocked. Halo 2 has not reached its menu or gameplay.** Native x86 code executes in Chrome and passes Cartographer's version checks. The CRT crash is fixed: emulator page tables were overwriting the executable. The installed native Microsoft XML DLL now loads and creates the compatibility checker's COM document. Its next delay-loaded import hits a missing resolver; a new resolver is implemented and typechecked but awaits Chrome verification. Development is paused at the user's checkpoint request.
+**Status: graphics initialization reached; no menu or gameplay yet.** Chrome creates a real 800×600 Direct3D9Ex device, loads Halo's precompiled pixel shaders and allocates render textures. The NT loader/semaphore startup crash is fixed. The installed Microsoft D3DX compiler now executes inside the guest, but rejects the first runtime shader with D3DERR_INVALIDCALL; Halo exits before drawing game frames. Development resumed September 30 evening.
 
 ## Goal
 
@@ -10,15 +10,13 @@ Run the single-player campaign in the browser without streaming or remote game e
 
 ## Current work
 
-- Read the executable's actual PE version resources instead of fabricated game metadata.
-- Provide mapped Windows-module export images for guest code that resolves APIs itself.
-- Correct export-name ordering and distinguish executable exports from forwarded exports.
-- Supply missing x86 import signatures, offline IP Helper behavior, and accurate unsupported DPAPI failures.
-- Keep debug logs and diagnostic panels readable when the window is resized or zoomed.
-- Capture bounded crash-memory samples and reserve page tables outside loaded PE images.
-- Trace the native PCCompat checker and its Microsoft XML COM dependency.
+- Preserve the original exception even when crash reporting floods diagnostics.
+- Provide the NT loader export required by Halo's Unicode API resolver.
+- Implement D3D9Ex factory/device interfaces and GPU render-target surfaces.
+- Execute a selected private native DLL through `emulator.nativeDlls`, retaining HLE defaults for other bundles.
+- Diagnose native D3DX shader compilation before claiming game rendering.
 
-TypeScript passes. The checkpoint's focused suite passes **39 tests / 268 assertions**. Chrome passes the former `0xe7618007` crash and successfully creates the native XML document. The last delay-loader edit has not been boot-tested; passing tests do not establish gameplay. See [checkpoint details](docs/halo2-browser-checkpoint.md).
+**Validation: 53 focused tests / 350 assertions, TypeScript and production build pass.** Chrome verifies the device and texture allocations. See [checkpoint details](docs/halo2-browser-checkpoint.md).
 
 See the [checkpoint branch](https://github.com/sstewart207/halo2-browser/tree/codex/halo2-browser-checkpoint), [pull requests](https://github.com/sstewart207/halo2-browser/pulls), and [issues](https://github.com/sstewart207/halo2-browser/issues).
 
@@ -38,14 +36,14 @@ Bun and a current Chromium browser with WebGPU are required by the runtime. In t
 
 ```powershell
 bun run typecheck
-bun test tools/tests/version-resource.test.ts tools/tests/hle-image.test.ts tools/tests/import-supplement.test.ts tools/tests/iphlpapi-offline.test.ts tools/tests/page-table-manager.test.ts tools/tests/registry-roots.test.ts tools/tests/dll-api-sets.test.ts tools/tests/crt-wide-search.test.ts tools/tests/crt-memory-safe.test.ts tools/tests/delay-import.test.ts
+bun test tools/tests/version-resource.test.ts tools/tests/hle-image.test.ts tools/tests/import-supplement.test.ts tools/tests/iphlpapi-offline.test.ts tools/tests/page-table-manager.test.ts tools/tests/registry-roots.test.ts tools/tests/dll-api-sets.test.ts tools/tests/crt-wide-search.test.ts tools/tests/crt-memory-safe.test.ts tools/tests/delay-import.test.ts tools/tests/crt-vc9-seh.test.ts tools/tests/seh-catch-dispatch.test.ts tools/tests/fault-recorder.test.ts tools/tests/d3d9-ex.test.ts tools/tests/native-dll-config.test.ts tools/tests/crt-fpclass.test.ts
 ```
 
-Import your own game files locally. The private boot fixture currently contains the executable, required DLLs and the main-menu map; it does not include campaign maps. The real-file version test runs only when the developer's installed executable exists; synthetic parser tests run independently.
+Import your own game files locally. The private test fixture contains the executable, required DLLs, main-menu map and the initial campaign/shared maps. The native-compiler trial also carries an installed Microsoft D3DX DLL. These files are local and excluded from Git. The real-file version test runs only when the developer's installed executable exists; synthetic parser tests run independently.
 
 ## Next milestones
 
-1. Supply the missing XML compatibility dependency and reach the real main menu.
+1. Resolve native D3DX shader compilation and reach the real main menu.
 2. Verify one campaign level: rendered graphics, audio, and keyboard/mouse input.
 3. Persist native campaign progress across a browser restart.
 4. Support DualSense controls with remapping and dead zones.

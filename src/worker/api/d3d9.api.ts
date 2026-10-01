@@ -1010,12 +1010,50 @@ export const IDirect3DShaderValidator9: InterfaceDescriptor = {
     ],
 };
 
+// Extended interfaces preserve every inherited slot before appending the SDK methods.
+export const IDirect3D9Ex: InterfaceDescriptor = {
+    name: "IDirect3D9Ex", inherits: "IDirect3D9",
+    iid: "02177241-69FC-400C-8FF1-93A44DF6861D",
+    methods: [
+        ...IDirect3D9.methods,
+        makeMethod("GetAdapterModeCountEx", 3),
+        makeMethod("EnumAdapterModesEx", 5),
+        makeMethod("GetAdapterDisplayModeEx", 4),
+        makeMethod("CreateDeviceEx", 8, { async: true }),
+        makeMethod("GetAdapterLUID", 3),
+    ],
+};
+
+export const IDirect3DDevice9Ex: InterfaceDescriptor = {
+    name: "IDirect3DDevice9Ex", inherits: "IDirect3DDevice9",
+    iid: "B18B10CE-2649-405A-870F-95F777D4313A",
+    methods: [
+        ...IDirect3DDevice9.methods,
+        makeMethod("SetConvolutionMonoKernel", 5),
+        makeMethod("ComposeRects", 9),
+        makeMethod("PresentEx", 6, { async: true }),
+        makeMethod("GetGPUThreadPriority", 2),
+        makeMethod("SetGPUThreadPriority", 2),
+        makeMethod("WaitForVBlank", 2),
+        makeMethod("CheckResourceResidency", 3),
+        makeMethod("SetMaximumFrameLatency", 2),
+        makeMethod("GetMaximumFrameLatency", 2),
+        makeMethod("CheckDeviceState", 2),
+        makeMethod("CreateRenderTargetEx", 10),
+        makeMethod("CreateOffscreenPlainSurfaceEx", 8),
+        makeMethod("CreateDepthStencilSurfaceEx", 10),
+        makeMethod("ResetEx", 3),
+        makeMethod("GetDisplayModeEx", 4),
+    ],
+};
+
 // Complete D3D9 module descriptor
 export const d3d9Module: ModuleDescriptor = {
     name: "d3d9",
     version: "9.0c",
     description: "Direct3D 9 Graphics API",
     functions: [
+        makeMethod("Direct3DCreate9Ex", 2),
         {
             name: "Direct3DCreate9",
             params: [
@@ -1043,6 +1081,8 @@ export const d3d9Module: ModuleDescriptor = {
     interfaces: [
         IDirect3D9,
         IDirect3DDevice9,
+        IDirect3D9Ex,
+        IDirect3DDevice9Ex,
         IDirect3DVertexBuffer9,
         IDirect3DIndexBuffer9,
         IDirect3DTexture9,

@@ -49,6 +49,16 @@ const loggedUnknownModuleHandles = new Set<number>();
 let cacheOwnerProcess: any = null;
 let cacheOwnerResetGeneration = -1;
 
+/** HLE system images are pinned for the process lifetime. Native detach is
+ * not supported yet: return an NT failure rather than pretend to unload it. */
+export function unloadDllNtStatus(handle: number): number {
+    ensureProcessLocalCaches();
+    const base = handle >>> 0;
+    if (hleImageNameByBase.has(base)) return 0;
+    if (System.getInstance().process?.moduleRegistry?.getByBase(base)) return 0xc0000002; // STATUS_NOT_IMPLEMENTED
+    return 0xc0000135; // STATUS_DLL_NOT_FOUND
+}
+
 function ensureProcessLocalCaches(): void {
     const currentProcess = System.getInstance().process;
     // These caches store thunk-stub addresses. A new Process object is an obvious
@@ -635,7 +645,7 @@ function initModuleFunctions(): void {
 
         // Check if it's a thunked (HLE) system DLL - return pseudo-handle
         const pseudoBase = getThunkedDllBase(nameLower);
-        if (pseudoBase !== undefined) {
+        if (pseudoBase !== undefined && !EmulatorConfig.getInstance().prefersNativeDll(name)) {
             const blocked = tryBlockThunkedDllLoad(name, thunkedName, 4, "GetModuleHandleA");
             if (blocked) {
                 return blocked;
@@ -646,7 +656,7 @@ function initModuleFunctions(): void {
 
         // Also check APIRegistry for any thunked module we might have missed in the pseudo-base list
         const apiRegistry = APIRegistry.getInstance();
-        if (apiRegistry.hasModule(thunkedName) && !FORCE_NATIVE_PACKAGE_LOAD.has(thunkedName)) {
+        if (apiRegistry.hasModule(thunkedName) && !FORCE_NATIVE_PACKAGE_LOAD.has(thunkedName) && !EmulatorConfig.getInstance().prefersNativeDll(name)) {
             const blocked = tryBlockThunkedDllLoad(name, thunkedName, 4, "GetModuleHandleA");
             if (blocked) {
                 return blocked;
@@ -694,7 +704,7 @@ function initModuleFunctions(): void {
 
         // Check if it's a thunked (HLE) system DLL - return pseudo-handle
         const pseudoBase = getThunkedDllBase(nameLower);
-        if (pseudoBase !== undefined) {
+        if (pseudoBase !== undefined && !EmulatorConfig.getInstance().prefersNativeDll(name)) {
             const blocked = tryBlockThunkedDllLoad(name, thunkedName, 4, "GetModuleHandleW");
             if (blocked) {
                 return blocked;
@@ -705,7 +715,7 @@ function initModuleFunctions(): void {
 
         // Also check APIRegistry for any thunked module we might have missed
         const apiRegistry = APIRegistry.getInstance();
-        if (apiRegistry.hasModule(thunkedName) && !FORCE_NATIVE_PACKAGE_LOAD.has(thunkedName)) {
+        if (apiRegistry.hasModule(thunkedName) && !FORCE_NATIVE_PACKAGE_LOAD.has(thunkedName) && !EmulatorConfig.getInstance().prefersNativeDll(name)) {
             const blocked = tryBlockThunkedDllLoad(name, thunkedName, 4, "GetModuleHandleW");
             if (blocked) {
                 return blocked;
@@ -770,7 +780,7 @@ function initModuleFunctions(): void {
             if (moduleHandle === 0) {
                 const thunkedName = getThunkedModuleName(name);
                 const pseudoBase = getThunkedDllBase(nameLower);
-                if (pseudoBase !== undefined) {
+                if (pseudoBase !== undefined && !EmulatorConfig.getInstance().prefersNativeDll(name)) {
                     const blocked = tryBlockThunkedDllLoad(name, thunkedName, 12, "GetModuleHandleExW");
                     if (blocked) {
                         if (phModule !== 0 && phModule + 4 <= mem.length) {
@@ -968,7 +978,7 @@ function initModuleFunctions(): void {
         // PRIORITY 2: Check if it's a thunked DLL
         const thunkedName = getThunkedModuleName(dllName);
         const thunkedBase = getThunkedDllBase(dllName);
-        if (thunkedBase !== undefined) {
+        if (thunkedBase !== undefined && !EmulatorConfig.getInstance().prefersNativeDll(dllName)) {
             const blocked = tryBlockThunkedDllLoad(dllName, thunkedName, 12, "LoadLibraryExW");
             if (blocked) {
                 return blocked;
@@ -982,7 +992,7 @@ function initModuleFunctions(): void {
 
         // Also check APIRegistry for any thunked module not in the explicit list
         const apiRegistry = APIRegistry.getInstance();
-        if (apiRegistry.hasModule(thunkedName) && !FORCE_NATIVE_PACKAGE_LOAD.has(thunkedName)) {
+        if (apiRegistry.hasModule(thunkedName) && !FORCE_NATIVE_PACKAGE_LOAD.has(thunkedName) && !EmulatorConfig.getInstance().prefersNativeDll(dllName)) {
             const blocked = tryBlockThunkedDllLoad(dllName, thunkedName, 12, "LoadLibraryExW");
             if (blocked) {
                 return blocked;
@@ -1046,7 +1056,7 @@ function initModuleFunctions(): void {
         // PRIORITY 2: Check if it's a thunked DLL
         const thunkedName = getThunkedModuleName(dllName);
         const thunkedBase = getThunkedDllBase(dllName);
-        if (thunkedBase !== undefined) {
+        if (thunkedBase !== undefined && !EmulatorConfig.getInstance().prefersNativeDll(dllName)) {
             const blocked = tryBlockThunkedDllLoad(dllName, thunkedName, 12, "LoadLibraryExA");
             if (blocked) {
                 return blocked;
@@ -1060,7 +1070,7 @@ function initModuleFunctions(): void {
 
         // Also check APIRegistry for any thunked module not in the explicit list
         const apiRegistry = APIRegistry.getInstance();
-        if (apiRegistry.hasModule(thunkedName) && !FORCE_NATIVE_PACKAGE_LOAD.has(thunkedName)) {
+        if (apiRegistry.hasModule(thunkedName) && !FORCE_NATIVE_PACKAGE_LOAD.has(thunkedName) && !EmulatorConfig.getInstance().prefersNativeDll(dllName)) {
             const blocked = tryBlockThunkedDllLoad(dllName, thunkedName, 12, "LoadLibraryExA");
             if (blocked) {
                 return blocked;
@@ -1131,7 +1141,7 @@ function initModuleFunctions(): void {
         // PRIORITY 2: thunked DLL
         const thunkedName = getThunkedModuleName(dllName);
         const thunkedBase = getThunkedDllBase(dllName);
-        if (thunkedBase !== undefined) {
+        if (thunkedBase !== undefined && !EmulatorConfig.getInstance().prefersNativeDll(dllName)) {
             Logger.log(LogCategory.KERNEL32, `LoadLibraryW("${dllName}") -> thunked DLL`);
             const blocked = tryBlockThunkedDllLoad(dllName, thunkedName, 4, "LoadLibraryW");
             if (blocked) return blocked;
@@ -1142,7 +1152,7 @@ function initModuleFunctions(): void {
 
         // Also check APIRegistry for generated thunked module pseudo-bases.
         const apiRegistry = APIRegistry.getInstance();
-        if (apiRegistry.hasModule(thunkedName) && !FORCE_NATIVE_PACKAGE_LOAD.has(thunkedName)) {
+        if (apiRegistry.hasModule(thunkedName) && !FORCE_NATIVE_PACKAGE_LOAD.has(thunkedName) && !EmulatorConfig.getInstance().prefersNativeDll(dllName)) {
             const blocked = tryBlockThunkedDllLoad(dllName, thunkedName, 4, "LoadLibraryW");
             if (blocked) return blocked;
             const hash = computeGeneratedPseudoBase(thunkedName);
@@ -1216,7 +1226,7 @@ function initModuleFunctions(): void {
 
         // PRIORITY 2: thunked DLL
         const thunkedBase = getThunkedDllBase(dllName);
-        if (thunkedBase !== undefined) {
+        if (thunkedBase !== undefined && !EmulatorConfig.getInstance().prefersNativeDll(dllName)) {
             const blocked = tryBlockThunkedDllLoad(dllName, thunkedName, 4, "LoadLibraryA", callerInfo);
             if (blocked) return blocked;
 
@@ -1235,7 +1245,7 @@ function initModuleFunctions(): void {
 
         // Also check APIRegistry for generated thunked module pseudo-bases.
         const apiRegistry = APIRegistry.getInstance();
-        if (apiRegistry.hasModule(thunkedName) && !FORCE_NATIVE_PACKAGE_LOAD.has(thunkedName)) {
+        if (apiRegistry.hasModule(thunkedName) && !FORCE_NATIVE_PACKAGE_LOAD.has(thunkedName) && !EmulatorConfig.getInstance().prefersNativeDll(dllName)) {
             const blocked = tryBlockThunkedDllLoad(dllName, thunkedName, 4, "LoadLibraryA", callerInfo);
             if (blocked) return blocked;
             const hash = computeGeneratedPseudoBase(thunkedName);

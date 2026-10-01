@@ -1,7 +1,6 @@
-// Auto-generated index for d3d9 module
-// This file aggregates all atomic implementations
-// Generated from directory scan: src/worker/modules/d3d9
+// Custom D3D9 index: inherited Ex slots must bind after all atomic exports.
 
+import { IDirect3D9, IDirect3DDevice9, IDirect3D9Ex, IDirect3DDevice9Ex } from '../../api/d3d9.api';
 import { IModule } from '../../core/module';
 import { Process } from '../../core/process';
 import { ThunkImplementation } from '../../core/thunking/thunk-dispatcher';
@@ -31,6 +30,17 @@ export class D3D9 implements IModule {
         Object.assign(this.exports, shader_validator());
         // state functions
         Object.assign(this.exports, state());
+        for (const [base, extended] of [[IDirect3D9, IDirect3D9Ex], [IDirect3DDevice9, IDirect3DDevice9Ex]]) {
+            for (const method of extended.methods) {
+                const key = `${extended.name}_${method.name}`;
+                if (this.exports[key]) continue;
+                // Inherited slots execute the same renderer operations. Unimplemented
+                // Ex-only operations fail explicitly rather than generic fallback success.
+                this.exports[key] = base.methods.some(m => m.name === method.name)
+                    ? this.exports[`${base.name}_${method.name}`] ?? (() => 0x8876086a)
+                    : (() => 0x8876086a);
+            }
+        }
     }
 
     reset(): void {

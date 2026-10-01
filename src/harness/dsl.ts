@@ -93,7 +93,7 @@ export class HarnessChain {
     /** One-shot incident report: cpu + backtrace + last thunks + stubs + faults + threads. The go-to for ANY anomaly (freeze/crash/exit/black frame). */
     report(esp?: number): this { return this.push("report", [esp]); }
     /** Recent guest page faults (EIP / fault addr / thread / last thunk / regs). */
-    faults(n?: number): this { return this.push("faults", [n]); }
+    faults(n?: number, opts?: { first?: boolean }): this { return this.push("faults", [n, opts]); }
     shot(opts?: { save?: string }): this { return this.push("shot", [opts]); }
     captureFrame(opts?: { dumpTargets?: boolean }): this { return this.push("captureFrame", [opts]); }
     textures(): this { return this.push("textures", []); }

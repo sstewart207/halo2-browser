@@ -43,8 +43,12 @@ const MAX_RECORDS = 64;
 
 class FaultRecorder {
     private ring: FaultRecord[] = [];
+    // Retain the beginning too: a recursive crash reporter must not evict
+    // the original fault that caused it to run.
+    private initial: FaultRecord[] = [];
 
     record(r: FaultRecord): void {
+        if (this.initial.length < MAX_RECORDS) this.initial.push(r);
         this.ring.push(r);
         if (this.ring.length > MAX_RECORDS) this.ring.shift();
     }
@@ -59,8 +63,13 @@ class FaultRecorder {
         return this.ring.slice(-Math.max(1, n));
     }
 
+    first(n = 16): FaultRecord[] {
+        return this.initial.slice(0, Math.max(1, n));
+    }
+
     clear(): void {
         this.ring = [];
+        this.initial = [];
     }
 }
 

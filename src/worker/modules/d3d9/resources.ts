@@ -285,6 +285,31 @@ export function createResourcesExports(): Record<string, ThunkImplementation> {
         return D3D_OK;
     };
 
+    exports['IDirect3DDevice9_CreateRenderTarget'] = (ctx, mem, args) => {
+        const [pDevice, width, height, format, sampleType, sampleQuality, lockable, ppSurface, sharedHandle] = args;
+        if (!ppSurface || !Mem.writeUint32(ppSurface, 0) || !devices.has(pDevice) || !width || !height)
+            return D3DERR_INVALIDCALL;
+        // The backend currently implements single-sample GPU render textures. Readback
+        // for lockable render targets and cross-process sharing are separate capabilities.
+        if (sampleType !== 0 || sampleQuality !== 0 || lockable || sharedHandle) return D3DERR_NOTAVAILABLE;
+        const process = System.getInstance().process;
+        if (!process) return D3DERR_INVALIDCALL;
+        const ppTexture = process.memory.alloc(4);
+        try {
+            const result = exports['IDirect3DDevice9_CreateTexture'](ctx, mem,
+                [pDevice, width, height, 1, 1, format, D3DPOOL_DEFAULT, ppTexture, 0]);
+            const hr = typeof result === 'number' ? result : (result as {value: number}).value;
+            if (hr !== D3D_OK) return hr;
+            const texture = Mem.readUint32(ppTexture) ?? 0;
+            const surface = ensureTextureLevelSurface(texture, 0);
+            if (!surface) return D3DERR_INVALIDCALL;
+            Logger.log(LogCategory.D3D9, `CreateRenderTarget(${width}x${height}, Format=${format}) -> 0x${surface.toString(16)}`);
+            return Mem.writeUint32(ppSurface, surface) ? D3D_OK : D3DERR_INVALIDCALL;
+        } finally {
+            process.memory.free(ppTexture);
+        }
+    };
+
     exports['IDirect3DDevice9_CreateDepthStencilSurface'] = (_ctx, mem, args) => {
         const pDevice = args[0];
         const width = args[1] >>> 0;

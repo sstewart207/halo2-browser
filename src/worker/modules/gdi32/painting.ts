@@ -523,6 +523,17 @@ function writeTextMetrics(hdc: number, lptm: number, mem: Uint8Array): void {
 
 export function createPaintingExports(): Record<string, ThunkImplementation> {
     const exports: Record<string, ThunkImplementation> = {};
+    // Imported by the native D3DX redist, but font outline/shaping is not modeled.
+    // Keep their ABI resolvable and return explicit API failures if exercised.
+    for (const name of ['TranslateCharsetInfo', 'GetOutlineTextMetricsA', 'GetFontLanguageInfo',
+        'GetCharacterPlacementA', 'GetCharacterPlacementW', 'GetGlyphOutlineA', 'GetGlyphOutlineW']) {
+        exports[name] = () => {
+            const process = System.getInstance().process;
+            if (process) process.lastError = 120; // ERROR_CALL_NOT_IMPLEMENTED
+            Logger.warn(LogCategory.GDI32, `${name}: font shaping/outline operation unsupported`);
+            return name.startsWith('GetGlyphOutline') ? 0xffffffff : 0;
+        };
+    }
 
     exports['GetStockObject'] = (ctx, mem, args): number => {
         const objectId = args[0];

@@ -1,3 +1,35 @@
+# Latest verified checkpoint: graphics device and render textures work; native shader compilation is next
+
+September 30, 2026, late evening. User explicitly resumed Claude's work. This section supersedes all older pause/startup instructions. Base was Claude's pushed ddf3567. No menu, game video, gameplay, audio, controls, saves or DualSense acceptance yet.
+
+## Chrome-verified progress
+
+1. Added bounded earliest-fault retention: `h.faults(8, {first:true})` keeps the first faults even when the crash reporter overwrites the recent ring. Default `h.faults(n)` still returns recent faults; reset clears both. This revealed Claude's original crash: thread 5, halo2.exe EIP 0x432af2, reading NULL+0x3c after WaitForSingleObject(0xffffffff). The later xlive+0x10b71 fault is the reporter, not the cause.
+2. Root cause was Halo's Unicode loader probing ntdll!LdrUnloadDll. With the export absent it took its Windows 9x/unicows fallback and bound CreateSemaphoreW to a native ERROR_CALL_NOT_IMPLEMENTED stub. Added the real NT ABI/export. HLE DLLs are process-lifetime pinned; native DLL detach explicitly returns STATUS_NOT_IMPLEMENTED. Verified NT selector 0x873df8 changes to 1 and semaphore 0x87eea8 becomes valid 0x30064. The helper crash disappears.
+3. Next original failure was a NULL call from xlive+0x54a19: missing d3d9!Direct3DCreate9Ex. Added factory/device Ex descriptors with exact SDK slot order and cleanup, inherited implementations, real CreateDeviceEx, basic Ex presentation/reset/mode enumeration. Unimplemented Ex features explicitly return D3DERR_NOTAVAILABLE. D3D9 index is now CUSTOM so index generation does not erase the inheritance binding.
+4. Chrome creates an actual 800x600 WebGPU D3D9 device and loads Halo's precompiled pixel shaders. Added standalone CreateRenderTarget via a real backend render texture and surface. Single-sample/non-lockable/unshared only; unsupported modes fail explicitly. Chrome allocates the primary render target plus dozens of render textures. No fabricated shader or substituted game frames.
+5. Added exact per-bundle `emulator.nativeDlls` preference through import resolution and dynamic library loading. The installed 32-bit Microsoft d3dx9_31.dll executes inside the guest, not on a server. Added required CRT hyperbolic x87 intrinsics and _fpclass; native D3DX GDI font imports have correct signatures and explicit unsupported failures (font shaping is not implemented).
+
+## Current blocker and next work
+
+The native D3DX compiler returns D3DERR_INVALIDCALL (0x8876086c) for Halo's white shader. Halo logs `failed to initialize rasterizer` and exits via ExitProcess(0), with no faults in the earliest recorder. Import slot 0x79b544 points to native D3DXCompileShader (observed 0x13e3b324, DLL base 0x13d60000), so this is NOT the old HLE compiler stub.
+
+Actual call: halo2.exe 0x65fa4c -> import wrapper 0x6a8559; source at 0x7dbea8 is `float4 main() : COLOR { return float4(1.0f, 1.0f, 0.0f, 1.0f); }`, profile 0x7dbea0 `ps_2_0`, entrypoint 0x7dbe00 `main`, flags 0, source length computed by native code. Native compiler offsets: entry RVA db324; after preprocessing/source initialization db385; after compilation db3c2; before reading final HRESULT db44f. Trace these stages and validate live arguments/CRT behavior. A first attempt with h.breakOn(...,{continuous:true,pause:false}) yielded no breakHit events; do not claim the error's inner cause is known. SDK/compiler work is still unfinished. Do not replace compilation with hardcoded bytecode/fake success.
+
+Old nested crash-reporter SEH recursion remains a fidelity issue but is no longer the current startup blocker. OPFS temp-file paths C:/s16i.* also report TypeMismatchError; preserve saves and diagnose rather than deleting browser storage. Multiplayer remains deferred.
+
+## Exact local resume
+
+Repo: work/bottleship-research, branch codex/halo2-browser-checkpoint. Vite 5174, local log server 3001. Supported Chrome browser 3, claimed user tab 1897424839; verify tab identity before reuse. After compaction call cua.rewriteDocumentation(). No shell browser automation or security changes.
+
+Newest private fixture: work/halo2-browser/bundles/halo2-native-d3dx.wgb, 667282346 bytes. It extends halo2-maps.wgb (664867830 bytes) with the existing C:/Windows/SysWOW64/d3dx9_31.dll and nativeDlls=['d3dx9_31.dll']. Campaign fixture includes maps/shared.map, single_player_shared.map and 01a_tutorial.map. Native game install remains read-only.
+
+Reload Chrome, set h.logBufferSize(20000), h.streamLogs(), then fire-and-forget h.openWgb('/__wgb/?path='+encodeURIComponent('C:/Users/sstew/Documents/Codex/2026-09-29/private-just-for-us-do-i/work/halo2-browser/bundles/halo2-native-d3dx.wgb')). USE FORWARD SLASHES in the CDP expression: backslash escaping caused a false HTTP 404. PCC's 2 warnings still appear, Run is enabled; confirm its screen before clicking. RPC work can be fire-and-forget into a window capture object, then read JSON.stringify later. Raw log stream can drop batches; earliest faults are independent.
+
+Validation: TypeScript clean; 53 tests / 350 assertions / 16 files pass (the previous 12 checkpoint files plus fault-recorder, d3d9-ex, native-dll-config, crt-fpclass). Production Vite build passes (normal vendor externalization/chunk-size warnings). Actual installed halo2.exe version test ran read-only. Assets, bundles, logs and screenshots remain outside Git. Preserve unrelated bun.lock and generated/index line-ending edits. Existing private draft PR #7; always pass --repo sstewart207/halo2-browser to gh.
+
+---
+
 # Halo 2 browser checkpoint - 2026-09-30 (paused)
 
 Paused at the user's request with 3% usage remaining. Native game code executes locally in Chrome, but no Halo menu/video/gameplay is verified. Preserve all game files and logs outside Git; native Windows install and Defender settings are unchanged.

@@ -532,5 +532,33 @@ export function createDeviceExports(): Record<string, ThunkImplementation> {
         return D3D_OK;
     };
 
+    exports['IDirect3D9Ex_CreateDeviceEx'] = async (ctx, mem, args) => {
+        const ppDevice = args[7];
+        if (!ppDevice || !Mem.writeUint32(ppDevice, 0)) return D3DERR_INVALIDCALL;
+        if (args[6] && Mem.readUint32(args[6]) !== 24) return D3DERR_INVALIDCALL;
+        const vtable = getVTables()['IDirect3DDevice9Ex']?.address;
+        if (!vtable) return 0x8876086a;
+        const result = await exports['IDirect3D9_CreateDevice'](ctx, mem,
+            [...args.slice(0, 6), ppDevice]);
+        const hr = typeof result === 'number' ? result : result.value;
+        if (hr !== D3D_OK) return hr;
+        const ptr = Mem.readUint32(ppDevice) ?? 0;
+        if (!ptr || !devices.has(ptr)) return D3DERR_INVALIDCALL;
+        Mem.writeUint32(ptr, vtable);
+        Logger.log(LogCategory.D3D9, `Created extended device at 0x${ptr.toString(16)}`);
+        return D3D_OK;
+    };
+    exports['IDirect3DDevice9Ex_PresentEx'] = (ctx, mem, args) => {
+        // Flags that alter queuing/overlay semantics require separate backend support.
+        if (args[5] !== 0) return 0x8876086a;
+        return exports['IDirect3DDevice9_Present'](ctx, mem, args.slice(0, 5));
+    };
+    exports['IDirect3DDevice9Ex_ResetEx'] = (ctx, mem, args) => {
+        if (args[2] && Mem.readUint32(args[2]) !== 24) return D3DERR_INVALIDCALL;
+        return exports['IDirect3DDevice9_Reset'](ctx, mem, args.slice(0, 2));
+    };
+    exports['IDirect3DDevice9Ex_CheckDeviceState'] = (ctx, mem, args) =>
+        exports['IDirect3DDevice9_TestCooperativeLevel'](ctx, mem, args.slice(0, 1));
+
     return exports;
 }

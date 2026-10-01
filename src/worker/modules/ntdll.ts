@@ -3,6 +3,7 @@ import { Process } from "../core/process";
 import { System } from "../core/system";
 import { Logger, LogCategory } from "../core/logger";
 import { WAIT_BLOCKED_NO_SWITCH, WAIT_IO_COMPLETION } from "../core/scheduler/types";
+import { unloadDllNtStatus } from './kernel32/module/module';
 
 const CREATE_SUSPENDED = 0x00000004;
 const STATUS_SUCCESS = 0x00000000;
@@ -15,6 +16,10 @@ export class Ntdll implements IModule {
 
     initialize(process: Process): void {
         const system = System.getInstance();
+
+        // NTSTATUS NTAPI LdrUnloadDll(PVOID DllHandle).
+        // Also used by native Unicode loaders to detect the NT API surface.
+        this.exports['LdrUnloadDll'] = (_ctx, _mem, args) => unloadDllNtStatus(args[0]);
 
         // Critical section stubs - single-threaded for now
         // NTSTATUS RtlInitializeCriticalSection(PRTL_CRITICAL_SECTION)

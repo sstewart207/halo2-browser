@@ -330,6 +330,12 @@ export class EmulatorConfig {
     // Directories mkdir-p'd in the VFS on every boot (installer-created empty dirs
     // that store-only ZIP packing loses; e.g. Max Payne's <install>\data tree)
     public createDirs: string[] = [];
+    public nativeDlls: string[] = [];
+
+    public prefersNativeDll(name: string): boolean {
+        const token = name.replace(/\\/g, "/").split("/").pop()!.toLowerCase().replace(/\.dll$/, "");
+        return this.nativeDlls.includes(token);
+    }
 
     /**
      * Guarded Inner-Loop HLE — signature-detects known
@@ -586,6 +592,9 @@ export class EmulatorConfig {
             );
         }
 
+        this.nativeDlls = (config.nativeDlls ?? []).map(name =>
+            name.replace(/\\/g, "/").split("/").pop()!.toLowerCase().replace(/\.dll$/, "")
+        ).filter(Boolean);
         // Apply createDirs list (installer-created empty dirs lost by ZIP packing)
         if (config.createDirs && config.createDirs.length > 0) {
             this.createDirs = config.createDirs
@@ -627,6 +636,7 @@ export class EmulatorConfig {
         this.deleteOnBoot = [];
         this.writeFiles = [];
         this.createDirs = [];
+        this.nativeDlls = [];
         this.ue1 = false;
         this.ue1UserDir = null;
         // hleLibs intentionally NOT reset — it's a dev/debug toggle that the
