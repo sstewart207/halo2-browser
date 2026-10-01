@@ -4,7 +4,7 @@ import { PELoader } from './pe-loader';
 import { SystemResourceProvider } from './resources/system-resource-provider';
 import { APIRegistry } from './api-registry';
 import { ThunkMemoryManager } from './thunking/thunk-memory-manager';
-import { AddressSpace, RegionKind, RegionPerms } from './memory/address-space';
+import { AddressSpace, isHeapBucketKind, RegionKind, RegionPerms } from './memory/address-space';
 import { Mem } from './memory/mem-accessor';
 import { EMU_MEMORY_SIZE, MAX_ALLOC_BYTES } from './cpu/emulator-config';
 import { Logger, LogCategory } from './logger';
@@ -31,7 +31,12 @@ interface BucketState {
                       // anything below it that a bump re-hands-out was previously written.
 }
 
-const BUCKET_KINDS: RegionKind[] = ['HEAP', 'SURFACE', 'THUNK_CODE', 'THUNK_DATA'];
+const BUCKET_KINDS: RegionKind[] = ['HEAP', 'HEAP_HI', 'SURFACE', 'THUNK_CODE', 'THUNK_DATA'];
+
+/** Thrown by allocateInBucket when a bucket simply has no room left. Distinguishing
+ *  this from a programming error is what makes the HEAP_HI overflow retry safe: we
+ *  only spill to the overflow arena on genuine exhaustion, never on a bad size. */
+class BucketExhaustedError extends Error {}
 
 export class MemoryManager {
     constructor(private addressSpace: AddressSpace) {
@@ -208,7 +213,28 @@ export class MemoryManager {
             throw new Error(`MemoryManager: bucket ${bucketKind} is not available`);
         }
 
-        const addr = this.allocateInBucket(bucket, aligned, minAlign, bucketKind);
+        let addr: number;
+        let effectiveBucketKind = bucketKind;
+        try {
+            addr = this.allocateInBucket(bucket, aligned, minAlign, bucketKind);
+        } catch (e) {
+            // The primary HEAP bucket is a fixed 512MB arena bounded by THUNK_CODE above
+            // and the JIT slow-memory gap below, so a guest that commits more than that
+            // (Halo 2 PC reaches ~460MB in 50s and dies at ~72s) has nowhere to go. Spill
+            // to the HEAP_HI overflow arena, which sits above the JIT guard band — so the
+            // extra memory is still served on the fast path, no THUNK base moves, and
+            // addresses below 0x21000000 stay byte-identical.
+            //
+            // Only genuine exhaustion spills; a bad size or missing bucket still throws.
+            const hi = bucketKind === 'HEAP' ? this.bucketState.get('HEAP_HI') : undefined;
+            if (!(e instanceof BucketExhaustedError) || !hi) throw e;
+            Logger.log(LogCategory.SYSTEM,
+                `[MemoryManager] HEAP bucket full (limit 0x${bucket.limit.toString(16)}); ` +
+                `spilling 0x${aligned.toString(16)} to HEAP_HI overflow arena ` +
+                `[0x${hi.base.toString(16)}..0x${hi.limit.toString(16)})`);
+            addr = this.allocateInBucket(hi, aligned, minAlign, 'HEAP_HI');
+            effectiveBucketKind = 'HEAP_HI';
+        }
 
         // [DIAG/SAFETY] Double-hand-out detector: the allocator must never return an
         // address that is still recorded live. A real heap never hands out a busy block;
@@ -227,7 +253,8 @@ export class MemoryManager {
         // Individual HEAP sub-allocations (HeapAlloc etc.) are already covered by the
         // HEAP layout bucket — registering each one bloats regions[] to 200K+ entries,
         // making findBlockingRegion and releaseRegion O(n) and killing performance.
-        if (finalKind !== 'HEAP') {
+        // HEAP_HI counts as HEAP here for the same reason.
+        if (!isHeapBucketKind(effectiveBucketKind)) {
             this.addressSpace.registerRegion({
                 base: addr,
                 size: aligned,
@@ -239,10 +266,10 @@ export class MemoryManager {
         }
 
         this.recordAllocation(addr, aligned);
-        this.allocBucket.set(addr, bucketKind);
+        this.allocBucket.set(addr, effectiveBucketKind);
         this.logLargeEvent('alloc', addr, aligned);
 
-        if (bucketKind === 'HEAP' || bucketKind === 'SURFACE') {
+        if (isHeapBucketKind(effectiveBucketKind) || effectiveBucketKind === 'SURFACE') {
             ensureGuestPagesCommitted(addr, aligned);
         }
 
@@ -347,7 +374,7 @@ export class MemoryManager {
         // HEAP allocs are not registered in addressSpace.regions (skipped in alloc),
         // so skip releaseRegion for them to avoid O(n) scan of a non-existent entry.
         const bucketKind = this.allocBucket.get(ptr);
-        if (bucketKind !== 'HEAP') {
+        if (!isHeapBucketKind(bucketKind)) {
             this.addressSpace.releaseRegion(ptr);
         }
         this.currentBytes -= physical;
@@ -494,7 +521,7 @@ export class MemoryManager {
     snapshotHeapAllocations(): Array<{ addr: number; size: number }> {
         const out: Array<{ addr: number; size: number }> = [];
         for (const [addr, size] of this.allocations) {
-            if (this.allocBucket.get(addr) === 'HEAP') {
+            if (isHeapBucketKind(this.allocBucket.get(addr))) {
                 out.push({ addr, size });
             }
         }
@@ -632,7 +659,7 @@ export class MemoryManager {
         const guestCeiling = bucket.slabTop ?? bucket.limit;
         if (bucket.slabTop !== undefined && bucket.slabTop < bucket.limit &&
             alignedStart + size > guestCeiling) {
-            throw new Error(
+            throw new BucketExhaustedError(
                 `MemoryManager: HEAP exhausted at slab boundary (need 0x${size.toString(16)} ` +
                 `at 0x${alignedStart.toString(16)}, slabTop=0x${bucket.slabTop.toString(16)})`);
         }
@@ -649,7 +676,7 @@ export class MemoryManager {
 
             const expandedSize = this.addressSpace.expandLayoutBucket(bucketKind, newSize);
             if (expandedSize === 0) {
-                throw new Error(
+                throw new BucketExhaustedError(
                     `MemoryManager: bucket overflow (requested 0x${size.toString(16)} ` +
                     `in 0x${bucket.base.toString(16)}..0x${bucket.limit.toString(16)})`
                 );
@@ -848,8 +875,14 @@ export class Process {
     }
 
     private initializeMemoryLayout(): void {
-        const limit = Math.min(EMU_MEMORY_SIZE, this.getMemory().length);
-        this.addressSpace.initializeLayout(limit);
+        // Govern the layout by the address space that ACTUALLY exists (v86's linear
+        // memory), not by the EMU_MEMORY_SIZE default. EMU_MEMORY_SIZE is only the
+        // default a title falls back to; a manifest that raises emulator.memory.ram
+        // gets a bigger linear memory from v86, and clamping here would silently cap
+        // the layout back at 1GB — which is exactly what makes the HEAP_HI overflow
+        // arena (0x40000000+, only present above 1GB of RAM) zero-sized.
+        const limit = Math.max(EMU_MEMORY_SIZE, this.getMemory().length);
+        this.addressSpace.initializeLayout(Math.min(limit, this.getMemory().length));
         Mem.sync();
     }
 
@@ -864,9 +897,9 @@ export class Process {
         // --- Zero out memory regions ---
         const mem = this.getMemory();
         if (mem) {
-            const totalMemory = Math.min(EMU_MEMORY_SIZE, mem.length);
+            const totalMemory = mem.length;
             // Clear HEAP, THUNK regions, and also LOW_MEM to remove any stale spin loops
-            const clearKinds = new Set<RegionKind>(["LOW_MEM", "HEAP", "THUNK_CODE", "CALLBACK_STUB", "SPIN_LOOP", "THUNK_DATA"]);
+            const clearKinds = new Set<RegionKind>(["LOW_MEM", "HEAP", "HEAP_HI", "THUNK_CODE", "CALLBACK_STUB", "SPIN_LOOP", "THUNK_DATA"]);
             const regions = this.addressSpace.getRegions();
             for (const region of regions) {
                 if (!clearKinds.has(region.kind)) continue;

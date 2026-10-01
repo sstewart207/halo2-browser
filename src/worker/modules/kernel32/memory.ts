@@ -8,7 +8,7 @@ import { FastPathImplementation, ThunkImplementation } from '../../core/thunking
 import type { ThunkMemoryRegions } from '../../core/thunking/thunk-memory-manager';
 import { Logger, LogCategory } from '../../core/logger';
 import { System } from '../../core/system';
-import { bumpFastmemGeneration, type RegionPerms } from '../../core/memory/address-space';
+import { bumpFastmemGeneration, isHeapBucketKind, type RegionPerms } from '../../core/memory/address-space';
 import { Mem } from '../../core/memory/mem-accessor';
 import { registerGuestCommitNotifier } from '../../core/memory/guest-page-commit';
 import { hypercallDataManager } from '../../core/cpu/hypercall-data';
@@ -1794,7 +1794,7 @@ export const exports: Record<string, ThunkImplementation> = (() => {
             }
             // Fallback: region may already be mapped by a prior RESERVE|COMMIT (reservedPages can be out of sync).
             const region = process.addressSpace.getRegion(effectiveAddress);
-            if (region && region.kind === 'HEAP' && effectiveAddress + alignedSize <= region.base + region.size) {
+            if (region && isHeapBucketKind(region.kind) && effectiveAddress + alignedSize <= region.base + region.size) {
                 const ptm = process.pageTableManager;
                 if (ptm?.isPagingEnabled()) {
                     ptm.commitPages(effectiveAddress, alignedSize);

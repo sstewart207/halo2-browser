@@ -50,6 +50,28 @@ export const MEM_ROM_SIZE = 0x08000000;         // 128MB
 export const MEM_SURFACE_BASE = 0x2C000000;   // After ROM
 export const MEM_SURFACE_SIZE = 0x14000000;   // 320MB default — ends at 0x40000000 (= 1GB)
 
+// HEAP_HI: overflow arena for guest HEAP allocations (VirtualAlloc / HeapAlloc /
+// HLE module backings), used only when the primary 512MB HEAP bucket is exhausted.
+//
+// Why it exists and why it lives HERE: the primary bucket cannot grow — up is
+// THUNK_CODE (WASM-pinned at 0x21000000), down is the JIT slow-memory gap
+// (vendor/v86 bakes FASTMEM_LOW_MEM_END=0x0010_0000 into generated code). But the
+// JIT fastmem predicate is
+//     addr >= FASTMEM_LOW_MEM_END && addr <= ram
+//         && (addr <= GUARD_BASE - bytes || addr >= GUARD_END)
+// with the guard band exactly [0x2300_0000, 0x2400_0000). So EVERYTHING at or
+// above 0x24000000 is already on the fast path — a larger guest heap placed up
+// here runs at full speed and moves no THUNK base, needs no v86 rebuild, and
+// leaves guest-visible addresses below 0x21000000 byte-identical.
+//
+// Sized to the RAM actually present: at the default 1GB this bucket has zero
+// size and is never registered, so other titles are bit-for-bit unaffected. A
+// memory-hungry title opts in via its manifest's emulator.memory.ram (e.g. 2GB),
+// which yields 1GB of extra heap. Halo 2 PC needs it — it commits ~460MB in the
+// first 50s and dies at ~72s on the 512MB ceiling.
+export const MEM_HEAP_HI_BASE = 0x40000000;  // Immediately after SURFACE
+export const MEM_HEAP_HI_SIZE = 0x60000000;  // 1.5GB ceiling; real size clamps to RAM
+
 // Threading and scheduling configuration
 // REDUCED: 1ms interval for highest resolution (clamped by browser to ~4ms)
 export const EMU_SCHEDULER_INTERVAL_MS = 1;

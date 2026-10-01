@@ -1759,7 +1759,23 @@ const loadBundle = (payload: { data?: Uint8Array; url?: string; blob?: Blob; blo
 const initV86 = async (canvas: OffscreenCanvas) => {
   // Try to apply RAM configuration from pending bundle if available
   let ramSize = EMU_MEMORY_SIZE;
-  if (pendingBundle) {
+  // Explicit page-set override, replayed from localStorage BEFORE any game loads (see
+  // the set_debug_flag handler). This is the reliable way to size RAM from the harness:
+  // v86's linear memory is fixed at init, and the manifest path below only applies when
+  // the bundle arrives BEFORE emulator-ready — a bundle loaded after that keeps the
+  // default and cannot be resized without re-creating v86.
+  //
+  // RAM above 1GB is what materializes the HEAP_HI overflow arena (guest heap backing
+  // at 0x40000000+, above the JIT guard band), so this is how a memory-hungry title gets
+  // more guest address space. Clamped to the same 64MB..2GB range EmulatorConfig uses;
+  // 2GB is the practical ceiling for a 32-bit guest.
+  const dbgRam = (globalThis as any).__ramBytes;
+  if (typeof dbgRam === 'number' && Number.isFinite(dbgRam) && dbgRam > 0) {
+    const clamped = Math.max(64 * 1024 * 1024, Math.min(2 * 1024 * 1024 * 1024, Math.floor(dbgRam)));
+    ramSize = clamped;
+    Logger.log(LogCategory.SYSTEM,
+      `EmulatorConfig: RAM override __ramBytes applied: ${(ramSize / 1024 / 1024).toFixed(0)} MB`);
+  } else if (pendingBundle) {
     try {
       let bundle;
       if (pendingBundle.url) {

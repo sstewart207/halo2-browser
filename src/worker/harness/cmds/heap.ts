@@ -58,8 +58,10 @@ export function registerHeapCommands(svc: HarnessService): void {
         // The slab arena grows DOWN from the bucket limit, so once it exists it is
         // the guest bump allocator's real ceiling (see allocateInBucket's
         // "HEAP exhausted at slab boundary" throw). Reported here so the OOM can be
-        // read off the numbers that produced it.
+        // read off the numbers that produced it. HEAP_HI is the overflow arena that
+        // absorbs the spill when the primary bucket is full, so report it too.
         const heapStat = stats.find(s => s.kind === "HEAP");
+        const heapHiStat = stats.find(s => s.kind === "HEAP_HI");
         const slabTop = heapStat?.slabTop;
 
         const buckets = stats.map(s => {
@@ -140,6 +142,14 @@ export function registerHeapCommands(svc: HarnessService): void {
                     slabTop: heapStat.slabTop != null ? hx(heapStat.slabTop) : null,
                     bump: hx(heapStat.next),
                     headroomMB: +(((heapStat.slabTop ?? heapStat.limit) - heapStat.next) / MB).toFixed(2),
+                }
+                : null,
+            heapHi: heapHiStat
+                ? {
+                    range: `${hx(heapHiStat.base)}..${hx(heapHiStat.limit)}`,
+                    bump: hx(heapHiStat.next),
+                    usedMB: +(heapHiStat.used / MB).toFixed(2),
+                    headroomMB: +((heapHiStat.limit - heapHiStat.next) / MB).toFixed(2),
                 }
                 : null,
             slabTop: slabTop != null ? hx(slabTop) : null,
