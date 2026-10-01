@@ -69,26 +69,48 @@ export function registerTextureCommands(svc: HarnessService): void {
         throw new HarnessError('D3D9 texture not found', HarnessErrorCode.NOT_FOUND);
     });
 
-    /** d3d9TextureCpuData(ptr): inspect CPU backing store of a D3D9 texture. */
+    /**
+     * d3d9TextureCpuData(handleOrIndex): inspect CPU backing store of a D3D9 texture.
+     *
+     * Accepts either the handle reported by `textures()`/`d3d9TexturePixels`, or the
+     * raw store index that draw diagnostics report as `texture0` (those come from
+     * stateTracker.getTexture, which stores the index, not the pointer).
+     */
     svc.register('d3d9TextureCpuData', (args) => {
-        const ptr = Number(args[0]);
+        const sel = Number(args[0]);
+        if (!Number.isInteger(sel) || sel < 0) {
+            throw new HarnessError('expected a texture handle or store index', HarnessErrorCode.BAD_ARGS);
+        }
         for (const device of d3d9Devices.values()) {
-            const idx = (device as any).textures.getIndex(ptr);
-            if (idx !== null) {
-                const data = (device as any).textures.getData(idx);
-                const w = (device as any).textures.getWidth(idx);
-                const h = (device as any).textures.getHeight(idx);
-                const fmt = (device as any).textures.getFormat(idx);
-                if (!data) return { idx, w, h, fmt, noData: true };
-                let nonZero = 0;
-                let nonZeroAlpha = 0;
-                for (let i = 0; i < data.length; i += 4) {
-                    if (data[i] || data[i+1] || data[i+2]) nonZero++;
-                    if (data[i+3]) nonZeroAlpha++;
-                }
-                const sample = Array.from(data.subarray(0, 32));
-                return { idx, w, h, fmt, bytes: data.length, totalPixels: w * h, nonZero, nonZeroAlpha, sample };
+            const store = (device as any).textures;
+            let idx = store.getIndex(sel);
+            let via = 'handle';
+            if (idx === null && args[1] === true) {
+                // Explicit index mode: stateTracker texture indices are not handles.
+                idx = sel;
+                via = 'index';
             }
+            if (idx === null) continue;
+            const data = store.getData(idx);
+            const w = store.getWidth(idx);
+            const h = store.getHeight(idx);
+            const fmt = store.getFormat(idx);
+            if (!data) return { idx, via, w, h, fmt, noData: true };
+            let nonZero = 0;
+            let nonZeroAlpha = 0;
+            let max = 0;
+            for (let i = 0; i < data.length; i += 4) {
+                if (data[i] || data[i + 1] || data[i + 2]) nonZero++;
+                if (data[i + 3]) nonZeroAlpha++;
+                if (data[i] > max) max = data[i];
+                if (data[i + 1] > max) max = data[i + 1];
+                if (data[i + 2] > max) max = data[i + 2];
+            }
+            const sample = Array.from(data.subarray(0, 32));
+            return {
+                idx, via, w, h, fmt, bytes: data.length, totalPixels: w * h,
+                nonZero, nonZeroAlpha, maxChannel: max, sample,
+            };
         }
         return null;
     });
