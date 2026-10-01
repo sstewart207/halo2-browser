@@ -19,8 +19,8 @@ import {
 export type RegionKind =
     | "LOW_MEM"
     | "HEAP"
-    // Overflow arena for guest heap allocations, above the JIT guard band. Only
-    // present when RAM exceeds 1GB; see MEM_HEAP_HI_BASE in emulator-config.ts.
+    // Overflow arena for guest heap allocations, above the JIT guard band. Present
+    // whenever RAM reaches past SURFACE; see MEM_HEAP_HI_BASE in emulator-config.ts.
     | "HEAP_HI"
     | "SURFACE"
     | "THUNK_CODE"
@@ -296,8 +296,9 @@ export class AddressSpace {
         });
 
         // HEAP_HI: overflow guest-heap arena, above the guard band so it stays on the
-        // JIT fast path. Only registered when RAM actually reaches past SURFACE — at the
-        // default 1GB this is zero-sized and every other title is completely unaffected.
+        // JIT fast path. Sized by the RAM actually present, so a 1GB machine gets a
+        // 256MB arena and a 2GB machine gets the full 1.25GB. It sits immediately after
+        // SURFACE, so the two pools can never collide however the RAM is sized.
         const heapHiBase = MEM_HEAP_HI_BASE;
         const heapHiLimit = Math.min(linearSize, MEM_HEAP_HI_BASE + MEM_HEAP_HI_SIZE);
         layoutBuckets.push({

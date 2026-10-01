@@ -2,11 +2,10 @@
 // sized for Halo 2 rather than as a general-purpose default: the game commits ~1.5GB
 // of guest memory during boot (128MB + 64MB + 52MB + ... VirtualAlloc arenas, plus
 // map/asset streaming), which does not fit the old 1GB. 2GB yields 512MB of primary
-// HEAP + 1GB of HEAP_HI = 1.5GB of guest heap, on top of SURFACE/ROM/thunks.
+// HEAP + 1.25GB of HEAP_HI = ~1.75GB of guest heap, on top of SURFACE/ROM/thunks.
 //
 // The browser really does commit this much WASM memory, so it is not free — but for a
-// single-purpose app that is the right trade. 2GB yields 512MB of primary HEAP plus
-// 1GB of HEAP_HI = 1.5GB of guest heap.
+// single-purpose app that is the right trade.
 //
 // **2GB is a hard ceiling imposed by v86, not by us.** vendor/v86's CPU.create_memory
 // clamps any request whose signed 32-bit form goes negative:
@@ -61,12 +60,15 @@ export const MEM_GUARD_SIZE = 0x01000000;       // 16MB
 export const MEM_ROM_BASE = 0x24000000;         // After GUARD
 export const MEM_ROM_SIZE = 0x08000000;         // 128MB
 
-// SURFACE_PIXELS: DirectDraw surface pixel data — placed LAST so it can expand
-// freely via expandLayoutBucket up to the end of RAM. Texture-heavy hidden-object
-// games (Natalie Brooks) chew through hundreds of MB of 1024x1024 SYSMEM textures.
-// Default 320MB; layout clamps to actual RAM size (EMU_MEMORY_SIZE) at init.
+// SURFACE_PIXELS: DirectDraw surface pixel data.
+// Sized down from 320MB to 64MB. This project runs Halo 2, which uses D3D9 and
+// HEAP-backed textures — measured SURFACE usage is exactly 0 bytes — so the old 320MB
+// was dead address space sitting BETWEEN ROM and HEAP_HI. Shrinking it slides HEAP_HI
+// down by 256MB, which is +256MB of guest heap bought without touching v86 and without
+// moving a single guest address below 0x2C000000. (If a future title does use SYSMEM
+// surfaces it can still grow this via expandLayoutBucket.)
 export const MEM_SURFACE_BASE = 0x2C000000;   // After ROM
-export const MEM_SURFACE_SIZE = 0x14000000;   // 320MB default — ends at 0x40000000 (= 1GB)
+export const MEM_SURFACE_SIZE = 0x04000000;   // 64MB — ends at 0x30000000
 
 // HEAP_HI: overflow arena for guest HEAP allocations (VirtualAlloc / HeapAlloc /
 // HLE module backings), used only when the primary 512MB HEAP bucket is exhausted.
@@ -82,10 +84,23 @@ export const MEM_SURFACE_SIZE = 0x14000000;   // 320MB default — ends at 0x400
 // here runs at full speed and moves no THUNK base, needs no v86 rebuild, and
 // leaves guest-visible addresses below 0x21000000 byte-identical.
 //
-// Sized to the RAM actually present, so raising EMU_MEMORY_SIZE above 2GB just works
-// (at 3GB of emulated RAM this yields 512MB + 1.5GB = 2GB of guest heap).
-export const MEM_HEAP_HI_BASE = 0x40000000;  // Immediately after SURFACE
-export const MEM_HEAP_HI_SIZE = 0x60000000;  // 1.5GB ceiling; real size clamps to RAM
+// Sized to the RAM actually present, and deliberately positioned to stop exactly at
+// 2^31. Two hard limits shape that:
+//
+//   * v86 clamps emulated RAM to 2^31 - 131072 (CPU.create_memory in libv86.mjs:
+//     `0 > (size|0) && (size = Math.pow(2,31) - 131072)`), so the address space ends
+//     just below 2GB. That clamp is pure JS-side int32 reasoning — the Rust
+//     `allocate_memory(size: u32)` has no ceiling — but beating it means editing a
+//     minified build artifact, which is not worth the fragility when the layout below
+//     already reaches the boundary.
+//   * Guest addresses must stay BELOW 2^31 anyway: plenty of emulator code, and some
+//     guest code, treats them as signed int32. So HEAP_HI fills the gap up to 2^31
+//     rather than overlapping it.
+//
+// Base sits immediately after the (now small) SURFACE pool, giving the guest
+// 512MB (primary) + 1.25GB (overflow) = 1.75GB of heap.
+export const MEM_HEAP_HI_BASE = 0x30000000;  // Immediately after SURFACE
+export const MEM_HEAP_HI_SIZE = 0x50000000;  // 1.25GB, ending exactly at 2^31
 
 // Threading and scheduling configuration
 // REDUCED: 1ms interval for highest resolution (clamped by browser to ~4ms)
