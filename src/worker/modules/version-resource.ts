@@ -173,6 +173,40 @@ function decodeUtf16(data: Uint8Array, view: DataView, offset: number, words: nu
  * Parse a VS_VERSIONINFO blob. Returns null when the root block is missing,
  * truncated, or misaligned. Unknown child blocks are skipped, not fatal.
  */
+/**
+ * Build a minimal RT_VERSION blob (VS_VERSIONINFO with a VS_FIXEDFILEINFO and no string/var children)
+ * for a DLL the emulator itself provides. Layout: wLength, wValueLength=52, wType=0, "VS_VERSION_INFO\0",
+ * DWORD padding, the 52-byte fixed info.
+ */
+export function buildFixedVersionBlob(
+    version: readonly [number, number, number, number],
+    fileType: number = 2, // VFT_DLL
+): Uint8Array {
+    const key = "VS_VERSION_INFO\0";
+    const valueOffset = (6 + key.length * 2 + 3) & ~3;
+    const total = valueOffset + VS_FIXEDFILEINFO_SIZE;
+    const blob = new Uint8Array(total);
+    const view = new DataView(blob.buffer);
+    view.setUint16(0, total, true);
+    view.setUint16(2, VS_FIXEDFILEINFO_SIZE, true);
+    view.setUint16(4, 0, true);
+    for (let i = 0; i < key.length; i++) view.setUint16(6 + i * 2, key.charCodeAt(i), true);
+
+    const ms = ((version[0] & 0xffff) << 16 | (version[1] & 0xffff)) >>> 0;
+    const ls = ((version[2] & 0xffff) << 16 | (version[3] & 0xffff)) >>> 0;
+    view.setUint32(valueOffset + 0, VS_FIXEDFILEINFO_SIGNATURE, true);
+    view.setUint32(valueOffset + 4, 0x00010000, true);   // dwStrucVersion
+    view.setUint32(valueOffset + 8, ms, true);           // dwFileVersionMS
+    view.setUint32(valueOffset + 12, ls, true);          // dwFileVersionLS
+    view.setUint32(valueOffset + 16, ms, true);          // dwProductVersionMS
+    view.setUint32(valueOffset + 20, ls, true);          // dwProductVersionLS
+    view.setUint32(valueOffset + 24, 0x3f, true);        // dwFileFlagsMask
+    view.setUint32(valueOffset + 28, 0, true);           // dwFileFlags
+    view.setUint32(valueOffset + 32, 0x00040004, true);  // VOS_NT_WINDOWS32
+    view.setUint32(valueOffset + 36, fileType, true);    // dwFileType
+    return blob;
+}
+
 export function parseVersionInfo(blob: Uint8Array): ParsedVersionInfo | null {
     if (!blob || blob.length < 6 || blob.length > MAX_VERSION_BLOB_BYTES) return null;
     const view = viewOf(blob);

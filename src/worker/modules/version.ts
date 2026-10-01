@@ -19,7 +19,10 @@ import { Mem } from "../core/memory/mem-accessor";
 import { Marshaler } from "../core/memory/marshaler";
 import { System } from "../core/system";
 import { encodeAnsi } from "./codepage-utils";
+import { APIRegistry } from "../core/api-registry";
+import { EmulatorConfig } from "../core/emulator-config-manager";
 import {
+    buildFixedVersionBlob,
     VS_FIXEDFILEINFO_SIGNATURE,
     VS_FIXEDFILEINFO_SIZE,
     MAX_VERSION_BLOB_BYTES,
@@ -124,6 +127,20 @@ export class Version implements IModule {
         }
     }
 
+    /**
+     * System DLLs the emulator itself implements (ddraw, d3d9, dinput, ...) have no on-disk image, but
+     * a real OS ships them, and installers/compat checks read their file version to detect DirectX etc.
+     * Report them at the emulated OS version, as the OS-provided components of that release carry it.
+     */
+    private emulatedSystemDllBlob(filename: string): Uint8Array | null {
+        const norm = filename.replace(/\//g, "\\").toLowerCase();
+        const m = /^[a-z]:\\windows\\(?:system32|system|syswow64)\\([^\\]+)\.dll$/.exec(norm);
+        if (!m || !APIRegistry.getInstance().hasModule(m[1]!)) return null;
+        const { major, minor, build } = EmulatorConfig.getInstance().osVersion;
+        const revision = build === 6002 ? 18005 : 0; // Vista SP2 servicing revision
+        return buildFixedVersionBlob([major, minor, build, revision]);
+    }
+
     /** Match a version-query filename to a loaded PE image base, if any. */
     private moduleBaseForFilename(filename: string): number | null {
         if (!filename) return null;
@@ -203,7 +220,14 @@ export class Version implements IModule {
         }
 
         const file = this.readFileBytesSync(filename);
-        if ("error" in file) return { error: file.error };
+        if ("error" in file) {
+            const emulated = this.emulatedSystemDllBlob(filename);
+            if (emulated) {
+                this.blobCache.set(key, emulated);
+                return { blob: emulated };
+            }
+            return { error: file.error };
+        }
         const blob = findVersionInFile(file.data);
         if (!blob) return { error: ERROR_RESOURCE_DATA_NOT_FOUND };
         this.blobCache.set(key, blob);
@@ -231,12 +255,12 @@ export class Version implements IModule {
         const result = this.resolveBlob(mem, filename);
         if ("error" in result) {
             this.setError(result.error);
-            Logger.verbose(LogCategory.SYSTEM, `${tag}: file="${filename}" -> no version resource`);
+            Logger.log(LogCategory.SYSTEM, `${tag}: file="${filename}" -> no version resource (err=${result.error})`);
             return 0;
         }
         if (handlePtr !== 0) Mem.writeUint32(handlePtr, 0);
         this.setError(0);
-        Logger.verbose(LogCategory.SYSTEM, `${tag}: file="${filename}" -> size=${result.blob.length}`);
+        Logger.log(LogCategory.SYSTEM, `${tag}: file="${filename}" -> size=${result.blob.length}`);
         return result.blob.length;
     }
 

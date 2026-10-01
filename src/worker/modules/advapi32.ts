@@ -108,8 +108,10 @@ export class Advapi32 implements IModule {
                 value = { name: valueName, type: "REG_DWORD", data: 0 };
             }
             if (!value) {
+                Logger.log(LogCategory.SYSTEM, `RegQueryValueEx(${keyHandle}, "${valueName}") -> NOT FOUND`);
                 return { value: 2, stackCleanup }; // ERROR_FILE_NOT_FOUND
             }
+            Logger.log(LogCategory.SYSTEM, `RegQueryValueEx(${keyHandle}, "${valueName}") -> ${value.type} ${String(value.data).slice(0, 60)}`);
 
             const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
 
@@ -201,8 +203,10 @@ export class Advapi32 implements IModule {
             const subKey = Marshaler.readWideString(mem, lpSubKey);
             const fullKey = openKey(root, subKey);
             if (!fullKey) {
+                Logger.log(LogCategory.SYSTEM, `RegOpenKeyExW(${root}\\"${subKey}") -> NOT FOUND`);
                 return { value: 2, stackCleanup: 20 };
             }
+            Logger.log(LogCategory.SYSTEM, `RegOpenKeyExW(${root}\\"${subKey}") -> OK`);
             if (phkResult && !isValidAddress(mem, phkResult, 4, "rw")) {
                 return { value: 87, stackCleanup: 20 }; // ERROR_INVALID_PARAMETER
             }
