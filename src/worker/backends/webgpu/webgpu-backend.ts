@@ -47,6 +47,9 @@ export class WebGPUBackend implements RenderBackend {
     // Owns what the old per-backend gamma pipeline used to. Created in initialize().
     private postFx: PostFxChain | null = null;
 
+    public deviceLostReason: string | null = null;
+    public deviceLostAt: number | null = null;
+    public lastUncapturedError: string | null = null;
 
     async initialize(canvas: OffscreenCanvas): Promise<void> {
         if (!("gpu" in navigator)) {
@@ -72,12 +75,17 @@ export class WebGPUBackend implements RenderBackend {
 
         // Monitor device loss — after this fires, all GPU ops are no-ops (black screen)
         this.device.lost.then((info) => {
+            this.deviceLostReason = `reason=${info.reason} message="${info.message}"`;
+            this.deviceLostAt = performance.now();
+            console.error(`[WEBGPU] Device LOST! reason=${info.reason} message="${info.message}"`);
             Logger.error(LogCategory.SYSTEM,
                 `[WEBGPU] Device LOST! reason=${info.reason} message="${info.message}"`);
         });
 
         // DIAGNOSTIC: Catch WebGPU validation errors that silently drop draw calls
         this.device.onuncapturederror = (event: GPUUncapturedErrorEvent) => {
+            this.lastUncapturedError = event.error.message;
+            console.error(`[WEBGPU] Uncaptured error: ${event.error.message}`);
             Logger.error(LogCategory.DDRAW,
                 `[WEBGPU] Uncaptured error: ${event.error.message}`);
         };

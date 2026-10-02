@@ -132,6 +132,14 @@ export class D3D9BackendExecutor {
         progConstReuseHits: 0,
     };
 
+    public lastExecutedCommand: {
+        frameIndex: number;
+        commandIndex: number;
+        commandType: number;
+        pipelineId: number | null;
+        timestamp: number;
+    } | null = null;
+
     constructor(backend: WebGPUBackend) {
         this.backend = backend;
     }
@@ -443,6 +451,13 @@ export class D3D9BackendExecutor {
             // Execute commands
             for (let i = 0; i < frame.commandTypes.length; i++) {
                 const type = frame.commandTypes[i];
+                this.lastExecutedCommand = {
+                    frameIndex: (frame as any).frameIndex ?? 0,
+                    commandIndex: i,
+                    commandType: type,
+                    pipelineId: this.currentPipelineId,
+                    timestamp: performance.now(),
+                };
                 switch (type) {
                     case RenderCommandType.SetPipeline: {
                         const newPipelineId = frame.commandA[i];
