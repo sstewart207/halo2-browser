@@ -1,25 +1,31 @@
 # Halo 2 in the browser
 
-Private research by Shane Stewart into running **Halo 2 Project Cartographer locally in a browser**, using [BottleShip](https://github.com/jenissimo/bottleship).
+Private research by **Shane Stewart** into running Halo 2 Project Cartographer locally in Chrome through [BottleShip](https://github.com/jenissimo/bottleship). The game executes on the browser's machine; no streaming or remote game execution.
 
-**Status: startup blocked. Halo 2 has not reached its menu or gameplay.** Native x86 code executes in Chrome and passes Cartographer's version checks. The current blocker is a deterministic invalid execution address during CRT initialization. The checkpoint PR holds the compatibility changes; the project is not yet playable.
+The implementation and runtime checks below refer to the [checkpoint branch](https://github.com/sstewart207/halo2-browser/tree/codex/halo2-browser-checkpoint) and [PR #7](https://github.com/sstewart207/halo2-browser/pull/7). That source work has not yet been merged into `main`.
 
-## Goal
+## Current achievement
 
-Run the single-player campaign in the browser without streaming or remote game execution. Add DualSense input, persistent campaign saves, and full emulator save states after gameplay works. Test desktop first, then supported mobile browsers. Multiplayer is deferred.
+The real animated Halo 2 title screen and menu panels render in Chrome. Keyboard input advances the title screen into the menu. This is original guest rendering, not a recreated web menu. Readable menu labels are the current acceptance blocker; campaign gameplay is not yet verified.
 
-## Current work
+Implemented and verified incrementally: native Windows startup compatibility, shader compilation, correct shader bytecode parsing and SM3 semantics, multiple vertex streams, texture transfers and surface copies, volume textures, resource ownership, render-target restoration, indexed strips and programmable MRT output. Fixing resource lifetime reduced a 1.7 GB guest-memory leak to roughly 750 MB.
 
-- Read the executable's actual PE version resources instead of fabricated game metadata.
-- Provide mapped Windows-module export images for guest code that resolves APIs itself.
-- Correct export-name ordering and distinguish executable exports from forwarded exports.
-- Supply missing x86 import signatures, offline IP Helper behavior, and accurate unsupported DPAPI failures.
-- Keep debug logs and diagnostic panels readable when the window is resized or zoomed.
-- Capture bounded crash-memory samples to investigate the delayed GetProcAddress resolver.
+Font files and glyph rasterization work. The fixed 128 KB glyph pixel cache starved requested characters, causing entire strings to be skipped. A build-guarded in-memory patch expands backing storage and its matching block count while preserving original entry capacities. The pushed checkpoint uses 512 KB; a local 1 MB trial is under verification. Glyph-handle and visible-label checks are documented separately in the [latest checkpoint](https://github.com/sstewart207/halo2-browser/blob/codex/halo2-browser-checkpoint/docs/halo2-browser-checkpoint.md); allocated glyphs alone do not establish readable menu text.
 
-TypeScript passes. The checkpoint's focused suite passes **24 tests / 155 assertions**. A Chrome boot still crashes at EIP `0xe7618007`; passing tests do not establish gameplay.
+**Validation: 929 tests pass; TypeScript clean.** Separate Chrome probes verify GPU surface-copy pixels and local decoding of 120 non-black WMV frames. Integrated intro playback and correct audio remain unverified. Synthetic tests are not gameplay acceptance.
 
-See the [checkpoint branch](https://github.com/sstewart207/halo2-browser/tree/codex/halo2-browser-checkpoint), [pull requests](https://github.com/sstewart207/halo2-browser/pulls), and [issues](https://github.com/sstewart207/halo2-browser/issues).
+## Goal and next steps
+
+1. Finish readable menu labels and keyboard navigation.
+2. Verify one single-player campaign level with graphics, audio and keyboard/mouse input.
+3. Persist native campaign progress across browser restarts.
+4. Add DualSense controls, remapping and dead zones.
+5. Implement and repeatedly verify complete emulator save/restore.
+6. Measure performance and device compatibility, including mobile browsers.
+
+Multiplayer is deferred. Private game files, bundles, profiles, saves and runtime captures stay out of Git.
+
+Work lives on the [checkpoint branch](https://github.com/sstewart207/halo2-browser/tree/codex/halo2-browser-checkpoint), with [PR #7](https://github.com/sstewart207/halo2-browser/pull/7) and [menu issue #1](https://github.com/sstewart207/halo2-browser/issues/1). See [research references](https://github.com/sstewart207/halo2-browser/blob/codex/halo2-browser-checkpoint/docs/halo2-research-leads.md) for engine/tooling leads.
 
 ## Development
 
@@ -37,21 +43,10 @@ Bun and a current Chromium browser with WebGPU are required by the runtime. In t
 
 ```powershell
 bun run typecheck
-bun test tools/tests/version-resource.test.ts tools/tests/hle-image.test.ts tools/tests/import-supplement.test.ts tools/tests/iphlpapi-offline.test.ts
+bun test tools/tests/version-resource.test.ts tools/tests/hle-image.test.ts tools/tests/import-supplement.test.ts tools/tests/iphlpapi-offline.test.ts tools/tests/page-table-manager.test.ts tools/tests/registry-roots.test.ts tools/tests/dll-api-sets.test.ts tools/tests/crt-wide-search.test.ts tools/tests/crt-memory-safe.test.ts tools/tests/delay-import.test.ts tools/tests/crt-vc9-seh.test.ts tools/tests/seh-catch-dispatch.test.ts tools/tests/fault-recorder.test.ts tools/tests/d3d9-ex.test.ts tools/tests/native-dll-config.test.ts tools/tests/crt-fpclass.test.ts tools/tests/crt-multibyte-length.test.ts
 ```
 
-Import your own game files locally. The private boot fixture currently contains the executable, required DLLs and the main-menu map; it does not include campaign maps. The real-file version test runs only when the developer's installed executable exists; synthetic parser tests run independently.
-
-## Next milestones
-
-1. Fix the startup resolver trap and reach the real main menu.
-2. Verify one campaign level: rendered graphics, audio, and keyboard/mouse input.
-3. Persist native campaign progress across a browser restart.
-4. Support DualSense controls with remapping and dead zones.
-5. Implement full emulator save/restore and verify repeated round trips.
-6. Measure browser/device compatibility and performance, including mobile.
-
-Each milestone has observable acceptance checks in the issue backlog. The full engine, campaign, audio, controller input, portable saves and mobile support remain unverified.
+Import your own game files locally. The private test fixture contains the executable, required DLLs, main-menu map and the initial campaign/shared maps. The native-compiler trial also carries installed Microsoft D3DX31, D3DX43 and D3DCompiler43 DLLs. These files are local and excluded from Git. The real-file version test runs only when the developer's installed executable exists; synthetic parser tests run independently.
 
 ## Files and privacy
 
@@ -61,4 +56,4 @@ Game executables, DLLs, maps, bundles, accounts, profiles, saves, runtime logs a
 
 Project owner: **Shane Stewart**. Contributors credited at Shane's request: **Shane Stewart, ChatGPT (Codex), Claude Opus 5.5, and MiMo 2.6 Flash**. OpenCode work on version resources and HLE images was also completed using **Muse Spark 1.3**.
 
-BottleShip is by **Eugeniy Smirnov (jenissimo)** and its contributors. The original upstream README is preserved in [docs/upstream-readme.md](docs/upstream-readme.md). The original Apache 2.0 license and upstream notices remain in place. The CPU runtime is the [BottleShip v86 fork](https://github.com/jenissimo/v86), based on [v86](https://github.com/copy/v86); its own license applies.
+BottleShip is by **Eugeniy Smirnov (jenissimo)** and its contributors. The original upstream README is preserved in [docs/upstream-readme.md](https://github.com/sstewart207/halo2-browser/blob/codex/halo2-browser-checkpoint/docs/upstream-readme.md). The original Apache 2.0 license and upstream notices remain in place. The CPU runtime is the [BottleShip v86 fork](https://github.com/jenissimo/v86), based on [v86](https://github.com/copy/v86); its own license applies.
