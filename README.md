@@ -1,23 +1,29 @@
 # Halo 2 in the browser
 
-Private research by Shane Stewart into running **Halo 2 Project Cartographer locally in a browser**, using [BottleShip](https://github.com/jenissimo/bottleship).
+Private research by **Shane Stewart** into running Halo 2 Project Cartographer locally in Chrome through [BottleShip](https://github.com/jenissimo/bottleship). The game executes on the browser's machine; no streaming or remote game execution.
 
-**Status: real animated Halo 2 title screen renders locally in Chrome.** Enter advances to a menu panel, but menu labels are missing. Fixing a shader-bytecode reader that stopped inside comments/immediates restored genuine game pixels. Campaign, audio, controller and saving remain unverified. Paused at a tested checkpoint for agent handoff.
+## Current achievement
 
-## Goal
+The real animated Halo 2 title screen and menu panels render in Chrome. Keyboard input advances the title screen into the menu. This is original guest rendering, not a recreated web menu. Readable menu labels are the current acceptance blocker; campaign gameplay is not yet verified.
 
-Run the single-player campaign in the browser without streaming or remote game execution. Add DualSense input, persistent campaign saves, and full emulator save states after gameplay works. Test desktop first, then supported mobile browsers. Multiplayer is deferred.
+Implemented and verified incrementally: native Windows startup compatibility, shader compilation, correct shader bytecode parsing and SM3 semantics, multiple vertex streams, texture transfers and surface copies, volume textures, resource ownership, render-target restoration, indexed strips and programmable MRT output. Fixing resource lifetime reduced a 1.7 GB guest-memory leak to roughly 750 MB.
 
-## Current work
+Font files and glyph rasterization work. The fixed 128 KB glyph pixel cache starved requested characters, causing entire strings to be skipped. A build-guarded in-memory patch enlarges backing storage and its matching block count to 512 KB while preserving original entry capacities. Glyph-handle and visible-label checks are documented separately in the [latest checkpoint](docs/halo2-browser-checkpoint.md); allocated glyphs alone do not establish readable menu text.
 
-- Diagnose and implement the Media Foundation startup/session/video path.
-- Trace presentation and scene rendering: SM3 semantic mapping and multi-stream buffer fixes remove observed GPU pipeline rejections, with actual title-screen presentation now verified.
-- Verify actual main-menu pixels before campaign, audio, controller and saving acceptance.
-- Record verified [engine and tooling references](docs/halo2-research-leads.md).
+**Validation: 929 tests pass; TypeScript clean.** Separate Chrome probes verify GPU surface-copy pixels and local decoding of 120 non-black WMV frames. Integrated intro playback and correct audio remain unverified. Synthetic tests are not gameplay acceptance.
 
-**Latest validation: 920 tests pass, TypeScript clean.** Chrome verifies real GPU copy pixels and local decoding of 120 non-black WMV intro frames in a separate decoder probe. Halo integration remains incomplete. Tests do not establish working gameplay. See [checkpoint details](docs/halo2-browser-checkpoint.md).
+## Goal and next steps
 
-See the [checkpoint branch](https://github.com/sstewart207/halo2-browser/tree/codex/halo2-browser-checkpoint), [pull requests](https://github.com/sstewart207/halo2-browser/pulls), and [issues](https://github.com/sstewart207/halo2-browser/issues).
+1. Finish readable menu labels and keyboard navigation.
+2. Verify one single-player campaign level with graphics, audio and keyboard/mouse input.
+3. Persist native campaign progress across browser restarts.
+4. Add DualSense controls, remapping and dead zones.
+5. Implement and repeatedly verify complete emulator save/restore.
+6. Measure performance and device compatibility, including mobile browsers.
+
+Multiplayer is deferred. Private game files, bundles, profiles, saves and runtime captures stay out of Git.
+
+Work lives on the [checkpoint branch](https://github.com/sstewart207/halo2-browser/tree/codex/halo2-browser-checkpoint), with [PR #7](https://github.com/sstewart207/halo2-browser/pull/7) and [menu issue #1](https://github.com/sstewart207/halo2-browser/issues/1). See [research references](docs/halo2-research-leads.md) for engine/tooling leads.
 
 ## Development
 
@@ -39,17 +45,6 @@ bun test tools/tests/version-resource.test.ts tools/tests/hle-image.test.ts tool
 ```
 
 Import your own game files locally. The private test fixture contains the executable, required DLLs, main-menu map and the initial campaign/shared maps. The native-compiler trial also carries installed Microsoft D3DX31, D3DX43 and D3DCompiler43 DLLs. These files are local and excluded from Git. The real-file version test runs only when the developer's installed executable exists; synthetic parser tests run independently.
-
-## Next milestones
-
-1. Resolve video startup and remaining rendering gaps; reach the real main menu.
-2. Verify one campaign level: rendered graphics, audio, and keyboard/mouse input.
-3. Persist native campaign progress across a browser restart.
-4. Support DualSense controls with remapping and dead zones.
-5. Implement full emulator save/restore and verify repeated round trips.
-6. Measure browser/device compatibility and performance, including mobile.
-
-Each milestone has observable acceptance checks in the issue backlog. The full engine, campaign, audio, controller input, portable saves and mobile support remain unverified.
 
 ## Files and privacy
 

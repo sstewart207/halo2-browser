@@ -4,13 +4,14 @@ async function main() {
     const target = await findTab(GAME_DEV_FILTER, { port: 9333 });
     const session = await CdpSession.connect(target.webSocketDebuggerUrl);
     try {
-        const sendWithTimeout = (method: string, params: any = {}, timeoutMs = 4000) => {
+        const sendWithTimeout = (method: string, params: any = {}, timeoutMs = 15000) => {
             return Promise.race([
                 session.send(method, params),
                 new Promise((_, reject) => setTimeout(() => reject(new Error(`timeout ${method}`)), timeoutMs)),
             ]);
         };
 
+        await sendWithTimeout("Page.bringToFront").catch(() => {});
         await sendWithTimeout("Page.enable").catch(() => {});
         const r: any = await sendWithTimeout("Page.captureScreenshot", { format: "png" });
         if (r?.result?.data) {

@@ -5,6 +5,8 @@ const bundlePath = "C:/Users/sstew/Documents/Codex/2026-09-29/private-just-for-u
 console.log("Loading Halo 2 bundle...");
 const r = await harness()
     .reload()
+    .call("logBufferSize", 20000)
+    .call("streamLogs")
     .openWgb(bundlePath)
     .run();
 
