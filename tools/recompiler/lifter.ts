@@ -97,6 +97,11 @@ export const REG_TO_LOCAL: Record<BaseRegisterName, number> = {
     SS: LOCALS.TMP0,
 };
 
+export function isFloatReg(reg: BaseRegisterName): boolean {
+    const loc = REG_TO_LOCAL[reg];
+    return loc >= LOCALS.XMM0 && loc <= LOCALS.F32_TMP;
+}
+
 export class Lifter {
     moduleBuilder: WasmModuleBuilder;
     options: LiftedModuleOptions;
@@ -1134,12 +1139,33 @@ export class Lifter {
                 const [dst, src] = inst.operands;
                 if (!dst || !src) return;
                 if (dst.kind === 'reg' && src.kind === 'reg') {
+                    const srcIsFloat = isFloatReg(src.baseReg);
+                    const dstIsFloat = isFloatReg(dst.baseReg);
                     fn.local_get(REG_TO_LOCAL[src.baseReg]);
-                    fn.i32_trunc_f32_s();
-                    this.emitStoreOperandValue(fn, dst);
+                    if (srcIsFloat && !dstIsFloat) {
+                        fn.i32_reinterpret_f32();
+                    } else if (!srcIsFloat && dstIsFloat) {
+                        fn.f32_reinterpret_i32();
+                    }
+                    fn.local_set(REG_TO_LOCAL[dst.baseReg]);
                 } else if (dst.kind === 'reg') {
-                    this.emitLoadOperandValue(fn, src);
-                    this.emitStoreOperandValue(fn, dst);
+                    const dstIsFloat = isFloatReg(dst.baseReg);
+                    if (dstIsFloat) {
+                        this.emitLoadFloatValue(fn, src);
+                        fn.local_set(REG_TO_LOCAL[dst.baseReg]);
+                    } else {
+                        this.emitLoadOperandValue(fn, src);
+                        this.emitStoreOperandValue(fn, dst);
+                    }
+                } else if (src.kind === 'reg') {
+                    const srcIsFloat = isFloatReg(src.baseReg);
+                    if (srcIsFloat) {
+                        fn.local_get(REG_TO_LOCAL[src.baseReg]);
+                        this.emitStoreFloatValue(fn, dst);
+                    } else {
+                        fn.local_get(REG_TO_LOCAL[src.baseReg]);
+                        this.emitStoreOperandValue(fn, dst);
+                    }
                 }
                 break;
             }

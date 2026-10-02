@@ -519,5 +519,52 @@ describe('AOT Lifter Execution', () => {
         const result = exports.fn_caller_math(0x19ff00, 0, 0);
         expect(result).toBe(100);
     });
+
+    it('parses extended double ptr and handles MOVD float/int register conversion', () => {
+        const op = parseOperand('extended double ptr [ESP + 0x8]');
+        expect(op).toEqual({
+            kind: 'mem',
+            size: 8,
+            segment: undefined,
+            base: 'ESP',
+            index: undefined,
+            scale: undefined,
+            disp: 8
+        });
+
+        // Test MOVD: MOV EAX, 0x3f800000 (float 1.0f); MOVD MM0, EAX; MOVD EDX, MM0; MOV EAX, EDX; RET
+        const movdFn: CFGFunction = {
+            name: 'test_movd',
+            entry: '0x406000',
+            rva: '0x6000',
+            size: 20,
+            basicBlocks: [
+                {
+                    start: '0x406000',
+                    end: '0x406014',
+                    destinations: [],
+                    instructions: [
+                        { addr: '0x406000', len: 5, mnemonic: 'MOV', ops: 'EAX, 0x3f800000' },
+                        { addr: '0x406005', len: 4, mnemonic: 'MOVD', ops: 'MM0, EAX' },
+                        { addr: '0x406009', len: 4, mnemonic: 'MOVD', ops: 'EDX, MM0' },
+                        { addr: '0x40600d', len: 2, mnemonic: 'MOV', ops: 'EAX, EDX' },
+                        { addr: '0x40600f', len: 1, mnemonic: 'RET', ops: '' }
+                    ]
+                }
+            ]
+        };
+
+        const lifter = new Lifter({ memoryPages: 160 });
+        lifter.liftFunction(movdFn);
+        lifter.moduleBuilder.addExport(movdFn.name, 0, 0);
+
+        const bytes = lifter.moduleBuilder.toBinary();
+        const mod = new WebAssembly.Module(bytes);
+        const inst = new WebAssembly.Instance(mod);
+        const exports = inst.exports as any;
+
+        const result = exports.test_movd(0x19ff00, 0, 0);
+        expect(result).toBe(0x3f800000);
+    });
 });
 

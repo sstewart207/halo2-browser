@@ -134,6 +134,9 @@ export function parseOperand(opStr: string, defaultSize: 1 | 2 | 4 | 8 | 16 = 4)
     } else if (opStr.startsWith('xmmword ptr ') || opStr.startsWith('dqword ptr ')) {
         size = 16;
         opStr = opStr.substring(opStr.indexOf('ptr ') + 4).trim();
+    } else if (opStr.startsWith('extended double ptr ') || opStr.startsWith('tbyte ptr ')) {
+        size = 8;
+        opStr = opStr.substring(opStr.indexOf('ptr ') + 4).trim();
     }
 
     // Memory operand: [...]
@@ -274,7 +277,9 @@ export function parseInstruction(inst: CFGInstruction): ParsedInstruction {
         }
 
         for (const part of parts) {
-            operands.push(parseOperand(part, firstRegSize));
+            const trimmed = part.trim();
+            if (!trimmed) continue;
+            operands.push(parseOperand(trimmed, firstRegSize));
         }
     }
 
