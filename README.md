@@ -1,38 +1,45 @@
 # Halo 2 in the browser
 
-Private research by **Shane Stewart** into running Halo 2 Project Cartographer locally in Chrome through [BottleShip](https://github.com/jenissimo/bottleship). The game executes on the browser's machine; no streaming or remote game execution.
+Private research by **Shane Stewart** into running **Halo 2 Project Cartographer locally in a web browser**, using BottleShip and ahead-of-time x86 → WebAssembly recompilation. No streaming or remote game execution.
 
-The implementation and runtime checks below refer to the [checkpoint branch](https://github.com/sstewart207/halo2-browser/tree/codex/halo2-browser-checkpoint) and [PR #7](https://github.com/sstewart207/halo2-browser/pull/7). That source work has not yet been merged into `main`.
+## Current status — October 2, 2026
 
-## Current achievement
+**The recompiled game reaches native startup in desktop Chrome, but the AOT title screen, menu, campaign and steady 60 FPS are not yet verified.** Compiling the binary is a toolchain milestone, not proof of complete instruction support or playable gameplay.
 
-The real animated Halo 2 title screen and menu panels render in Chrome. Keyboard input advances the title screen into the menu. This is original guest rendering, not a recreated web menu. Readable menu labels are the current acceptance blocker; campaign gameplay is not yet verified.
+Active code is on [codex/halo2-browser-checkpoint](https://github.com/sstewart207/halo2-browser/tree/codex/halo2-browser-checkpoint), tracked by [PR #7](https://github.com/sstewart207/halo2-browser/pull/7). This README on `main` describes that work; it does not mean the implementation PR has been merged.
 
-Implemented and verified incrementally: native Windows startup compatibility, shader compilation, correct shader bytecode parsing and SM3 semantics, multiple vertex streams, texture transfers and surface copies, volume textures, resource ownership, render-target restoration, indexed strips and programmable MRT output. Fixing resource lifetime reduced a 1.7 GB guest-memory leak to roughly 750 MB.
+### Verified progress
 
-Font files and glyph rasterization work. The fixed 128 KB glyph pixel cache starved requested characters, causing entire strings to be skipped. A build-guarded in-memory patch expands backing storage and its matching block count while preserving original entry capacities. The checkpoint uses 1 MB. Live character lookups and whole-string validation now pass for sampled title/account-menu text; readable labels remain blocked farther down the layout path. Glyph-handle and visible-label checks are documented separately in the [latest checkpoint](https://github.com/sstewart207/halo2-browser/blob/codex/halo2-browser-checkpoint/docs/halo2-browser-checkpoint.md); allocated glyphs alone do not establish readable menu text.
+- Ghidra CFG extraction and whole-program WASM generation: the latest build covers **16,450 functions and 936,009 instructions**. Additional observed indirect-call entries are recovered as startup exposes them.
+- Chrome compiles and instantiates the actual generated WASM over guest memory. Execution proceeds through real CRT paths and Win32 HLE calls, including version checks, heap allocation, locks and TLS/FLS operations.
+- Corrected stack and calling-convention bugs: mutable shared ESP, stdcall cleanup, multi-block returns, external/indirect tail calls, SEH epilog stack restoration and CALL-IAT/RET wrappers.
+- Fixed CMP borrow/overflow, HLE export jump trampolines and API import parsing for names such as `ws2_32`.
+- Diagnosed a startup hang in the CRT cosine routine: unsupported `JP` had become an unconditional jump. Shared binary64 x87 state, stack push/pop, double memory access, cosine, status/control words, SAHF/parity branches and rounding-mode conversion now pass targeted tests. **The real Chrome boot gets past the previous cosine blocker.** Full x87 fidelity is still incomplete.
+- **992 tests pass; TypeScript checks clean.** Synthetic tests do not establish gameplay or rendering acceptance.
 
-**Validation: 929 tests pass; TypeScript clean.** Separate Chrome probes verify GPU surface-copy pixels and local decoding of 120 non-black WMV frames. Integrated intro playback and correct audio remain unverified. Synthetic tests are not gameplay acceptance.
+Earlier CPU-emulation checkpoints recorded title/menu rendering and Armory campaign work. Those results belong to the earlier v86 execution path; they do not establish AOT rendering, AOT performance, or mobile compatibility.
 
-## Goal and next steps
+### Current work
 
-The intended experience is a private hosted link: load the game and play locally in a browser on PC, Android or iPhone/iPad, with USB/Bluetooth controllers and persistent saves. Desktop campaign gameplay comes first. Mobile performance, Safari compatibility, controller input and emulator snapshots remain unverified. Hosting and delivery will use HTTPS, cross-origin isolation and browser caching; game assets stay private. See the [next-agent handoff](https://github.com/sstewart207/halo2-browser/blob/codex/halo2-browser-checkpoint/docs/next-agent-handoff.md).
+Startup now reaches a later indirect callback absent from the compiled export (`0x68ac88`, called from `__initterm`). Its role in initialization versus cleanup needs verification. The debug build has an optional basic-block execution budget that reports where a guest loop gets stuck.
 
-1. Finish readable menu labels and keyboard navigation.
-2. Verify one single-player campaign level with graphics, audio and keyboard/mouse input.
-3. Persist native campaign progress across browser restarts.
-4. Add USB/Bluetooth DualSense and compatible gamepad controls through the Gamepad API and guest XInput, with remapping, dead zones and reconnect handling.
-5. Implement and repeatedly verify complete emulator save/restore.
-6. Measure performance and memory on Android Chrome and iOS Safari; verify suspend/resume, audio activation and storage persistence.
-7. Provide private hosted delivery with cached downloads; optional private cross-device save sync follows reliable local saves.
+Next: resolve the observed callback and verify the real PE entry flow, then address remaining instruction semantics, native DLL initialization and actual TEB/TLS state. Keep each change tied to a reproducible test and a real Chrome result.
 
-Multiplayer is deferred. Private game files, bundles, profiles, saves and runtime captures stay out of Git.
+## Goal
 
-Work lives on the [checkpoint branch](https://github.com/sstewart207/halo2-browser/tree/codex/halo2-browser-checkpoint), with [PR #7](https://github.com/sstewart207/halo2-browser/pull/7) and [menu issue #1](https://github.com/sstewart207/halo2-browser/issues/1). See [research references](https://github.com/sstewart207/halo2-browser/blob/codex/halo2-browser-checkpoint/docs/halo2-research-leads.md) for engine/tooling leads.
+Open a private hosted URL, load the game assets, and play with execution on the user's device.
+
+1. Desktop Chrome: real title/menu, campaign graphics, audio, input and saving, then measured 60 FPS.
+2. USB/Bluetooth controllers, including DualSense, through browser controller input.
+3. Persistent local saves; later session snapshots and optional private cross-device sync.
+4. Android and iOS browser compatibility and performance testing.
+5. Private room multiplayer / browser LAN-style play after single-player works.
+
+These are goals, not completed features. Browser controller support, mobile performance, snapshots and multiplayer are unverified.
 
 ## Development
 
-Start from the checkpoint branch to use the Halo compatibility work:
+Use the checkpoint branch and read [the latest AOT checkpoint](https://github.com/sstewart207/halo2-browser/blob/codex/halo2-browser-checkpoint/docs/halo2-aot-boot-checkpoint.md) before continuing. The local workspace also has `AGENTS.md`, `CODEX-HANDOFF.md` and `HANDOFF.md`; use their newest numbered checkpoint.
 
 ```powershell
 git clone --branch codex/halo2-browser-checkpoint https://github.com/sstewart207/halo2-browser.git
@@ -40,23 +47,26 @@ cd halo2-browser
 git submodule update --init --recursive
 bun install
 bun run dev
+
+node node_modules/tsgo/bin/tsc -p tsconfig.json --noEmit
+bun test tools/tests
 ```
 
-Bun and a current Chromium browser with WebGPU are required by the runtime. In the existing Windows workspace, the working Bun binary is `../toolchain/node_modules/@oven/bun-windows-x64/bin/bun.exe`. Check the terminal for the actual Vite port.
+Run the dev server on port 5174 for the existing Chrome workflow. Game assets and the local extracted CFG are supplied privately and are not included in the repository. The latest local CFG is `cfg_full45.json`.
 
 ```powershell
-bun run typecheck
-bun test tools/tests/version-resource.test.ts tools/tests/hle-image.test.ts tools/tests/import-supplement.test.ts tools/tests/iphlpapi-offline.test.ts tools/tests/page-table-manager.test.ts tools/tests/registry-roots.test.ts tools/tests/dll-api-sets.test.ts tools/tests/crt-wide-search.test.ts tools/tests/crt-memory-safe.test.ts tools/tests/delay-import.test.ts tools/tests/crt-vc9-seh.test.ts tools/tests/seh-catch-dispatch.test.ts tools/tests/fault-recorder.test.ts tools/tests/d3d9-ex.test.ts tools/tests/native-dll-config.test.ts tools/tests/crt-fpclass.test.ts tools/tests/crt-multibyte-length.test.ts
+# Optional bounded startup diagnostic; omit for an ordinary build.
+$env:AOT_DEBUG_BLOCK_LIMIT = '1000000'
+bun tools/recompile-cfg.ts <private-cfg-path> <private-output-prefix>
+Remove-Item Env:AOT_DEBUG_BLOCK_LIMIT
 ```
 
-Import your own game files locally. The private test fixture contains the executable, required DLLs, main-menu map and the initial campaign/shared maps. The native-compiler trial also carries installed Microsoft D3DX31, D3DX43 and D3DCompiler43 DLLs. These files are local and excluded from Git. The real-file version test runs only when the developer's installed executable exists; synthetic parser tests run independently.
+Use one agent editing and boot-testing at a time. Preserve other contributors' uncommitted files, keep `bun.lock` unstaged, and record the exact build, test results and Chrome failure before handing off.
 
-## Files and privacy
+## Privacy and credits
 
-Game executables, DLLs, maps, bundles, accounts, profiles, saves, runtime logs and local captures stay outside the repository. No game content is included here. The existing native installation and Windows security settings are preserved.
+Game executables, DLLs, maps, bundles, accounts, profiles, saves, runtime logs and captures remain private and outside Git. No proprietary game assets are distributed here.
 
-## Credits and upstream
-
-Project owner: **Shane Stewart**. Contributors credited at Shane's request: **Shane Stewart, ChatGPT (Codex), Claude Opus 5.5, and MiMo 2.6 Flash**. OpenCode work on version resources and HLE images was also completed using **Muse Spark 1.3**.
-
-BottleShip is by **Eugeniy Smirnov (jenissimo)** and its contributors. The original upstream README is preserved in [docs/upstream-readme.md](https://github.com/sstewart207/halo2-browser/blob/codex/halo2-browser-checkpoint/docs/upstream-readme.md). The original Apache 2.0 license and upstream notices remain in place. The CPU runtime is the [BottleShip v86 fork](https://github.com/jenissimo/v86), based on [v86](https://github.com/copy/v86); its own license applies.
+- Project owner: **Shane Stewart**.
+- AI development contributors: **ChatGPT (Codex), Claude Opus 5.5, MiMo 2.6 Flash, Muse Spark 1.3 through OpenCode, and Google DeepMind Antigravity/Gemini**. Work has multiple contributors; checkpoints record verified changes rather than assuming authorship.
+- **BottleShip** is by **Eugeniy Smirnov (jenissimo)** and contributors. Its original README is preserved in [docs/upstream-readme.md](docs/upstream-readme.md), under Apache 2.0.
