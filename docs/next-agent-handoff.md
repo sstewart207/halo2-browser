@@ -2,7 +2,7 @@
 
 ## Oct 1-2 2026, Codex (Space Bunny): CAMPAIGN BLOCKED BY MISSING MAPS; input tested
 
-Read this section first; it supersedes the boot recipe below, which is now WRONG in two places.
+Read this section first; it supersedes the boot recipe below, which is now WRONG in two places. A paste-ready takeover prompt for Antigravity/Gemini is in `docs/prompt-antigravity-gemini.md`.
 
 ### 1. BLOCKER: the bundle ships only ONE campaign map, so every other mission hangs forever
 
@@ -26,7 +26,9 @@ Measured scenario names per menu entry (from the guest log):
 | Cairo Station (3rd) | `01b_spacestation.map` | NO - hangs |
 | Outskirts / Metropolis / others | not tested; almost certainly missing | NO |
 
-**The Armory is the only playable mission with the current bundle.** Verified in-level: black world, red light glow, "Move the Mouse to look up" prompt, shield bar + motion-tracker HUD, and Escape opens GAME PAUSED with the level's own objective text ("Follow the Gunnery Sergeant's instructions"). Choose **Armory**, not Cairo Station, until more maps are added to the bundle. Adding the remaining scenario maps to the wgb is the single highest-value fix for campaign play.
+**The Armory is the only playable mission with the current bundle.** Verified in-level: black world, red light glow, "Move the Mouse to look up" prompt, shield bar + motion-tracker HUD, and Escape opens GAME PAUSED with the level's own objective text ("Follow the Gunnery Sergeant's instructions"). Choose **Armory**, not Cairo Station, until more maps are added to the bundle.
+
+**This is a BUNDLE gap, not a missing game asset.** The full Project Cartographer install at `C:/Games/Halo 2 Project Cartographer` should contain every scenario; the assembled `bundles/halo2-2gb.wgb` (740 MB) carries only one. Fix by copying the missing `maps/*.map` from the real install into the wgb and re-checking with `fsList('C:\\maps')`. Watch the size: `shared.map` is 201 MB and `single_player_shared.map` 289 MB on their own.
 
 ### 2. Input status (measured, not assumed)
 
