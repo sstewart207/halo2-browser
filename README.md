@@ -81,6 +81,11 @@ To unlock **steady 60 FPS** on desktop and native compatibility on **iOS Safari 
    - Zero parse failures across all 933,787 instructions in `halo2.exe` (with `extended double ptr` and operand parser hardening).
    - `MOVD` float/int bitwise reinterpretation (`i32_reinterpret_f32` / `f32_reinterpret_i32`).
    - **Whole-Program Scale Verified:** Lifted the entire `halo2.exe` binary (**15,893 functions**, 152,288 basic blocks, 933,787 instructions, 209 Win32 IAT functions, 46,049 direct internal calls natively bound) in **2.83 seconds** into a 16.98 MB WASM binary that verifies and compiles in V8 in **63.13 ms** and instantiates cleanly with 15,894 exports! All 958 unit tests pass.
+6. **Stage 6 Complete (`src/worker/core/recompiler/` & Native Execution Pipeline):**
+   - Implemented FS segment prefix peeling (`dword ptr FS:[0x0]`) and dynamic TEB translation in linear memory.
+   - Inlined MSVC CRT stack and SEH frame helpers (`__SEH_prolog4`, `__SEH_epilog4`, `__alloca_probe`, `__alloca_probe_16`) directly into calling functions, preserving stack frames and registers (`EBP`, `ESP`) without emulation traps.
+   - Executed recompiled `___tmainCRTStartup` natively: ran CRT startup, heap allocation, OS version checks, and TLS initialization with 0 CPU traps.
+   - Built `RecompilerRunner` and integrated native AOT WebAssembly bootloader path in `emulator.worker.ts` with clean fallback to v86 CPU emulation. All 960 unit tests pass across 105 files.
 
 ---
 

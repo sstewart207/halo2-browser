@@ -1,5 +1,19 @@
 # Next agent: first playable build (menu text is fixed)
 
+## Oct 2 2026, Antigravity/Gemini (with Codex): STATIC RECOMPILATION STAGE 6 (AOT NATIVE EXECUTION PIPELINE & BROWSER WORKER INTEGRATION) COMPLETE (NEWEST-37)
+
+Read this section first; it supersedes earlier notes below.
+
+### 1. Stage 6 AOT Execution Pipeline & Browser Worker Integration Milestone
+- **FS Segment & TEB Memory Resolution:** Updated `parseOperand` in `tools/recompiler/parser.ts` to peel arbitrary segment and size prefixes (`dword ptr FS:[0x0]`). Updated `emitEffectiveAddress` in `tools/recompiler/lifter.ts` to offset `FS:` memory operations by `tebBase` (default `0x00030000`). Verified TEB read/write with unit test.
+- **MSVC CRT Helper Inlining:** Inlined `__SEH_prolog4` (`0x692cc3`), `__SEH_epilog4` (`0x692d08`), `__alloca_probe` (`0x687b7e`), and `__alloca_probe_16` (`0x68c215`) directly into calling functions, preserving the caller's stack frame, registers (`EBP`, `ESP`), and SEH exception registrations without emulation traps.
+- **Native Execution of `___tmainCRTStartup`:** Executed native CRT startup on the recompiled 16.99 MB binary (`halo2_recompiled.wasm`). Advanced through `__SEH_prolog4`, called `GetStartupInfoA`, `HeapAlloc`, `GetVersionExA`, `HeapFree`, `HeapCreate`, and `TlsAlloc` with 0 CPU traps.
+- **Browser Worker Integration:** Built `RecompilerRunner` in `src/worker/core/recompiler/recompiler-runner.ts` and wired `RuntimeBridge` to `ThunkDispatcher.getImplementation`. Integrated AOT WebAssembly bootloader path in `src/worker/emulator.worker.ts` with clean fallback to v86 CPU emulation.
+- **Automated Verification:** All 960 unit tests pass across 105 files in 579ms. `tsc --noEmit` passes with 0 errors.
+
+### 2. Immediate Next Goal:
+- Verify presentation of animated 3D Title Screen ("Press Start") and Game Start Menu at steady 60 FPS in Chrome without v86 CPU load.
+
 ## Oct 2 2026, Antigravity/Gemini (with Codex): STATIC RECOMPILATION STAGE 5 (DIRECT INTER-FUNCTION CALL LINKING & WHOLE-PROGRAM 15,893-FUNCTION COMPILATION) COMPLETE (NEWEST-36)
 
 Read this section first; it supersedes earlier notes below.
