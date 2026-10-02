@@ -1,18 +1,25 @@
 # Next agent: first playable build (menu text is fixed)
 
-## Oct 2 2026, Antigravity/Gemini (with Codex): STATIC RECOMPILATION STAGE 4 (SSE/FPU LIFTER & 1,000-FUNCTION MILESTONE) COMPLETE (NEWEST-35)
+## Oct 2 2026, Antigravity/Gemini (with Codex): STATIC RECOMPILATION STAGE 5 (DIRECT INTER-FUNCTION CALL LINKING & WHOLE-PROGRAM 15,893-FUNCTION COMPILATION) COMPLETE (NEWEST-36)
 
 Read this section first; it supersedes earlier notes below.
 
-### 1. Stage 4 SSE/FPU Lifter & 1,000-Function Scaling Milestone
-- **SSE Floating-Point Math (`lifter.ts`):** Complete lifting for SSE scalar floats (`XMM0`..`XMM7`, `MOVSS`, `ADDSS`, `SUBSS`, `MULSS`, `DIVSS`, `COMISS`, `CVTSI2SS`, `CVTTSS2SI`, `XORPS`, `MOVAPS`). Maps float registers to WASM `f32` locals, enabling native vector/float math for Halo 2's 3D engine.
-- **x87 FPU & MMX Stack (`lifter.ts`):** Supports `ST0`..`ST7`, `FLD`, `FLD1`, `FILD`, `FST`, `FSTP`, `FISTP`, `FADD`, `FADDP`, `FIADD`, `FSUB`, `FSUBP`, `FSUBRP`, `FMUL`, `FMULP`, `FDIV`, `FDIVP`, `FDIVR`, `FCHS`, `FABS`, `FXCH`, and MMX registers (`MM0`..`MM7`, `PXOR`, `MOVQ`, `MOVD`, `PUNPCKHDQ`).
-- **Extended Integer Set (`lifter.ts`):** Added `ROL`, `ROR`, `NEG`, `NOT`, `CDQ`, `ADC`, `SBB`, `SETcc` (`SETZ`, `SETNZ`, `SETC`, `SETLE`, `SETL`, `SETG`, `SETGE`, `SETO`), `MUL`, `DIV`, `IDIV`, `CMPXCHG.LOCK`, `STOSD.REP`, `MOVSD.REP`, `RDTSC`.
-- **Zero-Stack Streaming `ByteWriter` (`wasm-builder.ts`):** Eliminated JavaScript array spread argument stack overflows when generating large modules. Functions stream into `ByteWriter` chunks, enabling arbitrary module sizing.
-- **1,000-Function Halo 2 Verification:** Lifted 1,000 functions (8,606 basic blocks, 49,437 instructions, 60 live Win32 IAT functions bound) in **156.46 ms**. Generated 873 KB WebAssembly binary compiling in **10.81 ms** and instantiating with 1,001 exports. All 956 unit tests pass in 485ms.
+### 1. Stage 5 Direct Call Linking & Whole-Program Compilation Milestone
+- **Direct Inter-Function Call Linking (`lifter.ts`):** Direct subroutine calls (`CALL imm`) link natively to WASM `call` opcodes. Pre-registers all 15,893 functions in `funcEntryMap` and pre-scans all IAT calls so import count is fixed before bytecode generation. Stack frames are preserved with standard x86 calling convention: return address is pushed to emulated stack memory at `[esp]`, arguments are read at `[esp+4]`, `[esp+8]`, etc., and cleaned up according to cdecl/stdcall conventions.
+- **Whole-Program CFG Extraction:** Ghidra headless extracted the complete control-flow graph for all **15,893 functions** (152,288 basic blocks, 933,787 instructions) in 17 seconds (`cfg_full.json`, 121.35 MB).
+- **Instruction Coverage & Robustness:** Handled `extended double ptr` 80-bit float operands and empty operand edge-cases (e.g. `XLAT ", EBX"`), achieving **0 parse failures across all 933,787 instructions** in `halo2.exe`.
+- **MOVD Bitwise Reinterpretation:** Handled bitwise conversion between x87/MMX float locals and GP integer locals using WebAssembly `i32_reinterpret_f32` and `f32_reinterpret_i32`.
+- **Whole-Program Compilation Performance:**
+  - Lifted the entire game binary (15,893 functions) in **2.83 seconds**.
+  - Generated a **16.98 MB** WebAssembly binary (`halo2_recompiled.wasm`) with **209 Win32 IAT imports** and **46,049 direct internal subroutine calls**.
+  - Verified and compiled by the V8 WebAssembly engine in **63.13 ms**!
+  - Instantiated cleanly with **15,894 exports**.
+  - All 958 unit tests pass across 104 files in 516 ms.
 
 ### 2. Immediate Next Goal:
 - Connect the recompiled Entry Point (`0x421756`) and main game loop (`game_tick`) into the browser runtime harness to execute natively without CPU emulator overhead.
+
+## Oct 2 2026, Antigravity/Gemini (with Codex): STATIC RECOMPILATION STAGE 4 (SSE/FPU LIFTER & 1,000-FUNCTION MILESTONE) COMPLETE (NEWEST-35)
 
 ## Oct 2 2026, Antigravity/Gemini (with Codex): STATIC RECOMPILATION STAGE 3 (RUNTIME LINKER & IAT BRIDGE) COMPLETE (NEWEST-34)
 

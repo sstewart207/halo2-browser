@@ -76,6 +76,11 @@ To unlock **steady 60 FPS** on desktop and native compatibility on **iOS Safari 
    - MMX 64-bit integer registers (`MM0`..`MM7`, `PXOR`, `MOVQ`, `MOVD`) and extended integer operations (`ROL`, `ROR`, `NEG`, `NOT`, `CDQ`, `ADC`, `SBB`, `SETcc`, `MUL`, `DIV`, `IDIV`, `CMPXCHG.LOCK`, `STOSD.REP`, `MOVSD.REP`, `RDTSC`).
    - Replaced array-spread allocations with zero-stack `ByteWriter` streaming in `wasm-builder.ts`.
    - **Scale Verified:** Lifted 1,000 `halo2.exe` functions (8,606 basic blocks, 49,437 instructions, 60 live Win32 IAT imports bound) in **156.46 ms**, compiling to an 873 KB WASM binary in **10.81 ms** and instantiating cleanly with 1,001 exports. All 956 unit tests pass!
+5. **Stage 5 Complete (`tools/recompiler/` & Whole-Program 15,893-Function Milestone):**
+   - Direct inter-function call resolution (`prepareModule` pre-registers all function entries and IAT imports, linking `CALL imm` directly to WASM `call` opcodes with stack frame push and parameter passing).
+   - Zero parse failures across all 933,787 instructions in `halo2.exe` (with `extended double ptr` and operand parser hardening).
+   - `MOVD` float/int bitwise reinterpretation (`i32_reinterpret_f32` / `f32_reinterpret_i32`).
+   - **Whole-Program Scale Verified:** Lifted the entire `halo2.exe` binary (**15,893 functions**, 152,288 basic blocks, 933,787 instructions, 209 Win32 IAT functions, 46,049 direct internal calls natively bound) in **2.83 seconds** into a 16.98 MB WASM binary that verifies and compiles in V8 in **63.13 ms** and instantiates cleanly with 15,894 exports! All 958 unit tests pass.
 
 ---
 
