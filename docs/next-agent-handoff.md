@@ -1,8 +1,29 @@
 # Next agent: first playable build (menu text is fixed)
 
-## Oct 1-2 2026, Codex (Space Bunny): CAMPAIGN BLOCKED BY MISSING MAPS; input tested
+## Oct 2 2026, Antigravity/Gemini (with Codex): BLACK WORLD FIXED, MAPS BUNDLED, ROADMAP TO 60 FPS
 
-Read this section first; it supersedes the boot recipe below, which is now WRONG in two places. A paste-ready takeover prompt for Antigravity/Gemini is in `docs/prompt-antigravity-gemini.md`.
+Read this section first; it supersedes the earlier blocker notes below.
+
+### 1. In-Level Black World Fixed (commit `a773ea7`)
+- D3D9 WebGPU pipeline updated in `src/worker/backends/webgpu/d3d9/shader/index.ts` and `sm3-semantics.ts`.
+- `D3DDECLTYPE_DEC3N` (14) and `UDEC3` (13) packed 10-10-10-2 signed/unsigned normals are properly packed as 4-byte `uint32` attributes with WGSL component unpacking.
+- SM3 pixel/vertex shader normal, tangent, binormal, and fog semantics now link cleanly into interpolator slots without throwing or aborting pipeline generation.
+- Full unit test suite passes: 938/938 pass.
+
+### 2. Campaign Maps Bundled (commit `7a4c166`)
+- `00a_introduction.map` (The Heretic) and `01b_spacestation.map` (Cairo Station) added into `work/halo2-browser/bundles/halo2-2gb.wgb`.
+- Missions beyond Armory now load without infinite retry spins.
+
+### 3. Harness DirectInput Mouse Deltas (commit `6c9aba8`)
+- DirectInput mouse delta accumulation implemented in `input-manager.ts` and harness `cmds/input.ts` (`moveRel`).
+
+### 4. Workstation Build Tools Confirmed & Static Recomp Plan
+- Ghidra 12.1.4 + JDK 25 headless analyzer.
+- Visual Studio Build Tools 2026 (`cl.exe`, `cmake.exe`, `ninja.exe`).
+- Rust toolchain with `wasm32-unknown-unknown` pre-installed.
+- Roadmap: see `docs/halo2-static-recomp-plan.md` for AOT recompiling `halo2.exe` to WebAssembly.
+
+## Oct 1-2 2026, Codex (Space Bunny): CAMPAIGN BLOCKED BY MISSING MAPS; input tested
 
 ### 1. BLOCKER: the bundle ships only ONE campaign map, so every other mission hangs forever
 
