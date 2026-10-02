@@ -2,13 +2,15 @@
 
 Private research by **Shane Stewart** into running Halo 2 Project Cartographer locally in Chrome through [BottleShip](https://github.com/jenissimo/bottleship). The game executes on the browser's machine; no streaming or remote game execution.
 
+The implementation and runtime checks below refer to the [checkpoint branch](https://github.com/sstewart207/halo2-browser/tree/codex/halo2-browser-checkpoint) and [PR #7](https://github.com/sstewart207/halo2-browser/pull/7). That source work has not yet been merged into `main`.
+
 ## Current achievement
 
 The real animated Halo 2 title screen and menu panels render in Chrome. Keyboard input advances the title screen into the menu. This is original guest rendering, not a recreated web menu. Readable menu labels are the current acceptance blocker; campaign gameplay is not yet verified.
 
 Implemented and verified incrementally: native Windows startup compatibility, shader compilation, correct shader bytecode parsing and SM3 semantics, multiple vertex streams, texture transfers and surface copies, volume textures, resource ownership, render-target restoration, indexed strips and programmable MRT output. Fixing resource lifetime reduced a 1.7 GB guest-memory leak to roughly 750 MB.
 
-Font files and glyph rasterization work. The fixed 128 KB glyph pixel cache starved requested characters, causing entire strings to be skipped. A build-guarded in-memory patch enlarges backing storage and its matching block count to 512 KB while preserving original entry capacities. Glyph-handle and visible-label checks are documented separately in the [latest checkpoint](docs/halo2-browser-checkpoint.md); allocated glyphs alone do not establish readable menu text.
+Font files and glyph rasterization work. The fixed 128 KB glyph pixel cache starved requested characters, causing entire strings to be skipped. A build-guarded in-memory patch expands backing storage and its matching block count while preserving original entry capacities. The checkpoint uses 1 MB. Live character lookups and whole-string validation now pass for sampled title/account-menu text; readable labels remain blocked farther down the layout path. Glyph-handle and visible-label checks are documented separately in the [latest checkpoint](https://github.com/sstewart207/halo2-browser/blob/codex/halo2-browser-checkpoint/docs/halo2-browser-checkpoint.md); allocated glyphs alone do not establish readable menu text.
 
 **Validation: 929 tests pass; TypeScript clean.** Separate Chrome probes verify GPU surface-copy pixels and local decoding of 120 non-black WMV frames. Integrated intro playback and correct audio remain unverified. Synthetic tests are not gameplay acceptance.
 
@@ -23,7 +25,7 @@ Font files and glyph rasterization work. The fixed 128 KB glyph pixel cache star
 
 Multiplayer is deferred. Private game files, bundles, profiles, saves and runtime captures stay out of Git.
 
-Work lives on the [checkpoint branch](https://github.com/sstewart207/halo2-browser/tree/codex/halo2-browser-checkpoint), with [PR #7](https://github.com/sstewart207/halo2-browser/pull/7) and [menu issue #1](https://github.com/sstewart207/halo2-browser/issues/1). See [research references](docs/halo2-research-leads.md) for engine/tooling leads.
+Work lives on the [checkpoint branch](https://github.com/sstewart207/halo2-browser/tree/codex/halo2-browser-checkpoint), with [PR #7](https://github.com/sstewart207/halo2-browser/pull/7) and [menu issue #1](https://github.com/sstewart207/halo2-browser/issues/1). See [research references](https://github.com/sstewart207/halo2-browser/blob/codex/halo2-browser-checkpoint/docs/halo2-research-leads.md) for engine/tooling leads.
 
 ## Development
 
@@ -54,4 +56,4 @@ Game executables, DLLs, maps, bundles, accounts, profiles, saves, runtime logs a
 
 Project owner: **Shane Stewart**. Contributors credited at Shane's request: **Shane Stewart, ChatGPT (Codex), Claude Opus 5.5, and MiMo 2.6 Flash**. OpenCode work on version resources and HLE images was also completed using **Muse Spark 1.3**.
 
-BottleShip is by **Eugeniy Smirnov (jenissimo)** and its contributors. The original upstream README is preserved in [docs/upstream-readme.md](docs/upstream-readme.md). The original Apache 2.0 license and upstream notices remain in place. The CPU runtime is the [BottleShip v86 fork](https://github.com/jenissimo/v86), based on [v86](https://github.com/copy/v86); its own license applies.
+BottleShip is by **Eugeniy Smirnov (jenissimo)** and its contributors. The original upstream README is preserved in [docs/upstream-readme.md](https://github.com/sstewart207/halo2-browser/blob/codex/halo2-browser-checkpoint/docs/upstream-readme.md). The original Apache 2.0 license and upstream notices remain in place. The CPU runtime is the [BottleShip v86 fork](https://github.com/jenissimo/v86), based on [v86](https://github.com/copy/v86); its own license applies.

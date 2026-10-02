@@ -269,9 +269,9 @@ export function faultSnapshot(): unknown {
         bytes = Array.from(mem.subarray(eip, eip + 24)).map((b) => b.toString(16).padStart(2, "0")).join(" ");
     }
     const stack: string[] = [];
-    if (mem && c?.reg32 && esp >= 16 && esp + 32 <= mem.length) {
+    if (mem && c?.reg32 && esp >= 16 && esp + 64 <= mem.length) {
         const dv = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
-        for (let i = -2; i < 6; i++) stack.push(`[ESP${i < 0 ? i * 4 : "+" + i * 4}]=0x${(dv.getUint32(esp + i * 4, true) >>> 0).toString(16)}`);
+        for (let i = -2; i < 16; i++) stack.push(`[ESP${i < 0 ? i * 4 : "+" + i * 4}]=0x${(dv.getUint32(esp + i * 4, true) >>> 0).toString(16)}`);
     }
     const dispatcher: any = proc()?.dispatcher as any;
     const recent = dispatcher?.getLastWinApiCalls?.(30) ?? [];

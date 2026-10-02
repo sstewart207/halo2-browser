@@ -302,7 +302,7 @@ export class PELoader {
         const sections = this.loadSections(peData, peView, optHeaderPtr, sizeOfOptionalHeader, numberOfSections, baseAddress);
 
         if (enlargeHalo2FontCache(this.memory, baseAddress, system.executableName)) {
-            Logger.log(LogCategory.SYSTEM, "[PE] Halo 2 glyph pixel cache enlarged to 512 KiB, original 512 entries");
+            Logger.log(LogCategory.SYSTEM, "[PE] Halo 2 glyph pixel cache enlarged to 1 MiB, original 512 entries");
         }
 
         // Apply base relocations if loaded at different address than PE ImageBase
