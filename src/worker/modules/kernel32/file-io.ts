@@ -487,6 +487,11 @@ export const exports: Record<string, ThunkImplementation> = (() => {
         const hTemplateFile = args[6]; // unused
 
         const filename = lpFileName ? readStringA(mem, lpFileName) : '';
+        if (!filename || filename.length === 0) {
+            Logger.log(LogCategory.KERNEL32, `CreateFileA: empty filename, failing with ERROR_PATH_NOT_FOUND`);
+            System.getInstance().scheduler.setLastError(ERROR_PATH_NOT_FOUND);
+            return INVALID_HANDLE_VALUE;
+        }
         Logger.log(LogCategory.KERNEL32, `CreateFileA("${filename}", access=0x${dwDesiredAccess.toString(16)}, disposition=${dwCreationDisposition})`);
 
         // Check for Windows special devices before VFS
@@ -677,6 +682,11 @@ export const exports: Record<string, ThunkImplementation> = (() => {
 
         // For simplicity, convert wide string to ASCII
         const filename = lpFileName ? readStringW(mem, lpFileName) : '';
+        if (!filename || filename.length === 0) {
+            Logger.log(LogCategory.KERNEL32, `CreateFileW: empty filename, failing with ERROR_PATH_NOT_FOUND`);
+            System.getInstance().scheduler.setLastError(ERROR_PATH_NOT_FOUND);
+            return INVALID_HANDLE_VALUE;
+        }
         if (filename.toLowerCase().endsWith('.bmp')) {
             Logger.log(LogCategory.KERNEL32, `CreateFileW BMP: "${filename}", 0x${dwDesiredAccess.toString(16)}, 0x${dwCreationDisposition.toString(16)}`);
         } else {
@@ -706,7 +716,8 @@ export const exports: Record<string, ThunkImplementation> = (() => {
 
             if (!vfsHandle) {
                 Logger.verbose(LogCategory.KERNEL32, `CreateFileW: file not found or cannot be opened`);
-                System.getInstance().scheduler.setLastError(ERROR_FILE_NOT_FOUND);
+                const err = vfs.classifyOpenFailure(filename, dwCreationDisposition);
+                System.getInstance().scheduler.setLastError(err);
                 return INVALID_HANDLE_VALUE;
             }
 

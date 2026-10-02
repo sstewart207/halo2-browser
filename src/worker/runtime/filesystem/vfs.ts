@@ -264,7 +264,14 @@ export class VirtualFileSystem {
      * Returns null when overlay is unavailable or CREATE_NEW would clobber an existing file.
      */
     openSync(path: string, access: number, disposition: number): VfsFileHandle | null {
+        if (!path || path.trim().length === 0) {
+            return null;
+        }
         const full = this.resolvePath(path);
+        if (this.directoryExists(full)) {
+            Logger.verbose(LogCategory.SYSTEM, `VFS: openSync("${path}") target is a directory`);
+            return null;
+        }
         const relRom = this.relRomPath(full);
         const existsInRom = !this.isRomWhiteout(full) && this.romIndex.has(relRom.toLowerCase());
         const createDisposition = disposition >>> 0;
@@ -366,8 +373,14 @@ export class VirtualFileSystem {
      * Map a failed open to a Win32 error code (GetLastError after INVALID_HANDLE_VALUE).
      */
     classifyOpenFailure(path: string, disposition: number): number {
+        if (!path || path.trim().length === 0) {
+            return 3; // ERROR_PATH_NOT_FOUND
+        }
         const full = this.resolvePath(path);
         const disp = disposition >>> 0;
+        if (this.directoryExists(full)) {
+            return 5; // ERROR_ACCESS_DENIED
+        }
         if (!this.parentDirectoryExists(full)) {
             return 3; // ERROR_PATH_NOT_FOUND
         }
@@ -464,6 +477,9 @@ export class VirtualFileSystem {
     }
 
     async open(path: string, access: number, disposition: number): Promise<VfsFileHandle | null> {
+        if (!path || path.trim().length === 0) {
+            return null;
+        }
         Logger.verbose(LogCategory.SYSTEM, `VFS: open("${path}", access=0x${access.toString(16)}, disposition=0x${disposition.toString(16)}) starting`);
         try {
             // Try sync fast-path first
@@ -476,6 +492,10 @@ export class VirtualFileSystem {
             // Async path for other dispositions
             Logger.verbose(LogCategory.SYSTEM, `VFS: open("${path}") using async path`);
             const full = this.resolvePath(path);
+            if (this.directoryExists(full)) {
+                Logger.verbose(LogCategory.SYSTEM, `VFS: open("${path}") target is a directory`);
+                return null;
+            }
             const overlay = this.overlay;
             const relRom = this.relRomPath(full);
             const existsInOverlay = overlay?.hasFile(full) ?? false;
