@@ -16,6 +16,8 @@ import {
 import { parseInstruction } from './parser';
 import { WasmFunctionBuilder, WasmModuleBuilder } from './wasm-builder';
 
+import { IATResolver } from './iat-resolver';
+
 // Local indices inside lifted WASM function
 export const LOCALS = {
     ESP: 0, // param 0
@@ -50,6 +52,9 @@ export class Lifter {
     moduleBuilder: WasmModuleBuilder;
     options: LiftedModuleOptions;
     funcSigIndex: number;
+    apiImportSigIndex: number;
+    iatResolver?: IATResolver;
+    apiImportMap = new Map<string, number>();
 
     constructor(options: LiftedModuleOptions = {}) {
         this.options = {
@@ -58,6 +63,7 @@ export class Lifter {
             importMemory: false,
             ...options
         };
+        this.iatResolver = options.iatResolver;
         this.moduleBuilder = new WasmModuleBuilder();
         this.moduleBuilder.memoryPages = this.options.memoryPages!;
         this.moduleBuilder.importMemory = !!this.options.importMemory;
@@ -65,6 +71,19 @@ export class Lifter {
 
         // Standard signature: (param $esp i32, $ecx i32, $eax i32) -> (result i32)
         this.funcSigIndex = this.moduleBuilder.addSignature([0x7f, 0x7f, 0x7f], [0x7f]);
+        // Bridge API signature: (param $esp i32) -> (result i32)
+        this.apiImportSigIndex = this.moduleBuilder.addSignature([0x7f], [0x7f]);
+    }
+
+    getOrAddApiImport(dll: string, func: string): number {
+        const key = `${dll.toLowerCase()}_${func}`;
+        if (this.apiImportMap.has(key)) {
+            return this.apiImportMap.get(key)!;
+        }
+        const importName = `win32_${key}`;
+        const idx = this.moduleBuilder.addFunctionImport('env', importName, this.apiImportSigIndex, importName);
+        this.apiImportMap.set(key, idx);
+        return idx;
     }
 
     liftFunction(fn: CFGFunction): WasmFunctionBuilder {
@@ -583,6 +602,42 @@ export class Lifter {
                 }
                 fn.local_get(LOCALS.EAX);
                 fn.return_op();
+                break;
+            }
+            case 'CALL': {
+                const [target] = inst.operands;
+                if (!target) return;
+
+                if (target.kind === 'mem' && this.iatResolver) {
+                    const entry = this.iatResolver.resolve(target.disp);
+                    if (entry) {
+                        const importIdx = this.getOrAddApiImport(entry.dll, entry.func);
+                        fn.comment(`Direct IAT Call: ${entry.dll}!${entry.func}`);
+                        // Push return address: esp = esp - 4; mem[esp] = retAddr
+                        fn.local_get(LOCALS.ESP);
+                        fn.i32_const(4);
+                        fn.i32_sub();
+                        fn.local_set(LOCALS.ESP);
+
+                        fn.local_get(LOCALS.ESP);
+                        fn.i32_const(inst.addr + inst.len);
+                        fn.i32_store(0, 2);
+
+                        // Call imported API with esp
+                        fn.local_get(LOCALS.ESP);
+                        fn.call_func(importIdx, `win32_${entry.dll}_${entry.func}`);
+                        fn.local_set(LOCALS.EAX);
+
+                        // Pop return address: esp = esp + 4
+                        fn.local_get(LOCALS.ESP);
+                        fn.i32_const(4);
+                        fn.i32_add();
+                        fn.local_set(LOCALS.ESP);
+                        return;
+                    }
+                }
+
+                fn.comment(`CALL ${inst.rawOps}`);
                 break;
             }
             default:

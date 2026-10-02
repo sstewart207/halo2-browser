@@ -268,7 +268,7 @@ export class WasmFunctionBuilder {
 export class WasmModuleBuilder {
     signatures: WasmFuncSignature[] = [];
     functions: WasmFunctionBuilder[] = [];
-    imports: { module: string; field: string; kind: number; typeIdx: number }[] = [];
+    functionImports: Array<{ module: string; field: string; typeIdx: number; name?: string }> = [];
     exports: { name: string; kind: number; index: number }[] = [];
     memoryPages: number = 16;
     importMemory: boolean = false;
@@ -287,6 +287,16 @@ export class WasmModuleBuilder {
         const idx = this.signatures.length;
         this.signatures.push({ params, results });
         return idx;
+    }
+
+    addFunctionImport(module: string, field: string, typeIdx: number, name?: string): number {
+        const idx = this.functionImports.length;
+        this.functionImports.push({ module, field, typeIdx, name });
+        return idx;
+    }
+
+    getLocalFunctionIndex(localIdx: number): number {
+        return this.functionImports.length + localIdx;
     }
 
     addFunction(name: string, sigIndex: number): WasmFunctionBuilder {
@@ -312,15 +322,26 @@ export class WasmModuleBuilder {
         sections.push(...createSection(1, typePayload));
 
         // 2. Import Section (ID 2)
-        if (this.importMemory) {
-            const importPayload: number[] = [
-                1, // 1 import
-                ...encodeString('env'),
-                ...encodeString('memory'),
-                0x02, // memory import
-                0x00, // flags: min only
-                ...encodeULEB128(this.memoryPages)
-            ];
+        const totalImports = (this.importMemory ? 1 : 0) + this.functionImports.length;
+        if (totalImports > 0) {
+            const importPayload: number[] = [...encodeULEB128(totalImports)];
+            if (this.importMemory) {
+                importPayload.push(
+                    ...encodeString('env'),
+                    ...encodeString('memory'),
+                    0x02, // memory import
+                    0x00, // flags: min only
+                    ...encodeULEB128(this.memoryPages)
+                );
+            }
+            for (const fi of this.functionImports) {
+                importPayload.push(
+                    ...encodeString(fi.module),
+                    ...encodeString(fi.field),
+                    0x00, // func import
+                    ...encodeULEB128(fi.typeIdx)
+                );
+            }
             sections.push(...createSection(2, importPayload));
         }
 
@@ -351,7 +372,8 @@ export class WasmModuleBuilder {
         }
 
         for (const exp of this.exports) {
-            exportPayload.push(...encodeString(exp.name), exp.kind, ...encodeULEB128(exp.index));
+            const funcIdx = exp.kind === 0 ? (exp.index + this.functionImports.length) : exp.index;
+            exportPayload.push(...encodeString(exp.name), exp.kind, ...encodeULEB128(funcIdx));
         }
         sections.push(...createSection(7, exportPayload));
 
@@ -374,6 +396,14 @@ export class WasmModuleBuilder {
             lines.push(`  (import "env" "memory" (memory ${this.memoryPages}))`);
         } else {
             lines.push(`  (memory (export "memory") ${this.memoryPages})`);
+        }
+
+        for (let i = 0; i < this.functionImports.length; i++) {
+            const fi = this.functionImports[i];
+            const sig = this.signatures[fi.typeIdx];
+            const params = sig.params.map((_, idx) => `(param $p${idx} i32)`).join(' ');
+            const results = sig.results.map(() => '(result i32)').join(' ');
+            lines.push(`  (import "${fi.module}" "${fi.field}" (func $${fi.name || `import_${i}`} ${params} ${results}))`);
         }
 
         for (let i = 0; i < this.functions.length; i++) {

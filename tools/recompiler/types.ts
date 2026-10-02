@@ -74,4 +74,6 @@ export interface LiftedModuleOptions {
     memoryPages?: number; // default 32768 (2GB) or 16 (1MB for unit tests)
     exportMemory?: boolean;
     moduleName?: string;
+    iatResolver?: any;
 }
+

@@ -1,5 +1,22 @@
 # Next agent: first playable build (menu text is fixed)
 
+## Oct 2 2026, Antigravity/Gemini (with Codex): STATIC RECOMPILATION STAGE 3 (RUNTIME LINKER & IAT BRIDGE) COMPLETE (NEWEST-34)
+
+Read this section first; it supersedes earlier notes below.
+
+### 1. Stage 3 Runtime Linker & IAT Bridge Implemented (`tools/recompiler/`)
+- **`iat-resolver.ts`:** Parses PE DOS headers, optional headers, and Import Directory Tables directly from `halo2.exe`. Maps all 413 imported Win32 functions across `KERNEL32`, `USER32`, `GDI32`, `ADVAPI32`, `d3d9`, `dinput8`, `dsound`, etc., to their exact IAT slot addresses (e.g. `0x79b458` $\to$ `USER32.dll:GetCursor`, `0x79b21c` $\to$ `KERNEL32.dll:FindResourceA`).
+- **`wasm-builder.ts`:** Full support for function imports (Section 2) with signature registration and re-indexing of exported local functions.
+- **`lifter.ts`:** Detects direct and indirect `CALL [disp]` targeting IAT slots. Simulates pushing the return address (`esp -= 4; mem[esp] = retAddr`), dispatches the call directly to imported WASM functions with `$esp`, stores the return value in `EAX`, and restores the return address.
+- **`runtime-bridge.ts`:** Implements `RuntimeBridge` binding imported WASM functions directly to BottleShip's existing HLE modules (`Kernel32`, `User32`, `D3D9`, etc.) over a shared `WebAssembly.Memory` buffer. Marshals stdcall arguments directly from linear stack memory at `[esp + 4]`, `[esp + 8]`, etc.
+- **`tools/recompile-cfg.ts`:** Recompiles CFGs with live IAT binding. In `halo2.exe` 100-function sample: 5 live IAT imports bound, lifted in **16.06 ms**, compiled in **2.49 ms**, and successfully instantiated with 101 exports!
+- **`tools/tests/recompiler-runtime-bridge.test.ts`:** Verified PE IAT parsing from real `halo2.exe`, imported API call execution, and stdcall argument stack marshalling. All 15 recompiler tests pass. All 954 project tests pass in 532ms.
+
+### 2. Immediate Next Goal (Full Recompilation & Loop Integration):
+- Run batch CFG extraction across all functions of `halo2.exe` via `tools/extract-ghidra-cfg.ps1`.
+- Recompile core game tick / update loop and renderer functions.
+- Execute game logic natively with WebGPU D3D9 presentation at steady 60 FPS in Chrome and iOS Safari.
+
 ## Oct 2 2026, Antigravity/Gemini (with Codex): STATIC RECOMPILATION STAGE 2 (AOT LIFTER) COMPLETE (NEWEST-33)
 
 Read this section first; it supersedes earlier notes below.
