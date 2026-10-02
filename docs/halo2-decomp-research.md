@@ -27,3 +27,10 @@ Oct 2 2026 (Claude Sonnet 5.5), from web searches only. Nothing here was run or 
 ## Legal / hygiene
 
 Use only your own legally owned binary and Cartographer's open-source code. Do not use leaked source. Keep game assets, bundles and saves out of Git. Do not post to upstream repos without the owner's approval.
+
+## How the 60 fps browser ports get their speed (web research, Oct 2 2026; not verified locally)
+
+- **No CPU emulation.** The game's logic runs as native-speed WebAssembly: Halo CE from its decompiled C source ([Halo-Mobile](https://github.com/OMG-Guest/Halo-Mobile)), Pepsiman (PS1) from [PSXRecomp](https://heldgames.com/guides/ps1-recompilation-explained), which mechanically rewrites the original machine code as C and compiles it to WebAssembly ([Notebookcheck](https://www.notebookcheck.net/A-recompiled-version-of-Pepsiman-lets-you-play-the-PS1-cult-classic-natively-in-your-browser-at-60-FPS.1354060.0.html)). No per-frame instruction translation.
+- **Modern web plumbing around it:** WebGL 2, WebAssembly threads, OffscreenCanvas in a worker (an experimental direct worker-canvas mode cuts frame transport), OPFS for storage, service workers; cross-origin isolation required, same as this project.
+- **Caveats:** both targets are small, old engines with purpose-built tooling, and the Halo CE author reports poor iOS/Android performance. There is no equivalent turnkey tool for a 14 MB Windows x86 game like halo2.exe.
+- **What carries over here:** the BottleShip fake-Windows and D3D9-to-WebGPU layers stay. Recompiled code would call them directly instead of through emulator OUT-port traps, which should also cut the roughly 22 ms/frame thunk cost.
