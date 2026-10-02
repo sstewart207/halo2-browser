@@ -14,6 +14,8 @@ Budget: user is nearly out of OpenAI quota, expects Gemini access in about an ho
 
 ## Rules for any agent, including free or smaller models (added Oct 2 by Claude Sonnet 5.5)
 
+- Platform scope: desktop Chrome on a PC first; phones (Android/iOS) only after desktop gameplay is solid. Speed (60 fps) needs the CPU emulation removed (recompile or decomp); see work/bottleship-research/docs/halo2-decomp-research.md. A ready-to-paste takeover prompt for free/smaller models is work/bottleship-research/docs/prompt-space-bunny-alpha-max.md.
+
 Read in this order: this file, HANDOFF.md newest NEWEST-N entry, then `work/bottleship-research/docs/halo2-boot-recipe.md`. Work in small steps and prove each one with a screenshot, a number, or a passing test. Do not claim something works because the code compiled.
 
 **Safe, useful tasks for a smaller model:** boot the game with the recipe and test in-level input (mouse look, W/A/S/D, Escape); measure fps and guest RAM with the dev panel's System stats strip; leave the game running a few minutes and note any crash or RAM growth; improve docs; run `node node_modules/tsgo/bin/tsc -p tsconfig.json --noEmit` and the test suite (`bun test tools/tests` using the toolchain bun at `work/toolchain/node_modules/@oven/bun-windows-x64/bin/bun.exe`).
