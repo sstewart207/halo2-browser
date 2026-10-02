@@ -81,6 +81,14 @@ export const REG_TO_LOCAL: Record<BaseRegisterName, number> = {
     ST5: LOCALS.ST5,
     ST6: LOCALS.ST6,
     ST7: LOCALS.ST7,
+    MM0: LOCALS.ST0,
+    MM1: LOCALS.ST1,
+    MM2: LOCALS.ST2,
+    MM3: LOCALS.ST3,
+    MM4: LOCALS.ST4,
+    MM5: LOCALS.ST5,
+    MM6: LOCALS.ST6,
+    MM7: LOCALS.ST7,
     ES: LOCALS.TMP0,
     DS: LOCALS.TMP0,
     FS: LOCALS.TMP0,
@@ -1075,6 +1083,37 @@ export class Lifter {
                 fn.local_set(LOCALS.EAX);
                 fn.i32_const(0);
                 fn.local_set(LOCALS.EDX);
+                break;
+            }
+            case 'PXOR': {
+                const [dst] = inst.operands;
+                if (!dst) return;
+                fn.f32_const(0.0);
+                this.emitStoreFloatValue(fn, dst);
+                break;
+            }
+            case 'MOVQ': {
+                const [dst, src] = inst.operands;
+                if (!dst || !src) return;
+                this.emitLoadFloatValue(fn, src);
+                this.emitStoreFloatValue(fn, dst);
+                break;
+            }
+            case 'MOVD': {
+                const [dst, src] = inst.operands;
+                if (!dst || !src) return;
+                if (dst.kind === 'reg' && src.kind === 'reg') {
+                    fn.local_get(REG_TO_LOCAL[src.baseReg]);
+                    fn.i32_trunc_f32_s();
+                    this.emitStoreOperandValue(fn, dst);
+                } else if (dst.kind === 'reg') {
+                    this.emitLoadOperandValue(fn, src);
+                    this.emitStoreOperandValue(fn, dst);
+                }
+                break;
+            }
+            case 'PUNPCKHDQ': {
+                // Interleave MMX high dwords (stub)
                 break;
             }
             case 'NOP':

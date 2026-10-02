@@ -36,8 +36,39 @@ export function encodeString(str: string): number[] {
     return [...encodeULEB128(buf.length), ...buf];
 }
 
-export function createSection(id: number, payload: number[]): number[] {
-    return [id, ...encodeULEB128(payload.length), ...payload];
+export class ByteWriter {
+    chunks: Uint8Array[] = [];
+    totalLength = 0;
+
+    write(bytes: ArrayLike<number> | Uint8Array) {
+        const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+        if (u8.length === 0) return;
+        this.chunks.push(u8);
+        this.totalLength += u8.length;
+    }
+
+    toUint8Array(): Uint8Array {
+        const out = new Uint8Array(this.totalLength);
+        let offset = 0;
+        for (const chunk of this.chunks) {
+            out.set(chunk, offset);
+            offset += chunk.length;
+        }
+        return out;
+    }
+}
+
+export function createSection(id: number, payload: Uint8Array | number[]): Uint8Array {
+    const len = payload.length;
+    const lenBytes = encodeULEB128(len);
+    const header = new Uint8Array(1 + lenBytes.length);
+    header[0] = id;
+    header.set(lenBytes, 1);
+
+    const out = new Uint8Array(header.length + len);
+    out.set(header, 0);
+    out.set(payload instanceof Uint8Array ? payload : new Uint8Array(payload), header.length);
+    return out;
 }
 
 export interface WasmFuncSignature {
@@ -294,13 +325,19 @@ export class WasmFunctionBuilder {
         this.watLines.push(`    ;; ${text}`);
     }
 
-    buildCodeBody(): number[] {
+    buildCodeBody(): Uint8Array {
         // Locals: vector of [count, type]
         const localsCount = this.locals.length / 2;
-        const localBytes: number[] = [...encodeULEB128(localsCount), ...this.locals];
-        // Instructions + terminating end
-        const bodyBytes = [...localBytes, ...this.bytecode, 0x0B];
-        return [...encodeULEB128(bodyBytes.length), ...bodyBytes];
+        const localBytes = [...encodeULEB128(localsCount), ...this.locals];
+        const bodyLength = localBytes.length + this.bytecode.length + 1; // +1 for 0x0B
+        const lenBytes = encodeULEB128(bodyLength);
+
+        const out = new Uint8Array(lenBytes.length + bodyLength);
+        out.set(lenBytes, 0);
+        out.set(localBytes, lenBytes.length);
+        out.set(this.bytecode, lenBytes.length + localBytes.length);
+        out[out.length - 1] = 0x0B;
+        return out;
     }
 }
 
@@ -349,7 +386,10 @@ export class WasmModuleBuilder {
     }
 
     toBinary(): Uint8Array {
-        const sections: number[] = [];
+        const writer = new ByteWriter();
+
+        // Header: \0asm + version 1
+        writer.write(new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]));
 
         // 1. Type Section (ID 1)
         const typePayload: number[] = [...encodeULEB128(this.signatures.length)];
@@ -358,7 +398,7 @@ export class WasmModuleBuilder {
             typePayload.push(...encodeULEB128(sig.params.length), ...sig.params);
             typePayload.push(...encodeULEB128(sig.results.length), ...sig.results);
         }
-        sections.push(...createSection(1, typePayload));
+        writer.write(createSection(1, typePayload));
 
         // 2. Import Section (ID 2)
         const totalImports = (this.importMemory ? 1 : 0) + this.functionImports.length;
@@ -381,7 +421,7 @@ export class WasmModuleBuilder {
                     ...encodeULEB128(fi.typeIdx)
                 );
             }
-            sections.push(...createSection(2, importPayload));
+            writer.write(createSection(2, importPayload));
         }
 
         // 3. Function Section (ID 3)
@@ -389,7 +429,7 @@ export class WasmModuleBuilder {
         for (const fn of this.functions) {
             funcPayload.push(...encodeULEB128(fn.sigIndex));
         }
-        sections.push(...createSection(3, funcPayload));
+        writer.write(createSection(3, funcPayload));
 
         // 5. Memory Section (ID 5) - only if memory is not imported
         if (!this.importMemory) {
@@ -398,7 +438,7 @@ export class WasmModuleBuilder {
                 0x00, // flags: min only
                 ...encodeULEB128(this.memoryPages)
             ];
-            sections.push(...createSection(5, memPayload));
+            writer.write(createSection(5, memPayload));
         }
 
         // 7. Export Section (ID 7)
@@ -414,18 +454,17 @@ export class WasmModuleBuilder {
             const funcIdx = exp.kind === 0 ? (exp.index + this.functionImports.length) : exp.index;
             exportPayload.push(...encodeString(exp.name), exp.kind, ...encodeULEB128(funcIdx));
         }
-        sections.push(...createSection(7, exportPayload));
+        writer.write(createSection(7, exportPayload));
 
-        // 10. Code Section (ID 10)
-        const codePayload: number[] = [...encodeULEB128(this.functions.length)];
+        // 10. Code Section (ID 10) - streamed via ByteWriter to avoid call-stack limits
+        const codeWriter = new ByteWriter();
+        codeWriter.write(encodeULEB128(this.functions.length));
         for (const fn of this.functions) {
-            codePayload.push(...fn.buildCodeBody());
+            codeWriter.write(fn.buildCodeBody());
         }
-        sections.push(...createSection(10, codePayload));
+        writer.write(createSection(10, codeWriter.toUint8Array()));
 
-        // Header: \0asm + version 1
-        const header = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
-        return new Uint8Array([...header, ...sections]);
+        return writer.toUint8Array();
     }
 
     toWat(): string {

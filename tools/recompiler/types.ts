@@ -37,10 +37,11 @@ export interface CFGExport {
 
 export type GpRegisterName = 'EAX' | 'ECX' | 'EDX' | 'EBX' | 'ESP' | 'EBP' | 'ESI' | 'EDI';
 export type XmmRegisterName = 'XMM0' | 'XMM1' | 'XMM2' | 'XMM3' | 'XMM4' | 'XMM5' | 'XMM6' | 'XMM7';
+export type MmxRegisterName = 'MM0' | 'MM1' | 'MM2' | 'MM3' | 'MM4' | 'MM5' | 'MM6' | 'MM7';
 export type FpuRegisterName = 'ST0' | 'ST1' | 'ST2' | 'ST3' | 'ST4' | 'ST5' | 'ST6' | 'ST7';
 export type SegmentRegisterName = 'ES' | 'DS' | 'FS' | 'GS' | 'CS' | 'SS';
 
-export type BaseRegisterName = GpRegisterName | XmmRegisterName | FpuRegisterName | SegmentRegisterName;
+export type BaseRegisterName = GpRegisterName | XmmRegisterName | MmxRegisterName | FpuRegisterName | SegmentRegisterName;
 
 export interface RegisterOperand {
     kind: 'reg';

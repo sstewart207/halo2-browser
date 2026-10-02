@@ -60,6 +60,15 @@ const REG_MAP: Record<string, { base: BaseRegisterName; size: 1 | 2 | 4 | 8 | 16
     ST5: { base: 'ST5', size: 8 },
     ST6: { base: 'ST6', size: 8 },
     ST7: { base: 'ST7', size: 8 },
+    // MMX registers (64-bit)
+    MM0: { base: 'MM0', size: 8 },
+    MM1: { base: 'MM1', size: 8 },
+    MM2: { base: 'MM2', size: 8 },
+    MM3: { base: 'MM3', size: 8 },
+    MM4: { base: 'MM4', size: 8 },
+    MM5: { base: 'MM5', size: 8 },
+    MM6: { base: 'MM6', size: 8 },
+    MM7: { base: 'MM7', size: 8 },
     // Segment registers
     ES: { base: 'ES', size: 2 },
     DS: { base: 'DS', size: 2 },
