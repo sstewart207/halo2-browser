@@ -93,17 +93,28 @@ The workstation has all necessary tools pre-installed:
 
 ## 5. Phased Implementation Roadmap
 
-### Phase 1: Prototype Extraction & Lifter (In Progress - Stage 1 Extractor Complete)
-- **Status:** Headless Ghidra script [`ExportFunctionCFG.java`](file:///c:/Users/sstew/Documents/Codex/2026-09-29/private-just-for-us-do-i/work/halo2-browser/scratch/ghidra/ExportFunctionCFG.java) implemented and verified.
-- **Runner:** Run [`tools/extract-ghidra-cfg.ps1`](file:///c:/Users/sstew/Documents/Codex/2026-09-29/private-just-for-us-do-i/work/bottleship-research/tools/extract-ghidra-cfg.ps1) to extract function boundaries, basic blocks, disassembled x86 instructions, and CFG destinations from `halo2.exe` into structured JSON (see [`cfg_sample.json`](file:///c:/Users/sstew/Documents/Codex/2026-09-29/private-just-for-us-do-i/work/halo2-browser/scratch/ghidra/cfg_sample.json)).
-- **Next Task for Lifter:** Implement the x86 basic-block to WebAssembly lifter (TypeScript or Rust with `wasm32-unknown-unknown` target) translating the exported JSON blocks to `.wat` or WASM bytecode.
+### Stage 1: Headless Ghidra Analysis & Extraction (COMPLETE - NEWEST-32)
+- **Status:** Complete & verified.
+- **Extractor:** [`tools/ExportFunctionCFG.java`](file:///c:/Users/sstew/Documents/Codex/2026-09-29/private-just-for-us-do-i/work/halo2-browser/scratch/ghidra/ExportFunctionCFG.java) run via [`tools/extract-ghidra-cfg.ps1`](file:///c:/Users/sstew/Documents/Codex/2026-09-29/private-just-for-us-do-i/work/bottleship-research/tools/extract-ghidra-cfg.ps1).
+- **Output:** Disassembles basic blocks, boundaries, instructions, and CFG edges into structured JSON (e.g. `cfg_sample.json`, `cfg_100.json`).
 
-### Phase 2: Runtime Shim & Memory Bridge
-- Allocate a shared `WebAssembly.Memory` buffer matching BottleShip's existing guest RAM layout.
-- Connect recompiled WASM function calls to BottleShip's existing JS/WASM Win32 API table.
-- Verify basic math, string, and utility functions run correctly outside `v86`.
+### Stage 2: AOT x86 -> WebAssembly Lifter (COMPLETE - NEWEST-33)
+- **Status:** Complete & verified (commit `81b28ae`).
+- **Lifter Engine:** Located in [`tools/recompiler/`](file:///c:/Users/sstew/Documents/Codex/2026-09-29/private-just-for-us-do-i/work/bottleship-research/tools/recompiler):
+  - `parser.ts`: Handles all 32-bit registers, sub-registers (`AL`/`AH` etc.), and effective addresses (`[base + index*scale + disp]`).
+  - `wasm-builder.ts`: Direct zero-dependency binary WebAssembly (`Uint8Array`) and WAT text emitter with ULEB128/SLEB128 variable-length integer encoding.
+  - `lifter.ts`: Maps registers to WASM locals, evaluates arithmetic/logic/memory/stack operations, tracks EFLAGS (`ZF`, `SF`, `CF`, `OF`), and structures arbitrary CFG branches and loops via `br_table` dispatch.
+- **Verification:** [`tools/tests/recompiler-lifter.test.ts`](file:///c:/Users/sstew/Documents/Codex/2026-09-29/private-just-for-us-do-i/work/bottleship-research/tools/tests/recompiler-lifter.test.ts). 12/12 unit tests pass in 49ms.
 
-### Phase 3: Graphics & Game Loop Integration
-- Connect D3D9 device creation and frame presentation to BottleShip's WebGPU device.
-- Recompile the game's core update loop (`game_tick`) and rasterizer setup.
-- Benchmark FPS on desktop Chrome and iOS Safari. Goal: **Steady 60 FPS**.
+### Stage 3: Runtime Linking & Win32 IAT Bridge (COMPLETE - NEWEST-34)
+- **Status:** Complete & verified (commit `9d4a8d7`).
+- **IAT Resolver:** [`tools/recompiler/iat-resolver.ts`](file:///c:/Users/sstew/Documents/Codex/2026-09-29/private-just-for-us-do-i/work/bottleship-research/tools/recompiler/iat-resolver.ts) parses PE headers from `halo2.exe` to map all 413 Win32 IAT slots to exact DLL/API names.
+- **Runtime Bridge:** [`tools/recompiler/runtime-bridge.ts`](file:///c:/Users/sstew/Documents/Codex/2026-09-29/private-just-for-us-do-i/work/bottleship-research/tools/recompiler/runtime-bridge.ts) binds typed WASM function imports directly to BottleShip HLE modules (`Kernel32`, `User32`, `D3D9`, etc.) over shared linear `WebAssembly.Memory`.
+- **Zero-Trap Calls:** `CALL [IAT_SLOT]` routes directly to imported WebAssembly functions, reading stdcall parameters from stack linear memory with zero v86 emulator OUT-port traps (<0.1 ms overhead).
+- **Verification:** [`tools/tests/recompiler-runtime-bridge.test.ts`](file:///c:/Users/sstew/Documents/Codex/2026-09-29/private-just-for-us-do-i/work/bottleship-research/tools/tests/recompiler-runtime-bridge.test.ts). All 15 recompiler tests pass. All 954 project tests pass.
+
+### Stage 4: Full Game Binary Recompilation & Game Loop Integration (NEXT)
+- **Step 1:** Run full headless Ghidra extraction on `halo2.exe` (`MaxFunctions = 0`) to extract all 15,893 functions into `cfg_halo2_full.json`.
+- **Step 2:** Recompile the full binary using `bun tools/recompile-cfg.ts cfg_halo2_full.json halo2_full`.
+- **Step 3:** Hook entry point and core tick loop (`game_tick`, window pump, frame presentation) in BottleShip's worker bootloader.
+- **Step 4:** Benchmark FPS in desktop Chrome and test WebGPU on iOS Safari to verify **steady 60 FPS**.
