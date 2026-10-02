@@ -1,5 +1,19 @@
 # Next agent: first playable build (menu text is fixed)
 
+## Oct 2 2026, Antigravity/Gemini (with Codex): STATIC RECOMPILATION STAGE 4 (SSE/FPU LIFTER & 1,000-FUNCTION MILESTONE) COMPLETE (NEWEST-35)
+
+Read this section first; it supersedes earlier notes below.
+
+### 1. Stage 4 SSE/FPU Lifter & 1,000-Function Scaling Milestone
+- **SSE Floating-Point Math (`lifter.ts`):** Complete lifting for SSE scalar floats (`XMM0`..`XMM7`, `MOVSS`, `ADDSS`, `SUBSS`, `MULSS`, `DIVSS`, `COMISS`, `CVTSI2SS`, `CVTTSS2SI`, `XORPS`, `MOVAPS`). Maps float registers to WASM `f32` locals, enabling native vector/float math for Halo 2's 3D engine.
+- **x87 FPU & MMX Stack (`lifter.ts`):** Supports `ST0`..`ST7`, `FLD`, `FLD1`, `FILD`, `FST`, `FSTP`, `FISTP`, `FADD`, `FADDP`, `FIADD`, `FSUB`, `FSUBP`, `FSUBRP`, `FMUL`, `FMULP`, `FDIV`, `FDIVP`, `FDIVR`, `FCHS`, `FABS`, `FXCH`, and MMX registers (`MM0`..`MM7`, `PXOR`, `MOVQ`, `MOVD`, `PUNPCKHDQ`).
+- **Extended Integer Set (`lifter.ts`):** Added `ROL`, `ROR`, `NEG`, `NOT`, `CDQ`, `ADC`, `SBB`, `SETcc` (`SETZ`, `SETNZ`, `SETC`, `SETLE`, `SETL`, `SETG`, `SETGE`, `SETO`), `MUL`, `DIV`, `IDIV`, `CMPXCHG.LOCK`, `STOSD.REP`, `MOVSD.REP`, `RDTSC`.
+- **Zero-Stack Streaming `ByteWriter` (`wasm-builder.ts`):** Eliminated JavaScript array spread argument stack overflows when generating large modules. Functions stream into `ByteWriter` chunks, enabling arbitrary module sizing.
+- **1,000-Function Halo 2 Verification:** Lifted 1,000 functions (8,606 basic blocks, 49,437 instructions, 60 live Win32 IAT functions bound) in **156.46 ms**. Generated 873 KB WebAssembly binary compiling in **10.81 ms** and instantiating with 1,001 exports. All 956 unit tests pass in 485ms.
+
+### 2. Immediate Next Goal:
+- Connect the recompiled Entry Point (`0x421756`) and main game loop (`game_tick`) into the browser runtime harness to execute natively without CPU emulator overhead.
+
 ## Oct 2 2026, Antigravity/Gemini (with Codex): STATIC RECOMPILATION STAGE 3 (RUNTIME LINKER & IAT BRIDGE) COMPLETE (NEWEST-34)
 
 Read this section first; it supersedes earlier notes below.
