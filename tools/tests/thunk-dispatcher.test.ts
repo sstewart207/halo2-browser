@@ -308,3 +308,12 @@ describe('ThunkDispatcher.checkEbpSanity (frame-pointer tripwire)', () => {
         expect(d.getLastWildEbpNote()).toBeNull();
     });
 });
+
+describe('ThunkDispatcher AOT pending API lookup', () => {
+    it('finds a pending registration through a PE DLL suffix', () => {
+        const d = mkDispatcher();
+        const impl = () => ({value: 0, stackCleanup: 4});
+        d.pendingRegistrations.set('kernel32:deletecriticalsection', {impl});
+        expect(d.getImplementation('KERNEL32.dll', 'DeleteCriticalSection')).toBe(impl);
+    });
+});

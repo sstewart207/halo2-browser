@@ -341,17 +341,9 @@ export class Lifter {
         const loopDepth = blockIdx;
 
         if (lastInst.mnemonic === 'RET') {
-            if (lastInst.operands.length > 0 && lastInst.operands[0].kind === 'imm') {
-                const imm = lastInst.operands[0].value;
-                if (imm > 0) {
-                    fn.local_get(LOCALS.ESP);
-                    fn.i32_const(imm);
-                    fn.i32_add();
-                    fn.local_set(LOCALS.ESP);
-                }
-            }
-            fn.local_get(LOCALS.EAX);
-            fn.return_op();
+            // Use the same return path as straight-line functions: publish ESP
+            // after popping the return address and any stdcall arguments.
+            this.liftInstruction(fn, lastInst);
             return;
         }
 
@@ -394,8 +386,8 @@ export class Lifter {
             return;
         }
 
-        // Otherwise execute last inst and fall through
-        this.liftInstruction(fn, lastInst);
+        // Non-branch instructions, including the last one, were already emitted.
+        // Re-emitting a terminal CALL executes it twice and corrupts the stack.
         const nextIdx = (blockIdx + 1) % numBlocks;
         fn.i32_const(nextIdx);
         fn.local_set(LOCALS.BLOCK_ID);

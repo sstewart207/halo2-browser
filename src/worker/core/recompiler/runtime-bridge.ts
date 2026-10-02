@@ -5,14 +5,12 @@
 
 import { Logger, LogCategory } from '../logger';
 
-import { X86Context, ThunkImplementation, ThunkDispatcher } from '../thunking/thunk-dispatcher';
-
-export interface IIATResolver {
-    resolve(rva: number): { dll: string; func: string } | null;
-}
+import { X86Context, ThunkImplementation, ThunkDispatcher, ThunkResult } from '../thunking/thunk-dispatcher';
+export interface IIATResolver { resolve(rva: number): {dll: string; func: string} | null; }
 
 export interface RuntimeBridgeOptions {
     memory: WebAssembly.Memory;
+    enableAsync?: boolean;
     memoryOffset?: number;
     memoryLength?: number;
     iatResolver?: IIATResolver;
@@ -107,14 +105,15 @@ const KNOWN_WIN32_ARG_COUNTS = new Map<string, number>([
 ]);
 
 export class RuntimeBridge {
+
     memory: WebAssembly.Memory;
+    enableAsync: boolean;
     memoryOffset: number;
     memoryLength?: number;
     iatResolver?: IIATResolver;
     dispatcher?: ThunkDispatcher;
     logCalls: boolean;
     espGlobal?: WebAssembly.Global;
-
     private apiModules = new Map<string, Record<string, ThunkImplementation>>();
     private registeredImports: Record<string, Function> = {};
     private addressToExport = new Map<number, (esp: number, ecx: number, eax: number) => number>();
@@ -123,6 +122,7 @@ export class RuntimeBridge {
 
     constructor(options: RuntimeBridgeOptions) {
         this.memory = options.memory;
+        this.enableAsync = options.enableAsync ?? false;
         this.memoryOffset = options.memoryOffset ?? 0;
         this.memoryLength = options.memoryLength;
         this.iatResolver = options.iatResolver;
@@ -169,6 +169,7 @@ export class RuntimeBridge {
         }
     }
 
+
     registerDynamicApi(dll: string, func: string): number {
         const addr = this.nextDynamicApiAddr;
         this.nextDynamicApiAddr += 16;
@@ -177,17 +178,17 @@ export class RuntimeBridge {
     }
 
     getStackCleanupBytes(dll: string, func: string, defaultArgCount: number = 4): number {
+
         const m = func.match(/@(\d+)$/);
         if (m) {
             return parseInt(m[1], 10);
         }
         if (this.dispatcher) {
-            const stub = this.dispatcher.getStubByName(dll, func);
+            const stub = this.dispatcher.getStubByName?.(dll, func);
             if (stub && stub.stackCleanupBytes !== undefined) {
                 return stub.stackCleanupBytes;
             }
         }
-
         const key = `${dll.toLowerCase().replace(/\.dll$/, '')}:${func.toLowerCase()}`;
         if (KNOWN_WIN32_ARG_COUNTS.has(key)) {
             return KNOWN_WIN32_ARG_COUNTS.get(key)! * 4;
@@ -195,7 +196,7 @@ export class RuntimeBridge {
         return defaultArgCount * 4;
     }
 
-    callApi(dll: string, func: string, esp: number, argCount: number = 4): number {
+    callApi(dll: string, func: string, esp: number, argCount: number = 4): number | Promise<number> {
         const memBytes = new Uint8Array(this.memory.buffer, this.memoryOffset, this.memoryLength);
         const view = new DataView(this.memory.buffer, this.memoryOffset, this.memoryLength);
 
@@ -205,9 +206,6 @@ export class RuntimeBridge {
             args.push(view.getUint32(esp + 4 + i * 4, true));
         }
 
-        if (this.logCalls) {
-            Logger.log(LogCategory.SYSTEM, `[AOT API] ${dll}!${func} esp=0x${(esp >>> 0).toString(16)} args=${args.map(a => '0x' + (a >>> 0).toString(16)).join(',')}`);
-        }
         const ctx: X86Context = {
             eax: 0,
             ecx: 0,
@@ -232,40 +230,44 @@ export class RuntimeBridge {
             console.log(`[RuntimeBridge] CALL ${dll}!${func}(${args.map(a => '0x' + (a >>> 0).toString(16)).join(', ')})`);
         }
 
-        let returnVal = 0;
-        if (impl) {
-            const res = impl(ctx, memBytes, args);
-            if (res instanceof Promise) throw new Error(`AOT async API unsupported: ${dll}!${func}`);
-            if (typeof res === 'object' && res !== null && 'terminated' in res && res.terminated) {
-                throw new Error(`AOT process terminated by ${dll}!${func} (argument 0x${(args[0] >>> 0).toString(16)})`);
+        if (!impl) throw new Error(`AOT API implementation missing: ${dll}!${func}`);
+        const finish = (res: number | ThunkResult): number => {
+            if (typeof res === 'object' && res !== null) {
+                if (res.terminated) throw new Error(`AOT process terminated by ${dll}!${func} (argument 0x${(args[0] >>> 0).toString(16)})`);
+                if (res.dllInits?.length) throw new Error(`AOT native DLL initialization required: ${res.dllInits.map(d => `${d.name}@0x${d.entryPoint.toString(16)}`).join(', ')}`);
+                if (res.suspendedForCallback || res.startCallbackChain || res.blockedNoSwitch || res.sehTrampoline || res.deferredWrites?.length) {
+                    throw new Error(`AOT API requires unsupported guest continuation: ${dll}!${func}`);
+                }
             }
-            if (typeof res === 'number') {
-                returnVal = res;
-            } else if (typeof res === 'object' && res !== null && 'value' in res) {
-                returnVal = (res as any).value;
-            }
-        } else {
-            console.warn(`[RuntimeBridge] Unimplemented Win32 API: ${dll}!${func}`);
+            const cleanup = typeof res === 'object' && res !== null && res.stackCleanup !== undefined
+                ? res.stackCleanup : this.getStackCleanupBytes(dll, func, argCount);
+            if (this.espGlobal) this.espGlobal.value = (esp + 4 + cleanup) >>> 0;
+            return typeof res === 'number' ? res : res.value;
+        };
+        if (this.logCalls) Logger.log(LogCategory.SYSTEM, `[AOT API] ${dll}!${func} esp=0x${esp.toString(16)} args=${args.map(a => '0x'+a.toString(16)).join(',')}`);
+        const res = impl(ctx, memBytes, args);
+        if (res instanceof Promise) {
+            if (!this.enableAsync) throw new Error(`AOT async API unsupported: ${dll}!${func}`);
+            return res.then(finish);
         }
-
-        // Callee cleans up stack: pop return address (+4) and callee arguments (+cleanupBytes)
-        const cleanupBytes = this.getStackCleanupBytes(dll, func, argCount);
-        if (this.espGlobal) {
-            this.espGlobal.value += 4 + cleanupBytes;
-        }
-
-        return returnVal;
+        return finish(res);
     }
 
     bindIndirectCall(): void {
-        this.registeredImports['indirect_call'] = (target: number, esp: number, ecx: number, eax: number): number => {
+        this.registeredImports['indirect_call'] = (target: number, esp: number, ecx: number, eax: number): number | Promise<number> => {
             const addr = target >>> 0;
+            if (this.logCalls) {
+                console.log(`[RuntimeBridge] -> indirect_call(target=0x${addr.toString(16)}, esp=0x${esp.toString(16)}, eax=0x${eax.toString(16)})`);
+            }
 
             // 1. Direct recompiled function export
             const wasmFn = this.addressToExport.get(addr);
             if (wasmFn) {
+                // A nested promising boundary lets JSPI suspend across the JS dispatcher.
+                if (this.enableAsync) return (WebAssembly as any).promising(wasmFn)(0, ecx, eax);
                 return wasmFn(0, ecx, eax);
             }
+
 
             // 2. Direct IAT resolution (from dynamic table or IATResolver)
             if (this.dynamicIatTable.has(addr)) {
@@ -279,10 +281,10 @@ export class RuntimeBridge {
                 }
             }
 
-            // 3. Inspect linear memory at target for x86 CALL/JMP thunk
 
+            // 3. Inspect linear memory at target for x86 CALL/JMP thunk
             // e.g. CALL [iat_addr] (0xff 0x15 <iat_addr>) or JMP [iat_addr] (0xff 0x25 <iat_addr>)
-            if (addr > 0 && addr + 6 <= this.memory.buffer.byteLength) {
+            if (addr > 0 && addr + 6 <= (this.memoryLength ?? (this.memory.buffer.byteLength - this.memoryOffset))) {
                 const view = new DataView(this.memory.buffer, this.memoryOffset, this.memoryLength);
                 const opcode = view.getUint16(addr, true);
                 if (opcode === 0x15ff || opcode === 0x25ff) {
@@ -313,10 +315,8 @@ export class RuntimeBridge {
             if (this.logCalls) {
                 console.warn(`[RuntimeBridge] Unresolved indirect call to 0x${addr.toString(16)} (esp=0x${esp.toString(16)}, ecx=0x${ecx.toString(16)}, eax=0x${eax.toString(16)})`);
             }
-            if (this.espGlobal) {
-                this.espGlobal.value += 4;
-            }
-            return 0;
+            Logger.error(LogCategory.SYSTEM, `[AOT unresolved] target=0x${addr.toString(16)} esp=0x${esp.toString(16)} return=0x${new DataView(this.memory.buffer, this.memoryOffset, this.memoryLength).getUint32(esp, true).toString(16)}`);
+            throw new Error(`AOT unresolved indirect call: 0x${addr.toString(16)}`);
         };
     }
 
@@ -327,9 +327,12 @@ export class RuntimeBridge {
             ...this.registeredImports,
         };
 
-        return {
-            env: envImports,
-        };
+        if (this.enableAsync) {
+            const Suspending = (WebAssembly as any).Suspending;
+            if (typeof Suspending !== 'function') throw new Error('AOT async execution requires WebAssembly JSPI');
+            for (const key of Object.keys(this.registeredImports)) envImports[key] = new Suspending(this.registeredImports[key]);
+        }
+        return { env: envImports };
     }
 
     /**
@@ -343,7 +346,7 @@ export class RuntimeBridge {
             return importName;
         }
 
-        this.registeredImports[importName] = (esp: number): number => {
+        this.registeredImports[importName] = (esp: number): number | Promise<number> => {
             return this.callApi(dll, func, esp, argCount);
         };
 

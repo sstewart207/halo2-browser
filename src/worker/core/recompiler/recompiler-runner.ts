@@ -62,6 +62,7 @@ export class RecompilerRunner {
         // Create RuntimeBridge connected to the process dispatcher
         this.bridge = new RuntimeBridge({
             memory,
+            enableAsync: typeof (WebAssembly as any).Suspending === 'function',
             memoryOffset,
             memoryLength,
             dispatcher: system.process?.dispatcher,
@@ -150,7 +151,8 @@ export class RecompilerRunner {
         // Initialize PE security cookie via entry() if available
         if (typeof exports.entry === 'function') {
             Logger.log(LogCategory.SYSTEM, `[Recompiler] Initializing PE security cookie via entry()...`);
-            exports.entry(stackTop, 0, 0);
+            if (typeof (WebAssembly as any).promising === 'function') await (WebAssembly as any).promising(exports.entry)(stackTop, 0, 0);
+            else exports.entry(stackTop, 0, 0);
         }
 
         // Find entry function
@@ -163,7 +165,9 @@ export class RecompilerRunner {
 
         // Invoke entry point
         try {
-            const result = targetEntry(stackTop, 0, 0);
+            const result = typeof (WebAssembly as any).promising === 'function'
+                ? await (WebAssembly as any).promising(targetEntry)(stackTop, 0, 0)
+                : targetEntry(stackTop, 0, 0);
             Logger.log(LogCategory.SYSTEM, `[Recompiler] Entry point returned: 0x${(result >>> 0).toString(16)}`);
             return result;
         } catch (e: any) {

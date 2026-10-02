@@ -3675,7 +3675,8 @@ export class ThunkDispatcher {
 
     getImplementation(dllName: string, functionName: string): ThunkImplementation | null {
         const key = `${dllName}:${functionName}`.toLowerCase();
-        const pending = this.pendingRegistrations.get(key);
+        const pending = this.pendingRegistrations.get(key)
+            ?? this.pendingRegistrations.get(`${dllName.replace(/\.dll$/i, '')}:${functionName}`.toLowerCase());
         if (pending) return pending.impl;
         const stubs = this.findStubsByName(dllName, functionName);
         if (stubs.length > 0) {
