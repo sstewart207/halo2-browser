@@ -16,12 +16,15 @@ Font files and glyph rasterization work. The fixed 128 KB glyph pixel cache star
 
 ## Goal and next steps
 
+The intended experience is a private hosted link: load the game and play locally in a browser on PC, Android or iPhone/iPad, with USB/Bluetooth controllers and persistent saves. Desktop campaign gameplay comes first. Mobile performance, Safari compatibility, controller input and emulator snapshots remain unverified. Hosting and delivery will use HTTPS, cross-origin isolation and browser caching; game assets stay private. See the [next-agent handoff](https://github.com/sstewart207/halo2-browser/blob/codex/halo2-browser-checkpoint/docs/next-agent-handoff.md).
+
 1. Finish readable menu labels and keyboard navigation.
 2. Verify one single-player campaign level with graphics, audio and keyboard/mouse input.
 3. Persist native campaign progress across browser restarts.
-4. Add DualSense controls, remapping and dead zones.
+4. Add USB/Bluetooth DualSense and compatible gamepad controls through the Gamepad API and guest XInput, with remapping, dead zones and reconnect handling.
 5. Implement and repeatedly verify complete emulator save/restore.
-6. Measure performance and device compatibility, including mobile browsers.
+6. Measure performance and memory on Android Chrome and iOS Safari; verify suspend/resume, audio activation and storage persistence.
+7. Provide private hosted delivery with cached downloads; optional private cross-device save sync follows reliable local saves.
 
 Multiplayer is deferred. Private game files, bundles, profiles, saves and runtime captures stay out of Git.
 
