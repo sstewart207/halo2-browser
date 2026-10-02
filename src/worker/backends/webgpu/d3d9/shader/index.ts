@@ -279,6 +279,18 @@ function declTypeInfo(type: number): DeclTypeInfo {
         case 10: return { format: "snorm16x4", wgslType: "vec4<f32>",  size: 8,  expand: f => f };                                  // SHORT4N
         case 11: return { format: "unorm16x2", wgslType: "vec2<f32>",  size: 4,  expand: f => `vec4<f32>(${f}, 0.0, 1.0)` };        // USHORT2N
         case 12: return { format: "unorm16x4", wgslType: "vec4<f32>",  size: 8,  expand: f => f };                                  // USHORT4N
+        case 13: return {
+            format: "uint32",
+            wgslType: "u32",
+            size: 4,
+            expand: f => `vec4<f32>(f32((${f}) & 0x3FFu), f32(((${f}) >> 10u) & 0x3FFu), f32(((${f}) >> 20u) & 0x3FFu), 1.0)`,
+        }; // UDEC3 (10-10-10 unsigned)
+        case 14: return {
+            format: "uint32",
+            wgslType: "u32",
+            size: 4,
+            expand: f => `vec4<f32>(clamp(f32(i32((${f}) << 22u) >> 22) / 511.0, -1.0, 1.0), clamp(f32(i32((${f}) << 12u) >> 22) / 511.0, -1.0, 1.0), clamp(f32(i32((${f}) << 2u) >> 22) / 511.0, -1.0, 1.0), 1.0)`,
+        }; // DEC3N (10-10-10-2 signed normalized)
         case 15: return { format: "float16x2", wgslType: "vec2<f32>",  size: 4,  expand: f => `vec4<f32>(${f}, 0.0, 1.0)` };        // FLOAT16_2
         case 16: return { format: "float16x4", wgslType: "vec4<f32>",  size: 8,  expand: f => f };                                  // FLOAT16_4
         default: return { format: "float32x4", wgslType: "vec4<f32>",  size: 16, expand: f => f };                                  // fallback

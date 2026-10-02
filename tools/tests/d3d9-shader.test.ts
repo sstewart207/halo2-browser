@@ -377,3 +377,48 @@ test('SM3 MRT emits independent color outputs for both render attachments', () =
     expect(linked.wgsl).toContain('return MrtOutput(oC0, oC1);');
     expect(linked.wgsl).toContain('fn fs_main(in: Interp) -> MrtOutput');
 });
+
+test('D3DDECLTYPE DEC3N (14) and UDEC3 (13) produce 4-byte uint32 attributes and WGSL unpacking', () => {
+    const vs = compileVertexShader(new Uint32Array([
+        version(false, 3, 0), ...dcl(0, 0, 0), ...dcl(3, 0, 1),
+        Op.DCL | (2 << 24), 0, dst(RegType.OUTPUT, 0),
+        Op.DCL | (2 << 24), 3, dst(RegType.OUTPUT, 1),
+        Op.MOV | (2 << 24), dst(RegType.OUTPUT, 0), src(RegType.INPUT, 0),
+        Op.MOV | (2 << 24), dst(RegType.OUTPUT, 1), src(RegType.INPUT, 1),
+        END,
+    ]));
+    const linked = linkProgram({vs, ps: null, declElements: [
+        {stream: 0, offset: 0, type: 2, usage: 0, usageIndex: 0},
+        {stream: 0, offset: 12, type: 14, usage: 3, usageIndex: 0},
+    ], streamStride: 16});
+    expect(linked.vertexAttributes).toHaveLength(2);
+    expect(linked.vertexAttributes[1].format).toBe('uint32');
+    expect(linked.vertexAttributes[1].offset).toBe(12);
+    expect(linked.wgsl).toContain('clamp(f32(i32((in.v1) << 22u) >> 22) / 511.0, -1.0, 1.0)');
+});
+
+test('SM3 normal, tangent, and binormal semantics link without throwing', () => {
+    const vs = compileVertexShader(new Uint32Array([
+        version(false, 3, 0),
+        Op.DCL | (2 << 24), 0, dst(RegType.OUTPUT, 0),
+        Op.DCL | (2 << 24), 3, dst(RegType.OUTPUT, 1),
+        Op.DCL | (2 << 24), 6, dst(RegType.OUTPUT, 2),
+        Op.DCL | (2 << 24), 7, dst(RegType.OUTPUT, 3),
+        Op.MOV | (2 << 24), dst(RegType.OUTPUT, 0), src(RegType.CONST, 0),
+        Op.MOV | (2 << 24), dst(RegType.OUTPUT, 1), src(RegType.CONST, 1),
+        Op.MOV | (2 << 24), dst(RegType.OUTPUT, 2), src(RegType.CONST, 2),
+        Op.MOV | (2 << 24), dst(RegType.OUTPUT, 3), src(RegType.CONST, 3),
+        END,
+    ]));
+    const ps = compilePixelShader(new Uint32Array([
+        version(true, 3, 0),
+        Op.DCL | (2 << 24), 3, dst(RegType.INPUT, 0),
+        Op.DCL | (2 << 24), 6, dst(RegType.INPUT, 1),
+        Op.MOV | (2 << 24), dst(RegType.COLOROUT, 0), src(RegType.INPUT, 0),
+        Op.MOV | (2 << 24), dst(RegType.TEMP, 0), src(RegType.INPUT, 1),
+        END,
+    ]));
+    const linked = linkProgram({vs, ps, declElements: null, streamStride: 16});
+    expect(linked.wgsl).toContain('in.tex8');
+    expect(linked.wgsl).toContain('in.tex10');
+});
