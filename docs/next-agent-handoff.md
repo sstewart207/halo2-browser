@@ -14,6 +14,31 @@ Read this section first; it supersedes the earlier blocker notes below.
 - DirectInput mouse look verified: `moveRel(0, -60)` and `moveRel(0, 50)` calibrated the crosshairs against the tutorial lights, prompting the game to update profile and advance the mission!
 - Measured in-level performance: **27.9 FPS steady** (frame time 35.86ms: v86 CPU 24.78ms, thunk 10.38ms, WebGPU GPU 0.11ms, present 0.15ms). Guest RAM rock-solid at **700 MB**.
 
+### 3. Clear Path for the Next Agent: Automated Verification & Stage 1 Extractor
+Any incoming agent can immediately verify the system or proceed with Static Recompilation:
+
+1. **Verify Live Game & Input in Chrome in Seconds:**
+   ```bash
+   # From work/bottleship-research:
+   bun tools/boot-halo2.ts     # Boot bundle and arm logging
+   bun tools/step-nav.ts       # Advance menus to Armory level
+   bun tools/test-look.ts      # Test mouse look and calibration
+   bun tools/measure-perf.ts   # Check live FPS and guest heap
+   ```
+
+2. **Extract Function CFGs & Basic Blocks (Static Recomp Stage 1):**
+   ```powershell
+   # From work/bottleship-research:
+   powershell -ExecutionPolicy Bypass -File tools/extract-ghidra-cfg.ps1 -OutFile cfg_export.json -MaxFunctions 100
+   ```
+   - Uses `work/halo2-browser/scratch/ghidra/ExportFunctionCFG.java` with Ghidra 12.1.4 headless runner.
+   - Outputs JSON with function names, RVAs, sizes, basic block boundaries, disassembled instructions, operands, and CFG destination edges.
+   - Verified sample output: `work/halo2-browser/scratch/ghidra/cfg_sample.json`.
+
+3. **Immediate Next Goal (Stage 2 Lifter):**
+   - Implement the prototype x86 basic-block lifter (in TypeScript or Rust with `wasm32-unknown-unknown`) reading the JSON CFGs and emitting WebAssembly `.wat` or WASM bytecode.
+   - See `docs/halo2-static-recomp-plan.md` for the complete architecture and design.
+
 ## Oct 2 2026, Antigravity/Gemini (with Codex): BLACK WORLD FIXED, MAPS BUNDLED, ROADMAP TO 60 FPS (NEWEST-31)
 
 ### 1. In-Level Black World Fixed (commit `a773ea7`)

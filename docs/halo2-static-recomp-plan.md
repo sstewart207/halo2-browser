@@ -93,16 +93,17 @@ The workstation has all necessary tools pre-installed:
 
 ## 5. Phased Implementation Roadmap
 
-### Phase 1: Prototype Extraction & Lifter (Week 1)
-- Write a Ghidra Headless Java script (`scratch/ghidra/ExtractCFG.java`) to parse function entry points and basic block graphs for all ~18,000 functions in `halo2.exe`.
-- Implement a minimal prototype lifter (in Rust or TypeScript) that translates basic math/logic basic blocks into valid WebAssembly S-expressions (`.wat`) or Rust code compiled to `wasm32-unknown-unknown`.
+### Phase 1: Prototype Extraction & Lifter (In Progress - Stage 1 Extractor Complete)
+- **Status:** Headless Ghidra script [`ExportFunctionCFG.java`](file:///c:/Users/sstew/Documents/Codex/2026-09-29/private-just-for-us-do-i/work/halo2-browser/scratch/ghidra/ExportFunctionCFG.java) implemented and verified.
+- **Runner:** Run [`tools/extract-ghidra-cfg.ps1`](file:///c:/Users/sstew/Documents/Codex/2026-09-29/private-just-for-us-do-i/work/bottleship-research/tools/extract-ghidra-cfg.ps1) to extract function boundaries, basic blocks, disassembled x86 instructions, and CFG destinations from `halo2.exe` into structured JSON (see [`cfg_sample.json`](file:///c:/Users/sstew/Documents/Codex/2026-09-29/private-just-for-us-do-i/work/halo2-browser/scratch/ghidra/cfg_sample.json)).
+- **Next Task for Lifter:** Implement the x86 basic-block to WebAssembly lifter (TypeScript or Rust with `wasm32-unknown-unknown` target) translating the exported JSON blocks to `.wat` or WASM bytecode.
 
-### Phase 2: Runtime Shim & Memory Bridge (Week 2)
+### Phase 2: Runtime Shim & Memory Bridge
 - Allocate a shared `WebAssembly.Memory` buffer matching BottleShip's existing guest RAM layout.
 - Connect recompiled WASM function calls to BottleShip's existing JS/WASM Win32 API table.
 - Verify basic math, string, and utility functions run correctly outside `v86`.
 
-### Phase 3: Graphics & Game Loop Integration (Week 3)
+### Phase 3: Graphics & Game Loop Integration
 - Connect D3D9 device creation and frame presentation to BottleShip's WebGPU device.
 - Recompile the game's core update loop (`game_tick`) and rasterizer setup.
 - Benchmark FPS on desktop Chrome and iOS Safari. Goal: **Steady 60 FPS**.

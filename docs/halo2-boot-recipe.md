@@ -4,6 +4,24 @@ Verified Oct 1 2026 (Claude Sonnet 5.5), CORRECTED Oct 2 2026 (Codex). Gets from
 
 > **Two corrections (Oct 2).** (1) The harness global is `window.__BS__.harness`, not `window.harness`. (2) **Choose "Armory" (the 2nd entry), not Cairo Station.** The bundle contains only `01a_tutorial.map`; every other mission's scenario file is missing and the game retries it forever at 60 fps (see next-agent-handoff.md, section 1).
 
+## Fast Automated Runner (Added Oct 2, NEWEST-32)
+
+Instead of sending 12 manual browser calls, run the automated TypeScript scripts from `work/bottleship-research`:
+
+```bash
+# 1. Boot bundle and arm logging:
+bun tools/boot-halo2.ts
+
+# 2. Advance through menus to Armory campaign level:
+bun tools/step-nav.ts
+
+# 3. Test in-level mouse-look (DirectInput camera rotation):
+bun tools/test-look.ts
+
+# 4. Measure live FPS, categories (v86/thunk/gpu/present), and guest RAM:
+bun tools/measure-perf.ts
+```
+
 ## Prerequisites
 
 - Vite dev server on `http://localhost:5174` (`bun --bun node_modules/vite/bin/vite.js` from `work/bottleship-research`; `bun`/`bunx` may not be on PATH, use the toolchain copy under `work/toolchain/node_modules/@oven/bun-windows-x64/bin/bun.exe`).
