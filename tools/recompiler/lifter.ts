@@ -112,6 +112,8 @@ export class Lifter {
     funcEntryMap = new Map<number, number>(); // entryAddr -> local function index (0..N-1)
     espGlobalIdx: number;
     memoryBaseGlobalIdx: number;
+    private debugFuel?: number;
+    private debugPc?: number;
 
     constructor(options: LiftedModuleOptions = {}) {
         this.options = {
@@ -131,6 +133,12 @@ export class Lifter {
         this.moduleBuilder.addExport('esp', 3, this.espGlobalIdx);
         this.memoryBaseGlobalIdx = this.moduleBuilder.addGlobal(0x7f, 1, 0);
         this.moduleBuilder.addExport('guest_memory_base', 3, this.memoryBaseGlobalIdx);
+        if (options.debugBlockLimit !== undefined) {
+            this.debugFuel = this.moduleBuilder.addGlobal(0x7f, 1, options.debugBlockLimit);
+            this.debugPc = this.moduleBuilder.addGlobal(0x7f, 1, 0);
+            this.moduleBuilder.addExport('aot_debug_fuel', 3, this.debugFuel);
+            this.moduleBuilder.addExport('aot_debug_pc', 3, this.debugPc);
+        }
 
         // Standard signature: (param $esp i32, $ecx i32, $eax i32) -> (result i32)
         this.funcSigIndex = this.moduleBuilder.addSignature([0x7f, 0x7f, 0x7f], [0x7f]);
@@ -175,7 +183,7 @@ export class Lifter {
         for (const fn of functions) {
             for (const bb of fn.basicBlocks) {
                 for (const rawInst of bb.instructions) {
-                    if (rawInst.mnemonic === 'CALL') {
+                    if (rawInst.mnemonic === 'CALL' || rawInst.mnemonic === 'JMP') {
                         const inst = parseInstruction(rawInst);
                         const [target] = inst.operands;
                         if (!target) continue;
@@ -218,6 +226,7 @@ export class Lifter {
 
         wasmFn.addLocals(1, 0x7f); // local 32: integer store scratch
         wasmFn.addLocals(1, 0x7d); // local 33: floating store scratch
+        wasmFn.addLocals(2, 0x7f); // locals 34/35: comparison operands
         wasmFn.guestMemoryBaseGlobal = this.memoryBaseGlobalIdx;
         wasmFn.guestStoreI32Local = 32;
         wasmFn.guestStoreF32Local = 33;
@@ -299,7 +308,16 @@ export class Lifter {
         return wasmFn;
     }
 
+    private emitDebugWatchdog(fn: WasmFunctionBuilder, block: CFGBasicBlock) {
+        if (this.debugFuel === undefined || this.debugPc === undefined) return;
+        fn.i32_const(parseInt(block.start, 16)); fn.global_set(this.debugPc);
+        fn.global_get(this.debugFuel); fn.i32_eqz(); fn.if_block(0x40);
+        fn.emitBytes([0x00]); fn.watLines.push('    unreachable'); fn.end();
+        fn.global_get(this.debugFuel); fn.i32_const(1); fn.i32_sub(); fn.global_set(this.debugFuel);
+    }
+
     liftBasicBlockInstructions(fn: WasmFunctionBuilder, block: CFGBasicBlock) {
+        this.emitDebugWatchdog(fn, block);
         for (const rawInst of block.instructions) {
             const inst = parseInstruction(rawInst);
             this.liftInstruction(fn, inst);
@@ -313,6 +331,7 @@ export class Lifter {
         numBlocks: number,
         blockMap: Map<number, number>
     ) {
+        this.emitDebugWatchdog(fn, block);
         const insts = block.instructions.map(parseInstruction);
         const lastInst = insts.length > 0 ? insts[insts.length - 1] : null;
 
@@ -348,8 +367,12 @@ export class Lifter {
         }
 
         if (lastInst.mnemonic === 'JMP') {
-            const targetAddr = lastInst.operands[0].kind === 'imm' ? lastInst.operands[0].value : 0;
-            const targetIdx = blockMap.get(targetAddr) ?? ((blockIdx + 1) % numBlocks);
+            const target = lastInst.operands[0];
+            const targetIdx = target?.kind === 'imm' ? blockMap.get(target.value) : undefined;
+            if (targetIdx === undefined) {
+                this.emitTailCall(fn, target);
+                return;
+            }
             fn.i32_const(targetIdx);
             fn.local_set(LOCALS.BLOCK_ID);
             fn.br(loopDepth);
@@ -392,6 +415,26 @@ export class Lifter {
         fn.i32_const(nextIdx);
         fn.local_set(LOCALS.BLOCK_ID);
         fn.br(loopDepth);
+    }
+
+    emitTailCall(fn: WasmFunctionBuilder, target: Operand) {
+        if (!target) throw new Error('JMP missing target');
+        // Reuse the existing guest return address: JMP must not push another one.
+        fn.local_get(LOCALS.ESP);
+        fn.global_set(this.espGlobalIdx);
+        if (target.kind === 'imm' && this.funcEntryMap.has(target.value)) {
+            fn.i32_const(0);
+            fn.local_get(LOCALS.ECX);
+            fn.local_get(LOCALS.EAX);
+            fn.call_func(this.moduleBuilder.getLocalFunctionIndex(this.funcEntryMap.get(target.value)!));
+        } else {
+            this.emitLoadOperandValue(fn, target);
+            fn.local_get(LOCALS.ESP);
+            fn.local_get(LOCALS.ECX);
+            fn.local_get(LOCALS.EAX);
+            fn.call_func(this.getOrAddIndirectCallImport());
+        }
+        fn.return_op();
     }
 
     emitJumpCondition(fn: WasmFunctionBuilder, mnemonic: string) {
@@ -473,8 +516,8 @@ export class Lifter {
                 fn.i32_and();
                 break;
             default:
-                // Default: true (always jump)
-                fn.i32_const(1);
+                // Unsupported conditions must not become unconditional jumps.
+                fn.emitBytes([0x00]); fn.watLines.push(`    unreachable ;; unsupported ${mnemonic}`);
                 break;
         }
     }
@@ -583,11 +626,23 @@ export class Lifter {
             case 'CMP': {
                 const [dst, src] = inst.operands;
                 if (!dst || !src) return;
+                const bits = dst.kind === 'imm' ? 32 : Math.min(dst.size * 8, 32);
+                const mask = bits === 32 ? -1 : (1 << bits) - 1;
                 this.emitLoadOperandValue(fn, dst);
+                fn.i32_const(mask); fn.i32_and(); fn.local_set(34);
                 this.emitLoadOperandValue(fn, src);
-                fn.i32_sub();
-                fn.local_set(LOCALS.TMP0); // result
-                this.emitSetFlagsArithmetic(fn);
+                fn.i32_const(mask); fn.i32_and(); fn.local_set(35);
+                fn.local_get(34); fn.local_get(35); fn.i32_sub();
+                fn.i32_const(mask); fn.i32_and(); fn.local_set(LOCALS.TMP0);
+                fn.local_get(LOCALS.TMP0); fn.i32_eqz(); fn.local_set(LOCALS.ZF);
+                fn.local_get(LOCALS.TMP0); fn.i32_const(1 << (bits - 1)); fn.i32_and();
+                fn.i32_eqz(); fn.i32_eqz(); fn.local_set(LOCALS.SF);
+                // Unsigned borrow, not the sign of the wrapped subtraction.
+                fn.local_get(34); fn.local_get(35); fn.i32_lt_u(); fn.local_set(LOCALS.CF);
+                // Signed subtraction overflow: (lhs ^ rhs) & (lhs ^ result).
+                fn.local_get(34); fn.local_get(35); fn.i32_xor();
+                fn.local_get(34); fn.local_get(LOCALS.TMP0); fn.i32_xor(); fn.i32_and();
+                fn.i32_const(1 << (bits - 1)); fn.i32_and(); fn.i32_eqz(); fn.i32_eqz(); fn.local_set(LOCALS.OF);
                 break;
             }
             case 'TEST': {
@@ -1104,6 +1159,31 @@ export class Lifter {
             case 'FCOMIP':
                 // FPU control/status word & comparison stubs
                 break;
+            case 'XADD':
+            case 'XADD.LOCK': {
+                // AOT currently runs on one worker. No guest thread can race
+                // this read/write pair until multi-threaded AOT is implemented.
+                const [dst, src] = inst.operands;
+                if (!dst || !src) return;
+                const bits = dst.kind === 'imm' ? 32 : Math.min(dst.size * 8, 32);
+                const mask = bits === 32 ? -1 : (1 << bits) - 1;
+                this.emitLoadOperandValue(fn, dst);
+                fn.i32_const(mask); fn.i32_and(); fn.local_set(34);
+                this.emitLoadOperandValue(fn, src);
+                fn.i32_const(mask); fn.i32_and(); fn.local_set(35);
+                fn.local_get(34); fn.local_get(35); fn.i32_add();
+                fn.i32_const(mask); fn.i32_and(); fn.local_set(LOCALS.TMP0);
+                fn.local_get(LOCALS.TMP0); fn.i32_eqz(); fn.local_set(LOCALS.ZF);
+                fn.local_get(LOCALS.TMP0); fn.i32_const(1 << (bits - 1)); fn.i32_and();
+                fn.i32_eqz(); fn.i32_eqz(); fn.local_set(LOCALS.SF);
+                fn.local_get(LOCALS.TMP0); fn.local_get(34); fn.i32_lt_u(); fn.local_set(LOCALS.CF);
+                fn.local_get(34); fn.local_get(35); fn.i32_xor(); fn.i32_const(-1); fn.i32_xor();
+                fn.local_get(34); fn.local_get(LOCALS.TMP0); fn.i32_xor(); fn.i32_and();
+                fn.i32_const(1 << (bits - 1)); fn.i32_and(); fn.i32_eqz(); fn.i32_eqz(); fn.local_set(LOCALS.OF);
+                fn.local_get(LOCALS.TMP0); this.emitStoreOperandValue(fn, dst);
+                fn.local_get(34); this.emitStoreOperandValue(fn, src);
+                break;
+            }
             case 'CMPXCHG.LOCK': {
                 const [dst, src] = inst.operands;
                 if (!dst || !src) return;
@@ -1226,6 +1306,10 @@ export class Lifter {
             case 'NOP':
                 fn.nop();
                 break;
+            case 'JMP': {
+                this.emitTailCall(fn, inst.operands[0]);
+                break;
+            }
             case 'RET': {
                 let imm = 0;
                 if (inst.operands.length > 0 && inst.operands[0].kind === 'imm') {
@@ -1375,9 +1459,11 @@ export class Lifter {
                         fn.i32_load(0, 2);
                         fn.i32_store(0, 2);
 
-                        // ESP = EBP + 8 (pop frame and original 2 pushes)
+                        // Native epilog restores ESP=EBP then pops saved EBP.
+                        // The helper's own CALL/RET is inlined; the caller RET
+                        // still needs to pop its return address at EBP+4.
                         fn.local_get(LOCALS.EBP);
-                        fn.i32_const(8);
+                        fn.i32_const(4);
                         fn.i32_add();
                         fn.local_set(LOCALS.ESP);
 

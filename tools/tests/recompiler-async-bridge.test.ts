@@ -28,3 +28,24 @@ for (const Bridge of [BrowserBridge, ToolBridge]) describe(`AOT async ${Bridge =
         await expect(bridge.callApi('kernel32', 'LoadLibraryA', 0x100, 1)).rejects.toThrow('test.dll@0x8100');
     });
 });
+
+for (const Bridge of [BrowserBridge, ToolBridge]) it(`CALL [IAT]; RET 4 thunk preserves both return frames (${Bridge === BrowserBridge ? 'browser' : 'tool'})`, () => {
+    const memory=new WebAssembly.Memory({initial:1});const v=new DataView(memory.buffer);
+    v.setUint16(0x1000,0x15ff,true);v.setUint32(0x1002,0x2000,true);v.setUint8(0x1006,0xc2);v.setUint16(0x1007,4,true);
+    v.setUint32(0x8000,0x556677,true);v.setUint32(0x8004,0xabc,true);
+    const resolver={resolve:(addr:number)=>addr===0x2000?{dll:'kernel32',func:'TlsAlloc'}:null};
+    const b=new Bridge({memory,iatResolver:resolver as any});const esp=new WebAssembly.Global({value:'i32',mutable:true},0x8000);b.registerExports({esp});
+    let calls=0;b.registerModule('kernel32',{TlsAlloc:()=>{calls++;return {value:2,stackCleanup:0};}});
+    const invoke=(b.createWasmImports().env as any).indirect_call;
+    expect(invoke(0x1000,0x8000,0,0)).toBe(2);expect(calls).toBe(1);expect(esp.value).toBe(0x8008);
+    expect(v.getUint32(0x7ffc,true)).toBe(0x1006);expect(v.getUint32(0x8000,true)).toBe(0x556677);
+});
+
+for (const Bridge of [BrowserBridge, ToolBridge]) it(`E9 export trampolines preserve caller args and signed displacement (${Bridge === BrowserBridge ? 'browser' : 'tool'})`, () => {
+    const memory=new WebAssembly.Memory({initial:1});const v=new DataView(memory.buffer);const b=new Bridge({memory});
+    const api=b.registerDynamicApi('kernel32','TlsGetValue');
+    v.setUint8(0x1100,0xe9);v.setInt32(0x1101,0x1000-0x1105,true);v.setUint8(0x1000,0xe9);v.setInt32(0x1001,api-0x1005,true);v.setUint32(0x8004,9,true);
+    b.registerModule('kernel32',{TlsGetValue:(_ctx,_mem,args)=>{expect(args[0]).toBe(9);return {value:55,stackCleanup:4};}});
+    const esp=new WebAssembly.Global({value:'i32',mutable:true},0x8000);b.registerExports({esp});
+    expect((b.createWasmImports().env as any).indirect_call(0x1100,0x8000,0,0)).toBe(55);expect(esp.value).toBe(0x8008);
+});

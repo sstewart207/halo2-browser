@@ -252,7 +252,17 @@ export class RuntimeBridge {
 
     bindIndirectCall(): void {
         this.registeredImports['indirect_call'] = (target: number, esp: number, ecx: number, eax: number): number | Promise<number> => {
-            const addr = target >>> 0;
+            let addr = target >>> 0;
+            const guest = new DataView(this.memory.buffer, this.memoryOffset, this.memoryLength);
+            // Synthetic HLE export images contain E9 rel32 trampolines to
+            // registered API stubs. Follow their real target without CPU execution.
+            for (let hops = 0; hops < 16; hops++) {
+                if (this.addressToExport.has(addr) || this.dynamicApiMap.has(addr)
+                    || this.dynamicIatTable.has(addr) || this.dispatcher?.getStubByAddress(addr)) break;
+                if (addr + 5 > guest.byteLength || guest.getUint8(addr) !== 0xe9) break;
+                addr = (addr + 5 + guest.getInt32(addr + 1, true)) >>> 0;
+                if (hops === 15) throw new Error('AOT jump trampoline chain exceeds 16 hops');
+            }
             if (this.logCalls) {
                 console.log(`[RuntimeBridge] -> indirect_call(target=0x${addr.toString(16)}, esp=0x${esp.toString(16)}, eax=0x${eax.toString(16)})`);
             }
@@ -281,7 +291,7 @@ export class RuntimeBridge {
 
             // 3. Inspect linear memory at target for x86 CALL/JMP thunk
             // e.g. CALL [iat_addr] (0xff 0x15 <iat_addr>) or JMP [iat_addr] (0xff 0x25 <iat_addr>)
-            if (addr > 0 && addr + 6 <= (this.memoryLength ?? (this.memory.buffer.byteLength - this.memoryOffset))) {
+            if (addr > 0 && addr + 9 <= (this.memoryLength ?? (this.memory.buffer.byteLength - this.memoryOffset))) {
                 const view = new DataView(this.memory.buffer, this.memoryOffset, this.memoryLength);
                 const opcode = view.getUint16(addr, true);
                 if (opcode === 0x15ff || opcode === 0x25ff) {
@@ -289,7 +299,23 @@ export class RuntimeBridge {
                     if (this.iatResolver) {
                         const entry = this.iatResolver.resolve(iatTarget);
                         if (entry) {
-                            return this.callApi(entry.dll, entry.func, esp);
+                            if (opcode === 0x25ff) return this.callApi(entry.dll, entry.func, esp);
+                            // CALL [IAT]; RET [imm] is not a tail JMP. Preserve
+                            // its inner return frame and execute its outer cleanup.
+                            const retOpcode = view.getUint8(addr + 6);
+                            if (retOpcode === 0xc3 || retOpcode === 0xc2) {
+                                const retBytes = retOpcode === 0xc2 ? view.getUint16(addr + 7, true) : 0;
+                                const innerEsp = (esp - 4) >>> 0;
+                                view.setUint32(innerEsp, addr + 6, true);
+                                if (!this.espGlobal) throw new Error('AOT CALL/RET thunk requires shared ESP');
+                                this.espGlobal.value = innerEsp;
+                                const result = this.callApi(entry.dll, entry.func, innerEsp);
+                                const finish = (value: number) => {
+                                    this.espGlobal!.value = (Number(this.espGlobal!.value) + 4 + retBytes) >>> 0;
+                                    return value;
+                                };
+                                return result instanceof Promise ? result.then(finish) : finish(result);
+                            }
                         }
                     }
                 }

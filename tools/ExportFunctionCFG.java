@@ -33,6 +33,7 @@ public class ExportFunctionCFG extends GhidraScript {
         String outPath = args.length > 0 ? args[0] : "cfg_export.json";
         int maxFuncs = args.length > 1 ? Integer.parseInt(args[1]) : 100; // default 100 for prototype, 0 for all
 
+        boolean includeThunks = args.length > 2 && args[2].equals("include-thunks");
         File outFile = new File(outPath);
         Listing listing = currentProgram.getListing();
         BasicBlockModel bbModel = new BasicBlockModel(currentProgram);
@@ -54,7 +55,7 @@ public class ExportFunctionCFG extends GhidraScript {
 
             while (fIter.hasNext()) {
                 Function fn = fIter.next();
-                if (fn.isThunk()) continue; // Skip import thunks (handled via Win32 HLE runtime)
+                if (fn.isThunk() && !includeThunks) continue; // Optional: retain native wrappers/CRT initializers too.
 
                 if (!firstFunc) {
                     w.println(",");

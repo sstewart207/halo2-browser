@@ -85,4 +85,5 @@ export interface LiftedModuleOptions {
     iatResolver?: any;
     tebAddress?: number; // base address for FS segment (default 0x00030000)
     emitWat?: boolean; // whether to emit .wat text (default false to save memory)
+    debugBlockLimit?: number; // optional startup watchdog; absent in normal builds
 }

@@ -48,6 +48,7 @@ const { builder, wasmBytes, watText } = liftExportedModule(cfg, {
     importMemory: true,
     iatResolver: iatResolver.size() > 0 ? iatResolver : undefined,
     emitWat: false,
+    debugBlockLimit: process.env.AOT_DEBUG_BLOCK_LIMIT ? Number(process.env.AOT_DEBUG_BLOCK_LIMIT) : undefined,
 });
 const t1 = performance.now();
 

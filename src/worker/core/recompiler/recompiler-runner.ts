@@ -6,6 +6,7 @@
 import { System } from '../system';
 import { Logger, LogCategory } from '../logger';
 import { RuntimeBridge } from './runtime-bridge';
+import { parseAotApiImport } from './import-name';
 
 export interface RecompilerRunOptions {
     system: System;
@@ -75,6 +76,7 @@ export class RecompilerRunner {
         const importDirRVA = view.getUint32(optHeaderOffset + 104, true);
         const importDirSize = view.getUint32(optHeaderOffset + 108, true);
 
+        const importDllNames = new Set<string>();
         if (importDirRVA && importDirSize) {
             let descOffset = imageBase + importDirRVA;
             const descEnd = descOffset + importDirSize;
@@ -95,6 +97,7 @@ export class RecompilerRunner {
                 if (!nameRVA || !iatRVA) break;
 
                 const dllName = readAnsi(imageBase + nameRVA);
+                importDllNames.add(dllName);
                 const thunkRVA = iltRVA || iatRVA;
                 let i = 0;
 
@@ -130,9 +133,7 @@ export class RecompilerRunner {
         // Auto-bind Win32 API imports
         for (const imp of WebAssembly.Module.imports(mod)) {
             if (imp.kind === 'function' && imp.name.startsWith('win32_')) {
-                const parts = imp.name.replace(/^win32_/, '').split('_');
-                const dll = parts[0];
-                const func = parts.slice(1).join('_');
+                const {dll, func} = parseAotApiImport(imp.name, importDllNames);
                 this.bridge.bindApi(dll, func, 4);
             }
         }
@@ -151,8 +152,16 @@ export class RecompilerRunner {
         // Initialize PE security cookie via entry() if available
         if (typeof exports.entry === 'function') {
             Logger.log(LogCategory.SYSTEM, `[Recompiler] Initializing PE security cookie via entry()...`);
-            if (typeof (WebAssembly as any).promising === 'function') await (WebAssembly as any).promising(exports.entry)(stackTop, 0, 0);
-            else exports.entry(stackTop, 0, 0);
+            try {
+                if (typeof (WebAssembly as any).promising === 'function') await (WebAssembly as any).promising(exports.entry)(stackTop, 0, 0);
+                else exports.entry(stackTop, 0, 0);
+            } catch (error) {
+                if (exports.aot_debug_pc) Logger.error(LogCategory.SYSTEM, `[Recompiler] Last debug block: 0x${(exports.aot_debug_pc.value >>> 0).toString(16)}`);
+                if (exports.aot_debug_fuel?.value === 0) {
+                    Logger.error(LogCategory.SYSTEM, `[Recompiler] Debug block budget exhausted at 0x${(exports.aot_debug_pc.value >>> 0).toString(16)}`);
+                }
+                throw error;
+            }
         }
 
         // Find entry function
@@ -171,6 +180,10 @@ export class RecompilerRunner {
             Logger.log(LogCategory.SYSTEM, `[Recompiler] Entry point returned: 0x${(result >>> 0).toString(16)}`);
             return result;
         } catch (e: any) {
+            if (exports.aot_debug_pc) Logger.error(LogCategory.SYSTEM, `[Recompiler] Last debug block: 0x${(exports.aot_debug_pc.value >>> 0).toString(16)}`);
+                if (exports.aot_debug_fuel?.value === 0) {
+                Logger.error(LogCategory.SYSTEM, `[Recompiler] Debug block budget exhausted at 0x${(exports.aot_debug_pc.value >>> 0).toString(16)}`);
+            }
             Logger.error(LogCategory.SYSTEM, `[Recompiler] Execution exception: ${e.message}`);
             throw e;
         }
