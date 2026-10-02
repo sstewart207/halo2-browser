@@ -1,5 +1,19 @@
 # Next agent: first playable build (menu text is fixed)
 
+## Oct 2 2026, Antigravity/Gemini (with Codex): STATIC RECOMPILATION STAGE 7 (INDIRECT CALL RESOLUTION, DYNAMIC IMPORT THUNKS & NATIVE CRT EXECUTION) COMPLETE (NEWEST-38)
+
+Read this section first; it supersedes earlier notes below.
+
+### 1. Stage 7 Indirect Call Resolution & Dynamic Import Thunks Milestone
+- **Indirect Function Call Lifter (`lifter.ts`):** Added indirect call resolution (`CALL reg`, `CALL [mem]`, and indirect dynamic jumps) via an imported `indirect_call(targetAddr, esp, ecx, eax)` dispatcher. Preserves caller/callee stack contracts by pushing return address to linear stack and popping upon return.
+- **Whole-Binary Dual Export Aliasing (31,787 Exports):** `liftExportedModule` now exports both canonical names and `addr_0x<entry>` aliases for all 15,893 functions. `RuntimeBridge.registerExports` parses entry addresses from export names, allowing 0-overhead function resolution without needing the 121 MB CFG JSON at runtime.
+- **In-Memory PE Import Directory & Self-Referencing IAT Slots:** Added in-memory PE import directory parsing in `recompiler-runner.ts`. All 413 IAT slots in linear memory are initialized to self-referencing pointers, routing indirect pointer calls (e.g. `MOV EBX, [0x79b348]; CALL EBX`) to Win32 HLE implementations (`GetProcessHeap`, `TlsAlloc`, `TlsSetValue`, `TlsGetValue`, `DeleteCriticalSection`).
+- **Native Execution Verification:** PE entry point `entry()` runs `___security_init_cookie` with 0 traps, returning cookie `0x17c8c` in 0.45ms. Native `___tmainCRTStartup` advances cleanly through CRT startup, heap allocation, TLS initialization, and delay-load helper resolution (`_ResolveThunk@20` $\to$ `_GodotFailGetProcAddress@8`).
+- **Automated Verification:** All 961 unit tests pass across 105 files in 516ms. `tsc --noEmit` passes with 0 errors.
+
+### 2. Immediate Next Goal:
+- Verify presentation of animated 3D Title Screen ("Press Start") and Game Start Menu at steady 60 FPS in Chrome without v86 CPU load.
+
 ## Oct 2 2026, Antigravity/Gemini (with Codex): STATIC RECOMPILATION STAGE 6 (AOT NATIVE EXECUTION PIPELINE & BROWSER WORKER INTEGRATION) COMPLETE (NEWEST-37)
 
 Read this section first; it supersedes earlier notes below.

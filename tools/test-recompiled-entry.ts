@@ -64,6 +64,13 @@ const iatResolver = new IATResolver();
 iatResolver.loadFromFile(exePath);
 console.log(`[TestEntry] Loaded ${iatResolver.size()} IAT entries.`);
 
+// Populate IAT slots in linear memory so indirect calls through pointers (MOV EBX, [0x79b348]; CALL EBX)
+// pass the IAT address directly to RuntimeBridge
+const memView = new DataView(memory.buffer);
+for (const entry of iatResolver.getAllEntries()) {
+    memView.setUint32(entry.iatAddress, entry.iatAddress, true);
+}
+
 const bridge = new RuntimeBridge({
     memory,
     iatResolver,
@@ -72,99 +79,142 @@ const bridge = new RuntimeBridge({
 
 let nextHeapAddr = 0x00200000;
 
-// Provide standard basic implementations for initial startup APIs
-bridge.registerModule('kernel32', {
-    GetSystemTimeAsFileTime: (_ctx, _mem, args) => {
-        const pFileTime = args[0];
-        const view = new DataView(memory.buffer);
-        // Current time as 64-bit Windows file time
-        const nowMs = Date.now();
-        const fileTime = BigInt(nowMs) * 10000n + 116444736000000000n;
-        view.setUint32(pFileTime, Number(fileTime & 0xffffffffn), true);
-        view.setUint32(pFileTime + 4, Number(fileTime >> 32n), true);
-        return 0;
-    },
-    GetCurrentProcessId: () => 1337,
-    GetCurrentThreadId: () => 42,
-    GetTickCount: () => Math.floor(performance.now()),
-    QueryPerformanceCounter: (_ctx, _mem, args) => {
-        const pCounter = args[0];
-        const view = new DataView(memory.buffer);
-        const count = BigInt(Math.floor(performance.now() * 1000));
-        view.setUint32(pCounter, Number(count & 0xffffffffn), true);
-        view.setUint32(pCounter + 4, Number(count >> 32n), true);
-        return 1;
-    },
-    QueryPerformanceFrequency: (_ctx, _mem, args) => {
-        const pFreq = args[0];
-        const view = new DataView(memory.buffer);
-        view.setUint32(pFreq, 1000000, true);
-        view.setUint32(pFreq + 4, 0, true);
-        return 1;
-    },
-    GetStartupInfoA: (_ctx, _mem, args) => {
-        const pStartupInfo = args[0];
-        const view = new DataView(memory.buffer);
-        view.setUint32(pStartupInfo, 68, true); // cb = 68
-        return 0;
-    },
-    GetVersion: () => 0x01060000, // Windows Vista 6.0
-    GetVersionExA: (_ctx, _mem, args) => {
-        const pVer = args[0];
-        const view = new DataView(memory.buffer);
-        view.setUint32(pVer + 4, 6, true);       // dwMajorVersion = 6 (Vista)
-        view.setUint32(pVer + 8, 0, true);       // dwMinorVersion = 0
-        view.setUint32(pVer + 12, 6000, true);   // dwBuildNumber = 6000
-        view.setUint32(pVer + 16, 2, true);      // dwPlatformId = VER_PLATFORM_WIN32_NT
-        return 1;
-    },
-    InitializeCriticalSectionAndSpinCount: () => 1,
-    GetProcessHeap: () => 0x00150000,
-    HeapCreate: () => 0x00210000,
-    HeapAlloc: (_ctx, _mem, args) => {
-        const size = args[2] || 64;
-        const addr = nextHeapAddr;
-        nextHeapAddr = (nextHeapAddr + size + 15) & ~15;
-        return addr;
-    },
-    HeapFree: () => 1,
-    TlsAlloc: () => 1,
-    TlsSetValue: () => 1,
-    TlsGetValue: () => 0,
-    TlsFree: () => 1,
-    ExitProcess: (_ctx, _mem, args) => {
-        console.log(`[TestEntry] ExitProcess called with code: 0x${args[0].toString(16)}`);
-        process.exit(0);
-    },
-    GetLastError: () => 0,
-    GetModuleHandleA: (_ctx, _mem, _args) => imageBase,
-    GetCommandLineA: () => {
-        // Write command line to a fixed scratch area
-        const cmdAddr = 0x180000;
-        const cmdStr = 'halo2.exe -windowed\0';
-        for (let i = 0; i < cmdStr.length; i++) {
-            memBytes[cmdAddr + i] = cmdStr.charCodeAt(i);
+    let nextTlsIndex = 1;
+    const tlsSlots = new Map<number, number>();
+
+    // Provide standard basic implementations for initial startup APIs
+    bridge.registerModule('kernel32', {
+        LoadLibraryA: (_ctx, mem, args) => {
+            const pName = args[0];
+            let name = '';
+            for (let i = pName; i < mem.length && mem[i] !== 0; i++) {
+                name += String.fromCharCode(mem[i]);
+            }
+            return 0x50000000;
+        },
+        InterlockedExchange: (_ctx, _mem, args) => {
+            const pTarget = args[0];
+            const val = args[1];
+            const old = memView.getUint32(pTarget, true);
+            memView.setUint32(pTarget, val, true);
+            return old;
+        },
+        DeleteCriticalSection: () => 1,
+        GetSystemTimeAsFileTime: (_ctx, _mem, args) => {
+            const pFileTime = args[0];
+            const view = new DataView(memory.buffer);
+            const nowMs = Date.now();
+            const fileTime = BigInt(nowMs) * 10000n + 116444736000000000n;
+            view.setUint32(pFileTime, Number(fileTime & 0xffffffffn), true);
+            view.setUint32(pFileTime + 4, Number(fileTime >> 32n), true);
+            return 0;
+        },
+        GetCurrentProcessId: () => 1337,
+        GetCurrentThreadId: () => 42,
+        GetTickCount: () => Math.floor(performance.now()),
+        QueryPerformanceCounter: (_ctx, _mem, args) => {
+            const pCounter = args[0];
+            const view = new DataView(memory.buffer);
+            const count = BigInt(Math.floor(performance.now() * 1000));
+            view.setUint32(pCounter, Number(count & 0xffffffffn), true);
+            view.setUint32(pCounter + 4, Number(count >> 32n), true);
+            return 1;
+        },
+        QueryPerformanceFrequency: (_ctx, _mem, args) => {
+            const pFreq = args[0];
+            const view = new DataView(memory.buffer);
+            view.setUint32(pFreq, 1000000, true);
+            view.setUint32(pFreq + 4, 0, true);
+            return 1;
+        },
+        GetStartupInfoA: (_ctx, _mem, args) => {
+            const pStartupInfo = args[0];
+            const view = new DataView(memory.buffer);
+            view.setUint32(pStartupInfo, 68, true); // cb = 68
+            return 0;
+        },
+        GetVersion: () => 0x01060000, // Windows Vista 6.0
+        GetVersionExA: (_ctx, _mem, args) => {
+            const pVer = args[0];
+            const view = new DataView(memory.buffer);
+            view.setUint32(pVer + 4, 6, true);       // dwMajorVersion = 6 (Vista)
+            view.setUint32(pVer + 8, 0, true);       // dwMinorVersion = 0
+            view.setUint32(pVer + 12, 6000, true);   // dwBuildNumber = 6000
+            view.setUint32(pVer + 16, 2, true);      // dwPlatformId = VER_PLATFORM_WIN32_NT
+            return 1;
+        },
+        InitializeCriticalSectionAndSpinCount: () => 1,
+        GetProcessHeap: () => 0x00150000,
+        HeapCreate: () => 0x00210000,
+        HeapAlloc: (_ctx, _mem, args) => {
+            const size = args[2] || 64;
+            const addr = nextHeapAddr;
+            nextHeapAddr = (nextHeapAddr + size + 15) & ~15;
+            return addr;
+        },
+        HeapFree: () => 1,
+        TlsAlloc: () => nextTlsIndex++,
+        TlsSetValue: (_ctx, _mem, args) => {
+            tlsSlots.set(args[0], args[1]);
+            return 1;
+        },
+        TlsGetValue: (_ctx, _mem, args) => {
+            return tlsSlots.get(args[0]) || 0;
+        },
+        TlsFree: (_ctx, _mem, args) => {
+            tlsSlots.delete(args[0]);
+            return 1;
+        },
+        DecodePointer: (_ctx, _mem, args) => args[0],
+        EncodePointer: (_ctx, _mem, args) => args[0],
+        GetProcAddress: (_ctx, mem, args) => {
+            const pName = args[1];
+            let name = '';
+            for (let i = pName; i < mem.length && mem[i] !== 0; i++) {
+                name += String.fromCharCode(mem[i]);
+            }
+            if (name === 'DecodePointer' || name === 'EncodePointer') {
+                return bridge.registerDynamicApi('kernel32', name);
+            }
+            if (name === 'FlsAlloc' || name === 'FlsFree' || name === 'FlsSetValue' || name === 'FlsGetValue') {
+                return 0; // Trigger TLS fallback in CRT
+            }
+            return bridge.registerDynamicApi('kernel32', name);
+        },
+        ExitProcess: (_ctx, _mem, args) => {
+            console.log(`[TestEntry] ExitProcess called with code: 0x${args[0].toString(16)}`);
+            process.exit(0);
+        },
+        GetLastError: () => 0,
+        GetModuleHandleA: (_ctx, _mem, _args) => imageBase,
+        GetCommandLineA: () => {
+            // Write command line to a fixed scratch area
+            const cmdAddr = 0x180000;
+            const cmdStr = 'halo2.exe -windowed\0';
+            for (let i = 0; i < cmdStr.length; i++) {
+                memBytes[cmdAddr + i] = cmdStr.charCodeAt(i);
+            }
+            return cmdAddr;
+        },
+    });
+
+    console.log('[TestEntry] Compiling and instantiating halo2_recompiled.wasm...');
+    const wasmBytes = fs.readFileSync(wasmPath);
+    const mod = new WebAssembly.Module(wasmBytes);
+
+    // Auto-bind all imported functions declared in the WASM module
+    for (const imp of WebAssembly.Module.imports(mod)) {
+        if (imp.kind === 'function' && imp.name.startsWith('win32_')) {
+            const parts = imp.name.replace(/^win32_/, '').split('_');
+            const dll = parts[0];
+            const func = parts.slice(1).join('_');
+            bridge.bindApi(dll, func, 4);
         }
-        return cmdAddr;
-    },
-});
-
-console.log('[TestEntry] Compiling and instantiating halo2_recompiled.wasm...');
-const wasmBytes = fs.readFileSync(wasmPath);
-const mod = new WebAssembly.Module(wasmBytes);
-
-// Auto-bind all imported functions declared in the WASM module
-for (const imp of WebAssembly.Module.imports(mod)) {
-    if (imp.kind === 'function' && imp.name.startsWith('win32_')) {
-        const parts = imp.name.replace(/^win32_/, '').split('_');
-        const dll = parts[0];
-        const func = parts.slice(1).join('_');
-        bridge.bindApi(dll, func, 4);
     }
-}
 
-const instance = new WebAssembly.Instance(mod, bridge.createWasmImports());
-console.log(`[TestEntry] WASM Instance created with ${Object.keys(instance.exports).length} exports.`);
+    const instance = new WebAssembly.Instance(mod, bridge.createWasmImports());
+    bridge.registerExports(instance.exports);
+    console.log(`[TestEntry] WASM Instance created with ${Object.keys(instance.exports).length} exports.`);
 
 const exports = instance.exports as any;
 if (typeof exports.entry !== 'function') {

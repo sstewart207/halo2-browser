@@ -6564,4 +6564,8 @@ export class ThunkDispatcher {
         this.sehDispatchStack = [];
         this.sehDispatchGeneration = 0;
     }
+
+    getStubByAddress(address: number): ThunkStub | undefined {
+        return this.thunkGenerator.getStubByAddress(address);
+    }
 }

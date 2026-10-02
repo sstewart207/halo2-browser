@@ -74,10 +74,12 @@ if (isValid) {
     const bridge = new RuntimeBridge({ memory, iatResolver });
     // Bind all imports declared in the module
     for (const fi of builder.functionImports) {
-        const parts = fi.field.replace(/^win32_/, '').split('_');
-        const dll = parts[0];
-        const func = parts.slice(1).join('_');
-        bridge.bindApi(dll, func, 4);
+        if (fi.field.startsWith('win32_')) {
+            const parts = fi.field.replace(/^win32_/, '').split('_');
+            const dll = parts[0];
+            const func = parts.slice(1).join('_');
+            bridge.bindApi(dll, func, 4);
+        }
     }
 
     const inst = new WebAssembly.Instance(mod, bridge.createWasmImports());

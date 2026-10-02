@@ -141,29 +141,57 @@ export class Lifter {
         return idx;
     }
 
+    indirectCallSigIndex?: number;
+    indirectCallImportIdx?: number;
+
+    getOrAddIndirectCallImport(): number {
+        if (this.indirectCallImportIdx !== undefined) {
+            return this.indirectCallImportIdx;
+        }
+        if (this.indirectCallSigIndex === undefined) {
+            this.indirectCallSigIndex = this.moduleBuilder.addSignature([0x7f, 0x7f, 0x7f, 0x7f], [0x7f]);
+        }
+        this.indirectCallImportIdx = this.moduleBuilder.addFunctionImport('env', 'indirect_call', this.indirectCallSigIndex, 'indirect_call');
+        return this.indirectCallImportIdx;
+    }
+
     prepareModule(functions: CFGFunction[]) {
+        let hasIndirectCall = false;
+
         for (let i = 0; i < functions.length; i++) {
             const entryAddr = parseInt(functions[i].entry, 16);
             this.funcEntryMap.set(entryAddr, i);
         }
 
-        if (this.iatResolver) {
-            for (const fn of functions) {
-                for (const bb of fn.basicBlocks) {
-                    for (const rawInst of bb.instructions) {
-                        if (rawInst.mnemonic === 'CALL') {
-                            const inst = parseInstruction(rawInst);
-                            const [target] = inst.operands;
-                            if (target && target.kind === 'mem') {
-                                const entry = this.iatResolver.resolve(target.disp);
-                                if (entry) {
-                                    this.getOrAddApiImport(entry.dll, entry.func);
-                                }
+        for (const fn of functions) {
+            for (const bb of fn.basicBlocks) {
+                for (const rawInst of bb.instructions) {
+                    if (rawInst.mnemonic === 'CALL') {
+                        const inst = parseInstruction(rawInst);
+                        const [target] = inst.operands;
+                        if (!target) continue;
+                        if (target.kind === 'mem' && this.iatResolver && !target.base && !target.index) {
+                            const entry = this.iatResolver.resolve(target.disp);
+                            if (entry) {
+                                this.getOrAddApiImport(entry.dll, entry.func);
+                                continue;
                             }
                         }
+                        if (target.kind === 'imm' && (
+                            target.value === 0x687b7e || target.value === 0x68c215 || // alloca
+                            target.value === 0x692cc3 || target.value === 0x692d08 || // SEH
+                            this.funcEntryMap.has(target.value)
+                        )) {
+                            continue;
+                        }
+                        hasIndirectCall = true;
                     }
                 }
             }
+        }
+
+        if (hasIndirectCall) {
+            this.getOrAddIndirectCallImport();
         }
     }
 
@@ -1368,8 +1396,43 @@ export class Lifter {
                     return;
                 }
 
-                fn.comment(`CALL ${inst.rawOps}`);
-                break;
+                // 4. Indirect Function Call: CALL reg / CALL [mem] / unresolved CALL imm
+                const indirectIdx = this.getOrAddIndirectCallImport();
+                fn.comment(`Indirect Function Call: ${inst.rawOps}`);
+
+                // Push return address: esp = esp - 4; mem[esp] = retAddr
+                fn.local_get(LOCALS.ESP);
+                fn.i32_const(4);
+                fn.i32_sub();
+                fn.local_set(LOCALS.ESP);
+
+                fn.local_get(LOCALS.ESP);
+                fn.i32_const(inst.addr + inst.len);
+                fn.i32_store(0, 2);
+
+                // Compute target address into WASM stack
+                if (target.kind === 'reg') {
+                    fn.local_get(REG_TO_LOCAL[target.baseReg]);
+                } else if (target.kind === 'mem') {
+                    this.emitEffectiveAddress(fn, target);
+                    fn.i32_load(0, 2);
+                } else if (target.kind === 'imm') {
+                    fn.i32_const(target.value);
+                }
+
+                // Arguments to indirect_call: (targetAddr, esp, ecx, eax)
+                fn.local_get(LOCALS.ESP);
+                fn.local_get(LOCALS.ECX);
+                fn.local_get(LOCALS.EAX);
+                fn.call_func(indirectIdx, 'indirect_call');
+                fn.local_set(LOCALS.EAX);
+
+                // Pop return address: esp = esp + 4
+                fn.local_get(LOCALS.ESP);
+                fn.i32_const(4);
+                fn.i32_add();
+                fn.local_set(LOCALS.ESP);
+                return;
             }
             default:
                 fn.comment(`UNHANDLED: ${inst.mnemonic} ${inst.rawOps}`);
@@ -1600,6 +1663,7 @@ export function liftExportedModule(cfgExport: CFGExport, options: LiftedModuleOp
         }
         seenNames.add(exportName);
         lifter.moduleBuilder.addExport(exportName, 0, i);
+        lifter.moduleBuilder.addExport(`addr_${fn.entry}`, 0, i);
     }
 
     return {

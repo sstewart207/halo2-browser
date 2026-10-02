@@ -619,5 +619,71 @@ describe('AOT Lifter Execution', () => {
         // Verify that FS:[0] was updated to tebBase
         expect(view.getUint32(tebBase, true)).toBe(tebBase);
     });
+
+    it('links and executes indirect function calls via registers and runtime bridge', () => {
+        // Callee at 0x408000: multiplies argument by 2
+        const calleeFn: CFGFunction = {
+            name: 'fn_indirect_callee',
+            entry: '0x408000',
+            rva: '0x8000',
+            size: 10,
+            basicBlocks: [
+                {
+                    start: '0x408000',
+                    end: '0x408007',
+                    destinations: [],
+                    instructions: [
+                        { addr: '0x408000', len: 4, mnemonic: 'MOV', ops: 'EAX, dword ptr [ESP + 0x4]' },
+                        { addr: '0x408004', len: 3, mnemonic: 'ADD', ops: 'EAX, EAX' },
+                        { addr: '0x408007', len: 1, mnemonic: 'RET', ops: '' }
+                    ]
+                }
+            ]
+        };
+
+        // Caller at 0x408100: pushes 21, moves 0x408000 into EDX, calls EDX
+        const callerFn: CFGFunction = {
+            name: 'fn_indirect_caller',
+            entry: '0x408100',
+            rva: '0x8100',
+            size: 16,
+            basicBlocks: [
+                {
+                    start: '0x408100',
+                    end: '0x40810f',
+                    destinations: [],
+                    instructions: [
+                        { addr: '0x408100', len: 5, mnemonic: 'PUSH', ops: '0x15' },
+                        { addr: '0x408105', len: 5, mnemonic: 'MOV', ops: 'EDX, 0x408000' },
+                        { addr: '0x40810a', len: 2, mnemonic: 'CALL', ops: 'EDX' },
+                        { addr: '0x40810c', len: 3, mnemonic: 'ADD', ops: 'ESP, 0x4' },
+                        { addr: '0x40810f', len: 1, mnemonic: 'RET', ops: '' }
+                    ]
+                }
+            ]
+        };
+
+        const cfgExport: CFGExport = {
+            program: 'test_indirect',
+            imageBase: '0x400000',
+            functions: [calleeFn, callerFn]
+        };
+
+        const { wasmBytes } = liftExportedModule(cfgExport, { memoryPages: 160, exportMemory: true });
+        const mod = new WebAssembly.Module(wasmBytes);
+
+        // Create runtime bridge with shared memory
+        const memory = new WebAssembly.Memory({ initial: 160 });
+        const { RuntimeBridge } = require('../recompiler/runtime-bridge');
+        const bridge = new RuntimeBridge({ memory });
+
+        const inst = new WebAssembly.Instance(mod, bridge.createWasmImports());
+        bridge.registerExports(inst.exports, [calleeFn, callerFn]);
+
+        const exports = inst.exports as any;
+        const result = exports.fn_indirect_caller(0x19ff00, 0, 0);
+        expect(result).toBe(42);
+    });
 });
+
 

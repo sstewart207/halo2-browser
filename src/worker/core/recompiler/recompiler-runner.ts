@@ -63,6 +63,58 @@ export class RecompilerRunner {
             logCalls,
         });
 
+        // Parse in-memory PE Import Directory at imageBase to bind all IAT entries
+        const lfanew = view.getUint32(imageBase + 0x3c, true);
+        const optHeaderOffset = imageBase + lfanew + 24;
+        const importDirRVA = view.getUint32(optHeaderOffset + 104, true);
+        const importDirSize = view.getUint32(optHeaderOffset + 108, true);
+
+        if (importDirRVA && importDirSize) {
+            let descOffset = imageBase + importDirRVA;
+            const descEnd = descOffset + importDirSize;
+            const memBytes = new Uint8Array(memory.buffer);
+
+            const readAnsi = (addr: number): string => {
+                let str = '';
+                for (let i = addr; i < memBytes.length && memBytes[i] !== 0; i++) {
+                    str += String.fromCharCode(memBytes[i]);
+                }
+                return str;
+            };
+
+            while (descOffset + 20 <= descEnd) {
+                const iltRVA = view.getUint32(descOffset, true);
+                const nameRVA = view.getUint32(descOffset + 12, true);
+                const iatRVA = view.getUint32(descOffset + 16, true);
+                if (!nameRVA || !iatRVA) break;
+
+                const dllName = readAnsi(imageBase + nameRVA);
+                const thunkRVA = iltRVA || iatRVA;
+                let i = 0;
+
+                while (true) {
+                    const thunkVal = view.getUint32(imageBase + thunkRVA + i * 4, true);
+                    const iatSlot = imageBase + iatRVA + i * 4;
+                    if (thunkVal === 0) break;
+
+                    let funcName = '';
+                    if ((thunkVal & 0x80000000) === 0) {
+                        funcName = readAnsi(imageBase + thunkVal + 2);
+                    } else {
+                        funcName = `ord_${thunkVal & 0xffff}`;
+                    }
+
+                    if (funcName) {
+                        this.bridge.registerIatEntry(iatSlot, dllName, funcName);
+                        // Populate IAT slot in memory with its own address for indirect calls
+                        view.setUint32(iatSlot, iatSlot, true);
+                    }
+                    i++;
+                }
+                descOffset += 20;
+            }
+        }
+
         // Compile WASM module
         const t0 = performance.now();
         const mod = await WebAssembly.compile(wasmBytes as any);
@@ -82,10 +134,17 @@ export class RecompilerRunner {
         // Instantiate
         this.instance = await WebAssembly.instantiate(mod, this.bridge.createWasmImports());
         const exports = this.instance.exports as any;
+        this.bridge.registerExports(exports);
         Logger.log(LogCategory.SYSTEM, `[Recompiler] Module instantiated with ${Object.keys(exports).length} exports.`);
 
+        // Initialize PE security cookie via entry() if available
+        if (typeof exports.entry === 'function') {
+            Logger.log(LogCategory.SYSTEM, `[Recompiler] Initializing PE security cookie via entry()...`);
+            exports.entry(stackTop, 0, 0);
+        }
+
         // Find entry function
-        const targetEntry = exports[entryName] || exports.entry;
+        const targetEntry = exports[entryName] || exports.___tmainCRTStartup || exports.entry;
         if (typeof targetEntry !== 'function') {
             throw new Error(`[Recompiler] Target entry point "${entryName}" not found in exports!`);
         }
