@@ -1,5 +1,63 @@
 # Next agent: first playable build (menu text is fixed)
 
+## Oct 1-2 2026, Codex (Space Bunny): CAMPAIGN BLOCKED BY MISSING MAPS; input tested
+
+Read this section first; it supersedes the boot recipe below, which is now WRONG in two places.
+
+### 1. BLOCKER: the bundle ships only ONE campaign map, so every other mission hangs forever
+
+`C:\maps` in the guest contains exactly four maps plus `fonts/`:
+
+| file | size |
+|---|---|
+| `mainmenu.map` | 61,063,680 |
+| `shared.map` | 201,512,960 |
+| `single_player_shared.map` | 289,477,120 |
+| `01a_tutorial.map` | 62,932,480 |
+
+Selecting a mission whose scenario file is absent puts the game into an **infinite retry loop**: the log shows `GetFileAttributesA("maps\\<scenario>.map")` for the missing file over and over, interleaved with re-probes of the three maps that do exist. The loading/wipe screen keeps animating at a healthy **60 fps** (v86 ~12 ms, thunk ~4 ms) and the guest heap stays **byte-identical** across samples (HEAP 507.47 MB, HEAP_HI 309.19 MB) — so it looks exactly like the "wedge" in the older notes, but it is a missing-asset spin, not memory exhaustion. Escape aborts it and returns to CHOOSE DIFFICULTY.
+
+Measured scenario names per menu entry (from the guest log):
+
+| level-list entry | scenario probed | in bundle? |
+|---|---|---|
+| The Heretic (1st) | `00a_introduction.map` | NO - hangs |
+| **Armory (2nd)** | loads OK (see below) | yes (`01a_tutorial.map`) |
+| Cairo Station (3rd) | `01b_spacestation.map` | NO - hangs |
+| Outskirts / Metropolis / others | not tested; almost certainly missing | NO |
+
+**The Armory is the only playable mission with the current bundle.** Verified in-level: black world, red light glow, "Move the Mouse to look up" prompt, shield bar + motion-tracker HUD, and Escape opens GAME PAUSED with the level's own objective text ("Follow the Gunnery Sergeant's instructions"). Choose **Armory**, not Cairo Station, until more maps are added to the bundle. Adding the remaining scenario maps to the wgb is the single highest-value fix for campaign play.
+
+### 2. Input status (measured, not assumed)
+
+- **Menus: keyboard works.** Enter/Up/Down/Escape all drive the UI (verified by screenshot at every step). Two behaviours to know: menu lists **auto-repeat while a key is held** (one 600 ms Down moved the selection 3 rows) so use short taps (~130 ms) to move exactly one row; and Escape needs a **long hold (~900 ms)** to leave a panel - 500 ms was ignored on CHOOSE DIFFICULTY.
+- **In-level Escape: works.** GAME PAUSED appears with the correct level objective.
+- **In-level mouse-look WORKS for a real player; the HARNESS cannot drive it.** Verified: dispatching a `PointerEvent('pointermove', {movementX: 70})` at the canvas immediately turns the camera, clears the "Move the Mouse to look up" tutorial and reveals new geometry (screenshot before/after). The harness `move`/`drag` verbs do **not** work, and the reason is precise:
+  - The game polls **`IDirectInputDevice8A_GetDeviceState`**, not `GetDeviceData` (`apiCensus` shows `GetDeviceState` called, `drainDInputMouseEvents` never), so the queued relative-motion event buffer is irrelevant.
+  - `GetDeviceState`'s mouse branch (`src/worker/modules/dinput/dinput.ts` ~line 880) computes `dx/dy = accum - lastSeen`, where `accum = inputManager.getDInputAccum()` = SAB slots `dinputDX`/`dinputDY` (14/15).
+  - **Only App.tsx's `pointermove` handler adds to those slots** (`Atomics.add(inputView, INPUT_INDEX.dinputDX, event.movementX)`). `InputManager.injectMoveAtScreen` writes absolute `mouseX`/`mouseY` and calls `poll()` but never touches 14/15, so harness dx/dy are always 0.
+  - **Fix when you want scripted camera control:** make `injectMoveAtScreen`/`injectDragAtScreen` `Atomics.add` slots 14/15 with the same movement delta. Until then, drive look from the page side with synthetic `PointerEvent`s that carry `movementX/movementY` (that is what worked here).
+- **In-level W/A/S/D: unverified.** A 2 s W hold produced no visible change, but the world renders black so there is nothing to confirm movement against. Escape and the menus prove the keyboard reaches the game; movement needs a visible world.
+- New dialog not in any recipe: after a profile exists, selecting it shows **"ARE YOU SURE? You're not signed in to Live..."** (OK/Cancel) before the main menu.
+- The profile created in a previous session (`Halo0001`) **survives a full page reload**, so profile selection is already persistent. Campaign saves are still untested.
+
+### 3. Performance (tab visible, perfProfile + perfStats)
+
+| scene | fps | frame | v86 | thunk | gpu | present |
+|---|---|---|---|---|---|---|
+| loading / menu wipe | 60.0 | 16.7 ms | 12.1 | 4.2 | 0.13 | 0.19 |
+| **Armory in-level** | **18.5** | 54 ms | 38.7 | 14.4 | 0.16 | 0.19 |
+
+In-level is ~18.5 fps, better than the ~11 fps in NEWEST-29 but still 3x short of 60. Note in-level thunk cost (14.4 ms) is 3x the menu cost, so D3D9 call batching is worth more here than the menu numbers suggested.
+
+### 4. Rendering: the world is black in-level
+
+The menus render beautifully (fonts, mission artwork, emblems). In-level we get a **black frame with one red light glow / lens flare**, the HUD and the tutorial prompt - no geometry, no textures. `present` count is healthy (25,177 presents) and `ReadFile` shows real loading, so this is a shading/visibility problem, not a stalled renderer. Do not claim "level renders" from a screenshot of the intro frame.
+
+### 5. Stability soak (6 min, Armory in-level)
+
+Twelve 30-second samples: guest heap **HEAP 507.68 MB and HEAP_HI 232.47 MB, identical in all 12**, fps 18.5-19.6 for the first ten samples then 28.1 and 35.8 in the last two (the camera had been turned away from the bright light by then), no crash, no exception, no allocation growth. The old 1.7 GB runaway is not reproducing. Note the level is black, so this only proves emulator stability, not that the game is playable.
+
 ## October 1 product goal and next-agent handoff
 
 User confirmed the long-term experience: open a private hosted URL on PC, Android or iPhone/iPad, load/download the game, and execute locally on that device. No streaming or remote execution. Support DualSense and other OS-recognized USB/Bluetooth controllers through the browser Gamepad API, translated into guest XInput. Add remapping, dead zones, disconnect/reconnect handling, and test wired/wireless separately on each target device. Local persistent campaign saves first; complete emulator snapshots and optional private cross-device save sync are separate later milestones.
