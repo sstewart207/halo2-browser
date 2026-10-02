@@ -6,7 +6,7 @@ The implementation and runtime checks below refer to the [checkpoint branch](htt
 
 ## Current achievement
 
-The real animated Halo 2 title screen and menu panels render in Chrome. Keyboard input advances the title screen into the menu. This is original guest rendering, not a recreated web menu. Menu and title text now render readably in Chrome (verified: PRESS ANY KEY TO CONTINUE, the ONLINE ACCOUNTS panel and its options). Campaign gameplay is not yet verified, and speed is currently about 14-20 fps, short of the 60 fps goal.
+The real animated Halo 2 title screen and menu panels render in Chrome. Keyboard input advances the title screen into the menu. This is original guest rendering, not a recreated web menu. Menu and title text now render readably in Chrome (verified: PRESS ANY KEY TO CONTINUE, the ONLINE ACCOUNTS panel and its options). The campaign now loads from the keyboard-driven menus and reaches the Cairo Station opening (about 11 fps in the level; input, audio and stability there are not yet verified). Speed is short of the 60 fps goal. Reproduce with docs/halo2-boot-recipe.md.
 
 Implemented and verified incrementally: native Windows startup compatibility, shader compilation, correct shader bytecode parsing and SM3 semantics, multiple vertex streams, texture transfers and surface copies, volume textures, resource ownership, render-target restoration, indexed strips and programmable MRT output. Fixing resource lifetime reduced a 1.7 GB guest-memory leak to roughly 750 MB.
 
