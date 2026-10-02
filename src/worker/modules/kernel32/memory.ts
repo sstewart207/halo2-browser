@@ -609,6 +609,9 @@ export const exports: Record<string, ThunkImplementation> = (() => {
 
     const LOW_GAP_BASE = 0x00100000; // above the registered low-memory region
     const LOW_GAP_END = 0x00400000;  // default main image base
+    // Current protection of each low-gap allocation (root base -> flProtect). Those allocations have
+    // no addressSpace region, so VirtualProtect resolves them through virtualAllocRegions instead.
+    const lowGapProtect: Map<number, number> = new Map();
     const isFreeLowGap = (addr: number, size: number): boolean => {
         if (addr < LOW_GAP_BASE || addr + size > LOW_GAP_END) return false;
         for (const [base, len] of virtualAllocRegions) {
@@ -1824,6 +1827,7 @@ export const exports: Record<string, ThunkImplementation> = (() => {
                 // RAM-backed user VA between low memory and the main image sits outside every
                 // allocator bucket, but VirtualQuery reports it MEM_FREE, so hinted allocations
                 // (e.g. Detours trampoline regions below the target module) must succeed there.
+                lowGapProtect.set(address, flProtect);
             } else {
                 process.memory.allocAt(address, alignedSize, 'HEAP', perms);
             }
@@ -2004,6 +2008,21 @@ export const exports: Record<string, ThunkImplementation> = (() => {
         // Get current region for old perms
         const region = process.addressSpace.getRegion(alignedAddr);
         if (!region) {
+            const root = findTrackedAllocRange(alignedAddr, alignedSize);
+            if (root && lowGapProtect.has(root[0])) {
+                const oldProtect = lowGapProtect.get(root[0])!;
+                if (lpflOldProtect && lpflOldProtect + 4 <= mem.length) {
+                    new DataView(mem.buffer, mem.byteOffset, mem.byteLength).setUint32(lpflOldProtect, oldProtect, true);
+                }
+                lowGapProtect.set(root[0], flNewProtect);
+                const ptm = process.pageTableManager;
+                if (ptm?.isPagingEnabled()) {
+                    ptm.setProtection(alignedAddr, alignedSize, flNewProtect);
+                } else {
+                    bumpFastmemGeneration(FASTMEM_BUMP_ADDRESS_SPACE_PROTECT);
+                }
+                return 1;
+            }
             System.getInstance().scheduler.setLastError(ERROR_INVALID_ADDRESS);
             Logger.warn(LogCategory.KERNEL32,
                 `VirtualProtect: Invalid address 0x${alignedAddr.toString(16)}`);

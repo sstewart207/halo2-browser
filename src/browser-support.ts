@@ -124,6 +124,17 @@ async function readAdapterInfo(adapter: GPUAdapter): Promise<WebGPUProbeResult["
   }
 }
 
+/** Adapter description for display (no device is created); undefined when WebGPU or an adapter is unavailable. */
+export async function getWebGPUAdapterInfo(): Promise<WebGPUProbeResult["adapter"]> {
+  if (typeof navigator === "undefined" || !("gpu" in navigator)) return undefined;
+  try {
+    const adapter = await navigator.gpu.requestAdapter();
+    return adapter ? await readAdapterInfo(adapter) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Actually acquire a WebGPU adapter + device (mirrors WebGPUBackend.initialize, which requires no
  * mandatory features — so this never false-negatives on an adapter the backend would accept).

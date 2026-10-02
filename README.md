@@ -6,19 +6,21 @@ The implementation and runtime checks below refer to the [checkpoint branch](htt
 
 ## Current achievement
 
-The real animated Halo 2 title screen and menu panels render in Chrome. Keyboard input advances the title screen into the menu. This is original guest rendering, not a recreated web menu. Readable menu labels are the current acceptance blocker; campaign gameplay is not yet verified.
+The real animated Halo 2 title screen and menu panels render in Chrome. Keyboard input advances the title screen into the menu. This is original guest rendering, not a recreated web menu. Menu and title text now render readably in Chrome (verified: PRESS ANY KEY TO CONTINUE, the ONLINE ACCOUNTS panel and its options). Campaign gameplay is not yet verified, and speed is currently about 14-20 fps, short of the 60 fps goal.
 
 Implemented and verified incrementally: native Windows startup compatibility, shader compilation, correct shader bytecode parsing and SM3 semantics, multiple vertex streams, texture transfers and surface copies, volume textures, resource ownership, render-target restoration, indexed strips and programmable MRT output. Fixing resource lifetime reduced a 1.7 GB guest-memory leak to roughly 750 MB.
 
 Font files and glyph rasterization work. The fixed 128 KB glyph pixel cache starved requested characters, causing entire strings to be skipped. A build-guarded in-memory patch expands backing storage and its matching block count while preserving original entry capacities. The checkpoint uses 1 MB. Live character lookups and whole-string validation now pass for sampled title/account-menu text; readable labels remain blocked farther down the layout path. Glyph-handle and visible-label checks are documented separately in the [latest checkpoint](https://github.com/sstewart207/halo2-browser/blob/codex/halo2-browser-checkpoint/docs/halo2-browser-checkpoint.md); allocated glyphs alone do not establish readable menu text.
 
-**Validation: 929 tests pass; TypeScript clean.** Separate Chrome probes verify GPU surface-copy pixels and local decoding of 120 non-black WMV frames. Integrated intro playback and correct audio remain unverified. Synthetic tests are not gameplay acceptance.
+The readable-label blocker was not the font code: Project Cartographer installs its patches with Detours, and one failed `VirtualProtect` on the hint-allocated trampoline region (`0x3f0000`) made Detours silently discard all of its hooks, leaving its text label scale at 0. `VirtualProtect` now accepts ranges inside hinted low-gap allocations (regression test `tools/tests/virtual-protect-low-gap.test.ts`). Details in the checkpoint doc.
+
+**Validation: 932 tests pass; TypeScript clean.** Separate Chrome probes verify GPU surface-copy pixels and local decoding of 120 non-black WMV frames. Integrated intro playback and correct audio remain unverified. Synthetic tests are not gameplay acceptance.
 
 ## Goal and next steps
 
 The intended experience is a private hosted link: load the game and play locally in a browser on PC, Android or iPhone/iPad, with USB/Bluetooth controllers and persistent saves. Desktop campaign gameplay comes first. Mobile performance, Safari compatibility, controller input and emulator snapshots remain unverified. Hosting and delivery will use HTTPS, cross-origin isolation and browser caching; game assets stay private. See the [next-agent handoff](https://github.com/sstewart207/halo2-browser/blob/codex/halo2-browser-checkpoint/docs/next-agent-handoff.md).
 
-1. Finish readable menu labels and keyboard navigation.
+1. Reach the main menu and a campaign level (menu text and account/profile screens already work).
 2. Verify one single-player campaign level with graphics, audio and keyboard/mouse input.
 3. Persist native campaign progress across browser restarts.
 4. Add USB/Bluetooth DualSense and compatible gamepad controls through the Gamepad API and guest XInput, with remapping, dead zones and reconnect handling.

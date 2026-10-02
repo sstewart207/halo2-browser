@@ -3,6 +3,7 @@
 // Families: memwatch_*, profiler_* / frame_pacer_enable, memory_*, gpu_debug_* /
 // frame_capture_*.
 import { System } from "../core/system";
+import { EmulatorConfig } from "../core/emulator-config-manager";
 import { memoryWatch } from "../core/memory/memory-watch";
 import { leaseRegistry } from "../core/memory/lease-registry";
 import { memoryEventBuffer } from "../core/memory/memory-event-buffer";
@@ -16,6 +17,34 @@ import type { DDraw } from "../modules/ddraw";
 import type { Glide2x } from "../modules/glide2x";
 import type { OpenGL32 } from "../modules/opengl32";
 import type { WebGPUBackend } from "../backends/webgpu/webgpu-backend";
+
+const D3DFMT_DXT1 = 0x31545844;
+const D3DFMT_DXT2 = 0x32545844;
+const D3DFMT_DXT3 = 0x33545844;
+const D3DFMT_DXT4 = 0x34545844;
+const D3DFMT_DXT5 = 0x35545844;
+
+/** Bytes per pixel for the D3D9 formats textures commonly use; unknown formats count as 4. */
+function bytesPerPixel(format: number): number {
+  switch (format) {
+    case D3DFMT_DXT1: return 0.5;
+    case D3DFMT_DXT2:
+    case D3DFMT_DXT3:
+    case D3DFMT_DXT4:
+    case D3DFMT_DXT5: return 1;
+    case 28: case 50: return 1;                    // A8, L8
+    case 23: case 25: case 26: case 51: case 60: case 111: return 2; // R5G6B5, A1R5G5B5, A4R4G4B4, A8L8, V8U8, R16F
+    case 113: return 8;                            // A16B16G16R16F
+    case 116: return 16;                           // A32B32G32R32F
+    default: return 4;
+  }
+}
+
+function estimateTextureBytes(width: number, height: number, levels: number, format: number): number {
+  const base = width * height * bytesPerPixel(format);
+  // A full mip chain adds about one third on top of the base level.
+  return levels > 1 ? Math.round(base * (4 / 3)) : Math.round(base);
+}
 
 /**
  * Handles debug/monitoring host messages (memwatch, profiler, memory monitor,
@@ -79,6 +108,42 @@ export function handleDebugMonitorMessage(message: any): boolean {
       d3d9.executor.resetMetrics();
     }
     self.postMessage({ type: "profiler_reset", ok: true });
+    return true;
+  }
+
+  // Compact snapshot for the dev panel's live stats strip (cheap enough to poll at 1 Hz).
+  if (message?.type === "dev_stats") {
+    const system = System.getInstance();
+    const process = system.process;
+    const counters = system.services.render.getActive()?.getCounters?.() ?? {};
+
+    const buckets = process?.memory?.getBucketStats?.() ?? [];
+    const guestLiveBytes = buckets.reduce((sum, b) => sum + (b.liveUsed || 0), 0);
+
+    // WebGPU exposes no VRAM query; report what the emulator itself holds on the GPU.
+    let gpuTextureBytes = 0;
+    let gpuTextureCount = 0;
+    const device = d3d9Devices.size > 0 ? Array.from(d3d9Devices.values())[0] : undefined;
+    for (const t of device?.getTexturesDebugInfo() ?? []) {
+      if (!t.hasGpuTexture) continue;
+      gpuTextureCount++;
+      gpuTextureBytes += estimateTextureBytes(t.width, t.height, t.levels, t.format);
+    }
+
+    self.postMessage({
+      type: "dev_stats",
+      ok: true,
+      stats: {
+        fps: counters["fps"] ?? 0,
+        frames: counters["frames"] ?? 0,
+        drawCalls: counters["drawCalls"] ?? 0,
+        guestRamTotalBytes: process?.addressSpace?.getMemorySize() ?? 0,
+        guestRamLiveBytes: guestLiveBytes,
+        gpuTextureBytes,
+        gpuTextureCount,
+        emulatedVramBytes: EmulatorConfig.getInstance().memory.vram,
+      },
+    });
     return true;
   }
 

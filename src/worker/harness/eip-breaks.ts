@@ -17,6 +17,7 @@
 import { harnessBus } from "./event-bus";
 import { faultSnapshot, proc, cpu, guestMem } from "./serialize";
 import { dbg } from "../core/debug/dbg-commands";
+import { simdSnapshot } from "../core/fpu-helper";
 
 /**
  * Optional arg/stack predicate for a conditional breakpoint. Evaluated at the armed eip — which the
@@ -40,6 +41,24 @@ export interface BreakWhen {
     ne?: number;
 }
 
+/**
+ * Guest-memory read taken inside the hit handler, so the bytes belong to the exact hit instant
+ * (a post-hit readBytes races the running guest and sees later frames). Set `ptrArg` to read
+ * `len` bytes at [ESP+4+ptrArg*4]+off (an entry-convention pointer argument), or `esp` to read
+ * `len` bytes at ESP+esp (frame locals beyond the snapshot's fixed stack window), or `addr` to read
+ * `len` bytes at a fixed guest address (a global).
+ */
+export interface BreakCapture {
+    label?: string;
+    ptrArg?: number;
+    esp?: number;
+    addr?: number;
+    off?: number;
+    /** Capture MXCSR + XMM0-7 (132 bytes, simdSnapshot layout) instead of guest memory. */
+    simd?: boolean;
+    len: number;
+}
+
 interface EipBreakEntry {
     id: number;
     eip: number;
@@ -47,6 +66,7 @@ interface EipBreakEntry {
     once: boolean;
     pause: boolean;
     when?: BreakWhen;
+    capture?: BreakCapture[];
     onHit?: (snapshot: unknown) => void;
     hits: number;
 }
@@ -75,7 +95,7 @@ class EipBreakRegistry {
         };
     }
 
-    arm(eip: number, opts: { runId?: number | null; once?: boolean; pause?: boolean; when?: BreakWhen; onHit?: (s: unknown) => void } = {}): number {
+    arm(eip: number, opts: { runId?: number | null; once?: boolean; pause?: boolean; when?: BreakWhen; capture?: BreakCapture[]; onHit?: (s: unknown) => void } = {}): number {
         this.ensureInterceptor();
         const id = this.nextId++;
         this.entries.push({
@@ -85,6 +105,7 @@ class EipBreakRegistry {
             once: opts.once ?? true,
             pause: opts.pause ?? true,
             when: opts.when,
+            capture: opts.capture,
             onHit: opts.onHit,
             hits: 0,
         });
@@ -104,6 +125,38 @@ class EipBreakRegistry {
         if (when.eq !== undefined && val !== (when.eq >>> 0)) return false;
         if (when.ne !== undefined && val === (when.ne >>> 0)) return false;
         return true;
+    }
+
+    private readCaptures(specs: BreakCapture[]): Array<{ label: string; addr: number; hex: string | null }> {
+        const c = cpu();
+        const mem = guestMem();
+        const out: Array<{ label: string; addr: number; hex: string | null }> = [];
+        const esp = c?.reg32 ? c.reg32[4] >>> 0 : 0;
+        for (const s of specs) {
+            if (s.simd) {
+                const snap = simdSnapshot(proc()?.v86);
+                out.push({ label: s.label ?? "simd", addr: 0, hex: snap ? Array.from(snap, (b) => b.toString(16).padStart(2, "0")).join("") : null });
+                continue;
+            }
+            const label = s.label ?? (s.addr !== undefined ? `0x${(s.addr >>> 0).toString(16)}` : s.ptrArg !== undefined ? `arg${s.ptrArg}` : `esp+${s.esp ?? 0}`);
+            const len = Math.min(Math.max(s.len | 0, 1), 4096);
+            let addr = 0;
+            if (s.addr !== undefined) {
+                addr = s.addr >>> 0;
+            } else if (mem && esp) {
+                if (s.ptrArg !== undefined) {
+                    const slot = (esp + 4 + (s.ptrArg | 0) * 4) >>> 0;
+                    if (slot + 4 <= mem.length) addr = (new DataView(mem.buffer, mem.byteOffset, mem.byteLength).getUint32(slot, true) + (s.off ?? 0)) >>> 0;
+                } else {
+                    addr = (esp + (s.esp ?? 0)) >>> 0;
+                }
+            }
+            if (!mem || addr < 4 || addr + len > mem.length) { out.push({ label, addr, hex: null }); continue; }
+            let hex = "";
+            for (let i = 0; i < len; i++) hex += mem[addr + i].toString(16).padStart(2, "0");
+            out.push({ label, addr, hex });
+        }
+        return out;
     }
 
     disarm(id: number): void {
@@ -127,6 +180,7 @@ class EipBreakRegistry {
             // Conditional break: skip (keep running) until the arg/stack predicate holds.
             if (e.when && !this.evalWhen(e.when)) continue;
             const snap = faultSnapshot();
+            if (e.capture) (snap as Record<string, unknown>)["capture"] = this.readCaptures(e.capture);
             harnessBus.emit("breakHit", snap, e.runId);
             if (e.pause) {
                 // Canonical pause (sets module-level isPaused) so the break actually
