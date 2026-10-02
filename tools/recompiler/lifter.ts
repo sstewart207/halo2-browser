@@ -1224,6 +1224,120 @@ export class Lifter {
                 }
 
                 // 2. Direct internal function call: CALL imm
+                if (target.kind === 'imm') {
+                    // __alloca_probe / __alloca_probe_16: ESP = ESP - EAX
+                    if (target.value === 0x687b7e || target.value === 0x68c215) {
+                        fn.comment('Inlined compiler helper: __alloca_probe (ESP = ESP - EAX)');
+                        fn.local_get(LOCALS.ESP);
+                        fn.local_get(LOCALS.EAX);
+                        fn.i32_sub();
+                        fn.local_set(LOCALS.ESP);
+                        return;
+                    }
+
+                    // __SEH_prolog4: Sets up caller's EBP, allocates stack frame, registers SEH
+                    if (target.value === 0x692cc3) {
+                        fn.comment('Inlined compiler helper: __SEH_prolog4');
+                        const tebBase = this.options.tebAddress ?? 0x00030000;
+
+                        // Save scope_table from [ESP] into TMP1
+                        fn.local_get(LOCALS.ESP);
+                        fn.i32_load(0, 2);
+                        fn.local_set(LOCALS.TMP1);
+
+                        // Save frame_size from [ESP + 4] into TMP0
+                        fn.local_get(LOCALS.ESP);
+                        fn.i32_const(4);
+                        fn.i32_add();
+                        fn.i32_load(0, 2);
+                        fn.local_set(LOCALS.TMP0);
+
+                        // Save caller's current EBP into [ESP + 4]
+                        fn.local_get(LOCALS.ESP);
+                        fn.i32_const(4);
+                        fn.i32_add();
+                        fn.local_get(LOCALS.EBP);
+                        fn.i32_store(0, 2);
+
+                        // Set caller's new EBP = ESP + 4
+                        fn.local_get(LOCALS.ESP);
+                        fn.i32_const(4);
+                        fn.i32_add();
+                        fn.local_set(LOCALS.EBP);
+
+                        // Allocate local frame: ESP = ESP - frame_size - 0x20
+                        fn.local_get(LOCALS.ESP);
+                        fn.local_get(LOCALS.TMP0);
+                        fn.i32_sub();
+                        fn.i32_const(0x20);
+                        fn.i32_sub();
+                        fn.local_set(LOCALS.ESP);
+
+                        // [EBP - 4] = 0xfffffffe (-2, _trylevel)
+                        fn.local_get(LOCALS.EBP);
+                        fn.i32_const(4);
+                        fn.i32_sub();
+                        fn.i32_const(-2);
+                        fn.i32_store(0, 2);
+
+                        // [EBP - 8] = scope_table (TMP1)
+                        fn.local_get(LOCALS.EBP);
+                        fn.i32_const(8);
+                        fn.i32_sub();
+                        fn.local_get(LOCALS.TMP1);
+                        fn.i32_store(0, 2);
+
+                        // [EBP - 0xc] = 0x68900b (_except_handler4)
+                        fn.local_get(LOCALS.EBP);
+                        fn.i32_const(0xc);
+                        fn.i32_sub();
+                        fn.i32_const(0x68900b);
+                        fn.i32_store(0, 2);
+
+                        // [EBP - 0x10] = old FS:[0]
+                        fn.local_get(LOCALS.EBP);
+                        fn.i32_const(0x10);
+                        fn.i32_sub();
+                        fn.i32_const(tebBase);
+                        fn.i32_load(0, 2);
+                        fn.i32_store(0, 2);
+
+                        // Update FS:[0] = EBP - 0x10
+                        fn.i32_const(tebBase);
+                        fn.local_get(LOCALS.EBP);
+                        fn.i32_const(0x10);
+                        fn.i32_sub();
+                        fn.i32_store(0, 2);
+                        return;
+                    }
+
+                    // __SEH_epilog4: Restores old FS:[0], restores ESP and EBP
+                    if (target.value === 0x692d08) {
+                        fn.comment('Inlined compiler helper: __SEH_epilog4');
+                        const tebBase = this.options.tebAddress ?? 0x00030000;
+
+                        // Restore FS:[0] = [EBP - 0x10]
+                        fn.i32_const(tebBase);
+                        fn.local_get(LOCALS.EBP);
+                        fn.i32_const(0x10);
+                        fn.i32_sub();
+                        fn.i32_load(0, 2);
+                        fn.i32_store(0, 2);
+
+                        // ESP = EBP + 8 (pop frame and original 2 pushes)
+                        fn.local_get(LOCALS.EBP);
+                        fn.i32_const(8);
+                        fn.i32_add();
+                        fn.local_set(LOCALS.ESP);
+
+                        // EBP = [EBP] (restore caller's old EBP)
+                        fn.local_get(LOCALS.EBP);
+                        fn.i32_load(0, 2);
+                        fn.local_set(LOCALS.EBP);
+                        return;
+                    }
+                }
+
                 if (target.kind === 'imm' && this.funcEntryMap.has(target.value)) {
                     const targetLocalIdx = this.funcEntryMap.get(target.value)!;
                     const targetWasmIdx = this.moduleBuilder.getLocalFunctionIndex(targetLocalIdx);
@@ -1291,15 +1405,19 @@ export class Lifter {
     }
 
     emitEffectiveAddress(fn: WasmFunctionBuilder, mem: MemoryOperand) {
+        const segBase = mem.segment === 'FS' ? (this.options.tebAddress ?? 0x00030000) : 0;
+
         if (!mem.base && !mem.index) {
-            fn.i32_const(mem.disp, `addr 0x${(mem.disp >>> 0).toString(16)}`);
+            const finalAddr = (mem.disp + segBase) >>> 0;
+            fn.i32_const(finalAddr, `addr 0x${finalAddr.toString(16)}`);
             return;
         }
 
         if (mem.base && !mem.index) {
             fn.local_get(REG_TO_LOCAL[mem.base]);
-            if (mem.disp !== 0) {
-                fn.i32_const(mem.disp);
+            const totalDisp = mem.disp + segBase;
+            if (totalDisp !== 0) {
+                fn.i32_const(totalDisp);
                 fn.i32_add();
             }
             return;
@@ -1313,8 +1431,9 @@ export class Lifter {
                 fn.i32_mul();
             }
             fn.i32_add();
-            if (mem.disp !== 0) {
-                fn.i32_const(mem.disp);
+            const totalDisp = mem.disp + segBase;
+            if (totalDisp !== 0) {
+                fn.i32_const(totalDisp);
                 fn.i32_add();
             }
             return;
@@ -1326,8 +1445,9 @@ export class Lifter {
                 fn.i32_const(mem.scale);
                 fn.i32_mul();
             }
-            if (mem.disp !== 0) {
-                fn.i32_const(mem.disp);
+            const totalDisp = mem.disp + segBase;
+            if (totalDisp !== 0) {
+                fn.i32_const(totalDisp);
                 fn.i32_add();
             }
             return;

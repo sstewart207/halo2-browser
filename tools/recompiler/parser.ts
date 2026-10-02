@@ -103,40 +103,54 @@ function parseNumber(s: string): number | null {
 export function parseOperand(opStr: string, defaultSize: 1 | 2 | 4 | 8 | 16 = 4): Operand {
     opStr = opStr.trim();
 
-    // Check segment override prefix (e.g. "ES:EDI", "FS:[0x0]")
+    // Check segment override prefix and size prefix in any order
     let segment: SegmentRegisterName | undefined;
-    const segMatch = opStr.match(/^(ES|DS|FS|GS|CS|SS):/i);
-    if (segMatch) {
-        segment = segMatch[1].toUpperCase() as SegmentRegisterName;
-        opStr = opStr.substring(segMatch[0].length).trim();
-    }
-
-    // Check memory size prefix
     let size: 1 | 2 | 4 | 8 | 16 = defaultSize;
-    if (opStr.startsWith('dword ptr ')) {
-        size = 4;
-        opStr = opStr.substring(10).trim();
-    } else if (opStr.startsWith('float ptr ')) {
-        size = 4;
-        opStr = opStr.substring(10).trim();
-    } else if (opStr.startsWith('word ptr ')) {
-        size = 2;
-        opStr = opStr.substring(9).trim();
-    } else if (opStr.startsWith('byte ptr ')) {
-        size = 1;
-        opStr = opStr.substring(9).trim();
-    } else if (opStr.startsWith('qword ptr ')) {
-        size = 8;
-        opStr = opStr.substring(10).trim();
-    } else if (opStr.startsWith('double ptr ')) {
-        size = 8;
-        opStr = opStr.substring(11).trim();
-    } else if (opStr.startsWith('xmmword ptr ') || opStr.startsWith('dqword ptr ')) {
-        size = 16;
-        opStr = opStr.substring(opStr.indexOf('ptr ') + 4).trim();
-    } else if (opStr.startsWith('extended double ptr ') || opStr.startsWith('tbyte ptr ')) {
-        size = 8;
-        opStr = opStr.substring(opStr.indexOf('ptr ') + 4).trim();
+
+    let changed = true;
+    while (changed) {
+        changed = false;
+        const segMatch = opStr.match(/^(ES|DS|FS|GS|CS|SS):/i);
+        if (segMatch) {
+            segment = segMatch[1].toUpperCase() as SegmentRegisterName;
+            opStr = opStr.substring(segMatch[0].length).trim();
+            changed = true;
+            continue;
+        }
+
+        if (opStr.startsWith('dword ptr ')) {
+            size = 4;
+            opStr = opStr.substring(10).trim();
+            changed = true;
+        } else if (opStr.startsWith('float ptr ')) {
+            size = 4;
+            opStr = opStr.substring(10).trim();
+            changed = true;
+        } else if (opStr.startsWith('word ptr ')) {
+            size = 2;
+            opStr = opStr.substring(9).trim();
+            changed = true;
+        } else if (opStr.startsWith('byte ptr ')) {
+            size = 1;
+            opStr = opStr.substring(9).trim();
+            changed = true;
+        } else if (opStr.startsWith('qword ptr ')) {
+            size = 8;
+            opStr = opStr.substring(10).trim();
+            changed = true;
+        } else if (opStr.startsWith('double ptr ')) {
+            size = 8;
+            opStr = opStr.substring(11).trim();
+            changed = true;
+        } else if (opStr.startsWith('xmmword ptr ') || opStr.startsWith('dqword ptr ')) {
+            size = 16;
+            opStr = opStr.substring(opStr.indexOf('ptr ') + 4).trim();
+            changed = true;
+        } else if (opStr.startsWith('extended double ptr ') || opStr.startsWith('tbyte ptr ')) {
+            size = 8;
+            opStr = opStr.substring(opStr.indexOf('ptr ') + 4).trim();
+            changed = true;
+        }
     }
 
     // Memory operand: [...]

@@ -91,3 +91,4 @@ tools/reference/**/*.h
 /profiles/
 /saves/
 *.wgb
+/public/halo2_recompiled.wasm

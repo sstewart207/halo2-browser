@@ -960,6 +960,36 @@ const loadPeData = async (peData: Uint8Array, skipReset: boolean = false) => {
     // Provide stack bounds to scheduler for main thread TEB allocation
     system.scheduler.setMainStackInfo(stackPointer, mainStackSize);
 
+    // Check if an AOT recompiled WebAssembly binary is available for this game
+    try {
+      const { RecompilerRunner } = await import("./core/recompiler/recompiler-runner");
+      const aotWasmBytes = await RecompilerRunner.tryFetchRecompiledWasm("halo2_recompiled.wasm");
+      if (aotWasmBytes) {
+        Logger.log(LogCategory.SYSTEM, `[Recompiler] Booting ${aotWasmBytes.byteLength.toLocaleString()} bytes via native AOT WebAssembly!`);
+        const runner = new RecompilerRunner();
+        const wasmMemory = cpu.wasm_memory ?? cpu.wm?.exports?.memory;
+        system.scheduler.initializeMainThreadTeb();
+        framePacer.start();
+        gameSessionActive = true;
+        setTimeout(() => {
+          runner.start({
+            system,
+            memory: wasmMemory,
+            wasmBytes: aotWasmBytes,
+            stackTop: stackPointer,
+            stackBase: stackPointer - mainStackSize,
+            entryName: '___tmainCRTStartup',
+            logCalls: false,
+          }).catch(err => {
+            Logger.error(LogCategory.SYSTEM, `[Recompiler] Fatal execution error: ${err}`);
+          });
+        }, 0);
+        return true;
+      }
+    } catch (e) {
+      Logger.warn(LogCategory.SYSTEM, `[Recompiler] AOT check failed, falling back to CPU emulation: ${e}`);
+    }
+
     // Set CPU to start executing the bootloader in real mode
     // After system.reset() -> v86.restart(), the CPU is already in Real Mode.
     // We just need to point CS:IP to our bootloader.

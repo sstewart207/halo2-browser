@@ -3,19 +3,22 @@
  * to BottleShip Win32 and Direct3D HLE implementations with zero emulation trap overhead.
  */
 
-import { X86Context, ThunkImplementation, ThunkDispatcher } from '../../src/worker/core/thunking/thunk-dispatcher';
-import { IATResolver, IATEntry } from './iat-resolver';
+import { X86Context, ThunkImplementation, ThunkDispatcher } from '../thunking/thunk-dispatcher';
+
+export interface IIATResolver {
+    resolve(rva: number): { dll: string; func: string } | null;
+}
 
 export interface RuntimeBridgeOptions {
     memory: WebAssembly.Memory;
-    iatResolver?: IATResolver;
+    iatResolver?: IIATResolver;
     dispatcher?: ThunkDispatcher;
     logCalls?: boolean;
 }
 
 export class RuntimeBridge {
     memory: WebAssembly.Memory;
-    iatResolver: IATResolver;
+    iatResolver?: IIATResolver;
     dispatcher?: ThunkDispatcher;
     logCalls: boolean;
     private apiModules = new Map<string, Record<string, ThunkImplementation>>();
@@ -23,7 +26,7 @@ export class RuntimeBridge {
 
     constructor(options: RuntimeBridgeOptions) {
         this.memory = options.memory;
-        this.iatResolver = options.iatResolver || new IATResolver();
+        this.iatResolver = options.iatResolver;
         this.dispatcher = options.dispatcher;
         this.logCalls = !!options.logCalls;
     }

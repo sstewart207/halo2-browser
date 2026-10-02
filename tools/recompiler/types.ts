@@ -83,5 +83,6 @@ export interface LiftedModuleOptions {
     exportMemory?: boolean;
     moduleName?: string;
     iatResolver?: any;
+    tebAddress?: number; // base address for FS segment (default 0x00030000)
 }
 

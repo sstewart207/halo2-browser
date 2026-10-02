@@ -566,5 +566,58 @@ describe('AOT Lifter Execution', () => {
         const result = exports.test_movd(0x19ff00, 0, 0);
         expect(result).toBe(0x3f800000);
     });
+
+    it('translates FS segment memory operations to TEB address', () => {
+        const op1 = parseOperand('FS:[0x0]');
+        expect(op1.segment).toBe('FS');
+        expect(op1.disp).toBe(0);
+
+        const op2 = parseOperand('dword ptr FS:[0x18]');
+        expect(op2.segment).toBe('FS');
+        expect(op2.disp).toBe(0x18);
+
+        // Test function: reads Self pointer from FS:[0x18], pushes it, reads FS:[0], writes to FS:[0], returns old FS:[0]
+        const fsFn: CFGFunction = {
+            name: 'test_teb_fs',
+            entry: '0x407000',
+            rva: '0x7000',
+            size: 25,
+            basicBlocks: [
+                {
+                    start: '0x407000',
+                    end: '0x407019',
+                    destinations: [],
+                    instructions: [
+                        { addr: '0x407000', len: 6, mnemonic: 'MOV', ops: 'EAX, dword ptr FS:[0x18]' }, // TEB Self
+                        { addr: '0x407006', len: 6, mnemonic: 'MOV', ops: 'ECX, FS:[0x0]' },          // Old ExceptionList
+                        { addr: '0x40700c', len: 6, mnemonic: 'MOV', ops: 'dword ptr FS:[0x0], EAX' }, // Write Self to ExceptionList
+                        { addr: '0x407012', len: 2, mnemonic: 'MOV', ops: 'EAX, ECX' },                // Return old ExceptionList
+                        { addr: '0x407014', len: 1, mnemonic: 'RET', ops: '' }
+                    ]
+                }
+            ]
+        };
+
+        const tebBase = 0x00030000;
+        const lifter = new Lifter({ memoryPages: 160, exportMemory: true, tebAddress: tebBase });
+        lifter.liftFunction(fsFn);
+        lifter.moduleBuilder.addExport(fsFn.name, 0, 0);
+
+        const bytes = lifter.moduleBuilder.toBinary();
+        const mod = new WebAssembly.Module(bytes);
+        const inst = new WebAssembly.Instance(mod);
+        const exports = inst.exports as any;
+
+        // Initialize TEB in exported memory
+        const mem = exports.memory as WebAssembly.Memory;
+        const view = new DataView(mem.buffer);
+        view.setUint32(tebBase, 0xffffffff, true);     // Initial ExceptionList = -1
+        view.setUint32(tebBase + 0x18, tebBase, true); // Self pointer
+
+        const oldExceptionList = exports.test_teb_fs(0x19ff00, 0, 0);
+        expect(oldExceptionList).toBe(-1); // 0xffffffff
+        // Verify that FS:[0] was updated to tebBase
+        expect(view.getUint32(tebBase, true)).toBe(tebBase);
+    });
 });
 

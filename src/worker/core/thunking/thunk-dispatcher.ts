@@ -3668,6 +3668,18 @@ export class ThunkDispatcher {
         }
     }
 
+    getImplementation(dllName: string, functionName: string): ThunkImplementation | null {
+        const key = `${dllName}:${functionName}`.toLowerCase();
+        const pending = this.pendingRegistrations.get(key);
+        if (pending) return pending.impl;
+        const stubs = this.findStubsByName(dllName, functionName);
+        if (stubs.length > 0) {
+            const impl = this.dispatchTable[stubs[0].functionId];
+            if (impl) return impl;
+        }
+        return null;
+    }
+
     /**
      * Check if a function has a fast path implementation
      */
