@@ -1,5 +1,27 @@
 # Next agent: first playable build (menu text is fixed)
 
+## Oct 2 2026, Antigravity/Gemini (with Codex): STATIC RECOMPILATION STAGE 2 (AOT LIFTER) COMPLETE (NEWEST-33)
+
+Read this section first; it supersedes earlier notes below.
+
+### 1. Stage 2 AOT Lifter Architecture Implemented (`tools/recompiler/`)
+- **`types.ts`:** Type definitions for Ghidra CFG exports, instruction operands, and module compiler settings.
+- **`parser.ts`:** Parses x86 disassembly operands (all register widths `EAX`/`AX`/`AL`/`AH`, effective addresses `[base + index*scale + disp]`, memory size specifiers `byte ptr`/`word ptr`/`dword ptr`, and hex/decimal immediates).
+- **`wasm-builder.ts`:** Low-overhead WebAssembly binary bytecode (`Uint8Array`) emitter with ULEB128/SLEB128 encoding and companion human-readable `.wat` generator. Zero external dependencies.
+- **`lifter.ts`:** Lifts x86 machine instructions to WebAssembly:
+  - Register mapping: Maps `EAX`, `ECX`, `EDX`, `EBX`, `ESP`, `EBP`, `ESI`, `EDI`, and sub-registers to WASM locals.
+  - EFLAGS: Eagerly updates `ZF`, `SF`, `CF`, `OF` on arithmetic/logic instructions (`ADD`, `SUB`, `CMP`, `TEST`, `XOR`, `AND`, `OR`, `INC`, `DEC`, `SHL`, `SHR`, `SAR`, `IMUL`).
+  - Memory: Translates effective addresses to linear memory loads and stores (`i32.load`, `i32.store`, `i32.load8_u`, `i32.load16_u`, etc.).
+  - Stack: Direct `PUSH` and `POP` against linear memory stack pointer (`ESP`).
+  - Structured Control Flow: Straight-line execution for single-block functions; outer `loop` with nested `br_table` dispatch for multi-block CFGs and conditional jumps (`JZ`, `JNZ`, `JS`, `JNS`, `JL`, `JGE`, `JA`, `JBE`).
+- **`tools/recompile-cfg.ts`:** CLI command to lift any CFG JSON to verified `.wasm` and `.wat`. Verified on 100 `halo2.exe` functions (415 basic blocks, 2,658 instructions) in **18.25 ms**, producing 43.5 KB WASM binary and 24,866 lines of WAT. V8/Bun engine validates and compiles the module in **2.7 ms**.
+- **`tools/tests/recompiler-lifter.test.ts`:** Comprehensive unit test suite. 12/12 tests pass in 49ms. All 951 tests pass.
+
+### 2. Immediate Next Goal (Stage 3 Linker):
+- Connect lifted WASM function calls to BottleShip's existing HLE Win32 and D3D9 WebGPU APIs.
+- Bind memory directly to BottleShip's 2GB `WebAssembly.Memory` buffer (`cpu.wasm_memory`).
+- Map Win32 IAT import calls directly to exported runtime functions, completely removing `v86` CPU and OUT-port trap overhead.
+
 ## Oct 2 2026, Antigravity/Gemini (with Codex): BOOT CRASH FIXED, CAMPAIGN PLAYABILITY & MOUSE LOOK VERIFIED (NEWEST-32)
 
 Read this section first; it supersedes the earlier blocker notes below.

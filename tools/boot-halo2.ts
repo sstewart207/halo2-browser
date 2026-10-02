@@ -11,3 +11,4 @@ const r = await harness()
     .run();
 
 console.log("Result:", JSON.stringify(r, null, 2));
+process.exit(0);

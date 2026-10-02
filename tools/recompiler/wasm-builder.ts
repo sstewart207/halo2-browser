@@ -1,0 +1,406 @@
+/**
+ * wasm-builder.ts — Low-overhead WebAssembly module builder (WAT and binary WASM emitter).
+ */
+
+export function encodeULEB128(val: number): number[] {
+    const bytes: number[] = [];
+    val = val >>> 0;
+    do {
+        let b = val & 0x7f;
+        val >>>= 7;
+        if (val !== 0) b |= 0x80;
+        bytes.push(b);
+    } while (val !== 0);
+    return bytes;
+}
+
+export function encodeSLEB128(val: number): number[] {
+    const bytes: number[] = [];
+    val = val | 0; // force 32-bit signed
+    let more = true;
+    while (more) {
+        let b = val & 0x7f;
+        val >>= 7;
+        if ((val === 0 && (b & 0x40) === 0) || (val === -1 && (b & 0x40) !== 0)) {
+            more = false;
+        } else {
+            b |= 0x80;
+        }
+        bytes.push(b);
+    }
+    return bytes;
+}
+
+export function encodeString(str: string): number[] {
+    const buf = Buffer.from(str, 'utf8');
+    return [...encodeULEB128(buf.length), ...buf];
+}
+
+export function createSection(id: number, payload: number[]): number[] {
+    return [id, ...encodeULEB128(payload.length), ...payload];
+}
+
+export interface WasmFuncSignature {
+    params: number[]; // 0x7F for i32
+    results: number[]; // 0x7F for i32
+}
+
+export class WasmFunctionBuilder {
+    name: string;
+    sigIndex: number;
+    locals: number[] = []; // count of i32 locals
+    bytecode: number[] = [];
+    watLines: string[] = [];
+
+    constructor(name: string, sigIndex: number) {
+        this.name = name;
+        this.sigIndex = sigIndex;
+    }
+
+    addLocals(count: number, type: number = 0x7f) {
+        this.locals.push(count, type);
+    }
+
+    // --- WASM Opcodes ---
+
+    emitByte(b: number) {
+        this.bytecode.push(b);
+    }
+
+    emitBytes(bytes: number[]) {
+        this.bytecode.push(...bytes);
+    }
+
+    // Constants & Variables
+    i32_const(val: number, watComment?: string) {
+        this.emitByte(0x41);
+        this.emitBytes(encodeSLEB128(val));
+        this.watLines.push(`    i32.const ${val}${watComment ? ` ;; ${watComment}` : ''}`);
+    }
+
+    local_get(idx: number, name?: string) {
+        this.emitByte(0x20);
+        this.emitBytes(encodeULEB128(idx));
+        this.watLines.push(`    local.get ${idx}${name ? ` ;; ${name}` : ''}`);
+    }
+
+    local_set(idx: number, name?: string) {
+        this.emitByte(0x21);
+        this.emitBytes(encodeULEB128(idx));
+        this.watLines.push(`    local.set ${idx}${name ? ` ;; ${name}` : ''}`);
+    }
+
+    local_tee(idx: number, name?: string) {
+        this.emitByte(0x22);
+        this.emitBytes(encodeULEB128(idx));
+        this.watLines.push(`    local.tee ${idx}${name ? ` ;; ${name}` : ''}`);
+    }
+
+    // Memory Load / Store
+    i32_load(offset: number = 0, align: number = 2) {
+        this.emitByte(0x28);
+        this.emitBytes(encodeULEB128(align));
+        this.emitBytes(encodeULEB128(offset));
+        this.watLines.push(`    i32.load offset=${offset}`);
+    }
+
+    i32_load8_u(offset: number = 0, align: number = 0) {
+        this.emitByte(0x2D);
+        this.emitBytes(encodeULEB128(align));
+        this.emitBytes(encodeULEB128(offset));
+        this.watLines.push(`    i32.load8_u offset=${offset}`);
+    }
+
+    i32_load8_s(offset: number = 0, align: number = 0) {
+        this.emitByte(0x2C);
+        this.emitBytes(encodeULEB128(align));
+        this.emitBytes(encodeULEB128(offset));
+        this.watLines.push(`    i32.load8_s offset=${offset}`);
+    }
+
+    i32_load16_u(offset: number = 0, align: number = 1) {
+        this.emitByte(0x2F);
+        this.emitBytes(encodeULEB128(align));
+        this.emitBytes(encodeULEB128(offset));
+        this.watLines.push(`    i32.load16_u offset=${offset}`);
+    }
+
+    i32_load16_s(offset: number = 0, align: number = 1) {
+        this.emitByte(0x2E);
+        this.emitBytes(encodeULEB128(align));
+        this.emitBytes(encodeULEB128(offset));
+        this.watLines.push(`    i32.load16_s offset=${offset}`);
+    }
+
+    i32_store(offset: number = 0, align: number = 2) {
+        this.emitByte(0x36);
+        this.emitBytes(encodeULEB128(align));
+        this.emitBytes(encodeULEB128(offset));
+        this.watLines.push(`    i32.store offset=${offset}`);
+    }
+
+    i32_store8(offset: number = 0, align: number = 0) {
+        this.emitByte(0x3A);
+        this.emitBytes(encodeULEB128(align));
+        this.emitBytes(encodeULEB128(offset));
+        this.watLines.push(`    i32.store8 offset=${offset}`);
+    }
+
+    i32_store16(offset: number = 0, align: number = 1) {
+        this.emitByte(0x3B);
+        this.emitBytes(encodeULEB128(align));
+        this.emitBytes(encodeULEB128(offset));
+        this.watLines.push(`    i32.store16 offset=${offset}`);
+    }
+
+    // Arithmetic & Logic
+    i32_add() { this.emitByte(0x6A); this.watLines.push('    i32.add'); }
+    i32_sub() { this.emitByte(0x6B); this.watLines.push('    i32.sub'); }
+    i32_mul() { this.emitByte(0x6C); this.watLines.push('    i32.mul'); }
+    i32_div_s() { this.emitByte(0x6D); this.watLines.push('    i32.div_s'); }
+    i32_div_u() { this.emitByte(0x6E); this.watLines.push('    i32.div_u'); }
+    i32_and() { this.emitByte(0x71); this.watLines.push('    i32.and'); }
+    i32_or() { this.emitByte(0x72); this.watLines.push('    i32.or'); }
+    i32_xor() { this.emitByte(0x73); this.watLines.push('    i32.xor'); }
+    i32_shl() { this.emitByte(0x74); this.watLines.push('    i32.shl'); }
+    i32_shr_s() { this.emitByte(0x75); this.watLines.push('    i32.shr_s'); }
+    i32_shr_u() { this.emitByte(0x76); this.watLines.push('    i32.shr_u'); }
+
+    // Comparisons
+    i32_eqz() { this.emitByte(0x45); this.watLines.push('    i32.eqz'); }
+    i32_eq() { this.emitByte(0x46); this.watLines.push('    i32.eq'); }
+    i32_ne() { this.emitByte(0x47); this.watLines.push('    i32.ne'); }
+    i32_lt_s() { this.emitByte(0x48); this.watLines.push('    i32.lt_s'); }
+    i32_lt_u() { this.emitByte(0x49); this.watLines.push('    i32.lt_u'); }
+    i32_gt_s() { this.emitByte(0x4A); this.watLines.push('    i32.gt_s'); }
+    i32_gt_u() { this.emitByte(0x4B); this.watLines.push('    i32.gt_u'); }
+    i32_le_s() { this.emitByte(0x4C); this.watLines.push('    i32.le_s'); }
+    i32_le_u() { this.emitByte(0x4D); this.watLines.push('    i32.le_u'); }
+    i32_ge_s() { this.emitByte(0x4E); this.watLines.push('    i32.ge_s'); }
+    i32_ge_u() { this.emitByte(0x4F); this.watLines.push('    i32.ge_u'); }
+
+    // Control Flow
+    block(type: number = 0x40, label?: string) {
+        this.emitByte(0x02);
+        this.emitByte(type);
+        this.watLines.push(`    block ${label ?? ''}`);
+    }
+
+    loop(type: number = 0x40, label?: string) {
+        this.emitByte(0x03);
+        this.emitByte(type);
+        this.watLines.push(`    loop ${label ?? ''}`);
+    }
+
+    if_block(type: number = 0x40) {
+        this.emitByte(0x04);
+        this.emitByte(type);
+        this.watLines.push('    if');
+    }
+
+    else_block() {
+        this.emitByte(0x05);
+        this.watLines.push('    else');
+    }
+
+    end(watComment?: string) {
+        this.emitByte(0x0B);
+        this.watLines.push(`    end${watComment ? ` ;; ${watComment}` : ''}`);
+    }
+
+    br(depth: number, watLabel?: string) {
+        this.emitByte(0x0C);
+        this.emitBytes(encodeULEB128(depth));
+        this.watLines.push(`    br ${depth}${watLabel ? ` ;; ${watLabel}` : ''}`);
+    }
+
+    br_if(depth: number, watLabel?: string) {
+        this.emitByte(0x0D);
+        this.emitBytes(encodeULEB128(depth));
+        this.watLines.push(`    br_if ${depth}${watLabel ? ` ;; ${watLabel}` : ''}`);
+    }
+
+    br_table(labels: number[], defaultLabel: number) {
+        this.emitByte(0x0E);
+        this.emitBytes(encodeULEB128(labels.length));
+        for (const l of labels) {
+            this.emitBytes(encodeULEB128(l));
+        }
+        this.emitBytes(encodeULEB128(defaultLabel));
+        this.watLines.push(`    br_table ${labels.join(' ')} ${defaultLabel}`);
+    }
+
+    return_op() {
+        this.emitByte(0x0F);
+        this.watLines.push('    return');
+    }
+
+    call_func(funcIdx: number, funcName?: string) {
+        this.emitByte(0x10);
+        this.emitBytes(encodeULEB128(funcIdx));
+        this.watLines.push(`    call ${funcIdx}${funcName ? ` ;; ${funcName}` : ''}`);
+    }
+
+    drop() {
+        this.emitByte(0x1A);
+        this.watLines.push('    drop');
+    }
+
+    nop() {
+        this.emitByte(0x01);
+        this.watLines.push('    nop');
+    }
+
+    comment(text: string) {
+        this.watLines.push(`    ;; ${text}`);
+    }
+
+    buildCodeBody(): number[] {
+        // Locals: vector of [count, type]
+        const localsCount = this.locals.length / 2;
+        const localBytes: number[] = [...encodeULEB128(localsCount), ...this.locals];
+        // Instructions + terminating end
+        const bodyBytes = [...localBytes, ...this.bytecode, 0x0B];
+        return [...encodeULEB128(bodyBytes.length), ...bodyBytes];
+    }
+}
+
+export class WasmModuleBuilder {
+    signatures: WasmFuncSignature[] = [];
+    functions: WasmFunctionBuilder[] = [];
+    imports: { module: string; field: string; kind: number; typeIdx: number }[] = [];
+    exports: { name: string; kind: number; index: number }[] = [];
+    memoryPages: number = 16;
+    importMemory: boolean = false;
+    exportMemory: boolean = true;
+
+    addSignature(params: number[], results: number[]): number {
+        // Find existing matching signature
+        for (let i = 0; i < this.signatures.length; i++) {
+            const s = this.signatures[i];
+            if (s.params.length === params.length && s.results.length === results.length) {
+                const matchParams = s.params.every((p, idx) => p === params[idx]);
+                const matchResults = s.results.every((r, idx) => r === results[idx]);
+                if (matchParams && matchResults) return i;
+            }
+        }
+        const idx = this.signatures.length;
+        this.signatures.push({ params, results });
+        return idx;
+    }
+
+    addFunction(name: string, sigIndex: number): WasmFunctionBuilder {
+        const fn = new WasmFunctionBuilder(name, sigIndex);
+        this.functions.push(fn);
+        return fn;
+    }
+
+    addExport(name: string, kind: number, index: number) {
+        this.exports.push({ name, kind, index });
+    }
+
+    toBinary(): Uint8Array {
+        const sections: number[] = [];
+
+        // 1. Type Section (ID 1)
+        const typePayload: number[] = [...encodeULEB128(this.signatures.length)];
+        for (const sig of this.signatures) {
+            typePayload.push(0x60); // func type
+            typePayload.push(...encodeULEB128(sig.params.length), ...sig.params);
+            typePayload.push(...encodeULEB128(sig.results.length), ...sig.results);
+        }
+        sections.push(...createSection(1, typePayload));
+
+        // 2. Import Section (ID 2)
+        if (this.importMemory) {
+            const importPayload: number[] = [
+                1, // 1 import
+                ...encodeString('env'),
+                ...encodeString('memory'),
+                0x02, // memory import
+                0x00, // flags: min only
+                ...encodeULEB128(this.memoryPages)
+            ];
+            sections.push(...createSection(2, importPayload));
+        }
+
+        // 3. Function Section (ID 3)
+        const funcPayload: number[] = [...encodeULEB128(this.functions.length)];
+        for (const fn of this.functions) {
+            funcPayload.push(...encodeULEB128(fn.sigIndex));
+        }
+        sections.push(...createSection(3, funcPayload));
+
+        // 5. Memory Section (ID 5) - only if memory is not imported
+        if (!this.importMemory) {
+            const memPayload: number[] = [
+                1, // 1 memory
+                0x00, // flags: min only
+                ...encodeULEB128(this.memoryPages)
+            ];
+            sections.push(...createSection(5, memPayload));
+        }
+
+        // 7. Export Section (ID 7)
+        const exportPayload: number[] = [];
+        let exportCount = this.exports.length + (this.exportMemory ? 1 : 0);
+        exportPayload.push(...encodeULEB128(exportCount));
+
+        if (this.exportMemory) {
+            exportPayload.push(...encodeString('memory'), 0x02, 0x00); // export memory index 0
+        }
+
+        for (const exp of this.exports) {
+            exportPayload.push(...encodeString(exp.name), exp.kind, ...encodeULEB128(exp.index));
+        }
+        sections.push(...createSection(7, exportPayload));
+
+        // 10. Code Section (ID 10)
+        const codePayload: number[] = [...encodeULEB128(this.functions.length)];
+        for (const fn of this.functions) {
+            codePayload.push(...fn.buildCodeBody());
+        }
+        sections.push(...createSection(10, codePayload));
+
+        // Header: \0asm + version 1
+        const header = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+        return new Uint8Array([...header, ...sections]);
+    }
+
+    toWat(): string {
+        const lines: string[] = ['(module'];
+
+        if (this.importMemory) {
+            lines.push(`  (import "env" "memory" (memory ${this.memoryPages}))`);
+        } else {
+            lines.push(`  (memory (export "memory") ${this.memoryPages})`);
+        }
+
+        for (let i = 0; i < this.functions.length; i++) {
+            const fn = this.functions[i];
+            const sig = this.signatures[fn.sigIndex];
+            const params = sig.params.map((_, idx) => `(param $p${idx} i32)`).join(' ');
+            const results = sig.results.map(() => '(result i32)').join(' ');
+            const exp = this.exports.find(e => e.kind === 0 && e.index === i);
+
+            let fnHeader = `  (func $${fn.name}`;
+            if (exp) fnHeader += ` (export "${exp.name}")`;
+            if (params) fnHeader += ` ${params}`;
+            if (results) fnHeader += ` ${results}`;
+
+            lines.push(fnHeader);
+            if (fn.locals.length > 0) {
+                let localCount = 0;
+                for (let j = 0; j < fn.locals.length; j += 2) {
+                    localCount += fn.locals[j];
+                }
+                lines.push(`    (local ${Array(localCount).fill('i32').join(' ')})`);
+            }
+            lines.push(...fn.watLines);
+            lines.push('  )');
+        }
+
+        lines.push(')');
+        return lines.join('\n');
+    }
+}
