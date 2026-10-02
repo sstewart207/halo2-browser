@@ -35,14 +35,20 @@ export interface CFGExport {
     functions: CFGFunction[];
 }
 
-export type BaseRegisterName = 'EAX' | 'ECX' | 'EDX' | 'EBX' | 'ESP' | 'EBP' | 'ESI' | 'EDI';
+export type GpRegisterName = 'EAX' | 'ECX' | 'EDX' | 'EBX' | 'ESP' | 'EBP' | 'ESI' | 'EDI';
+export type XmmRegisterName = 'XMM0' | 'XMM1' | 'XMM2' | 'XMM3' | 'XMM4' | 'XMM5' | 'XMM6' | 'XMM7';
+export type FpuRegisterName = 'ST0' | 'ST1' | 'ST2' | 'ST3' | 'ST4' | 'ST5' | 'ST6' | 'ST7';
+export type SegmentRegisterName = 'ES' | 'DS' | 'FS' | 'GS' | 'CS' | 'SS';
+
+export type BaseRegisterName = GpRegisterName | XmmRegisterName | FpuRegisterName | SegmentRegisterName;
 
 export interface RegisterOperand {
     kind: 'reg';
     name: string;
     baseReg: BaseRegisterName;
-    size: 1 | 2 | 4;
+    size: 1 | 2 | 4 | 8 | 16;
     highByte?: boolean; // true for AH, CH, DH, BH
+    segment?: SegmentRegisterName;
 }
 
 export interface ImmediateOperand {
@@ -52,7 +58,8 @@ export interface ImmediateOperand {
 
 export interface MemoryOperand {
     kind: 'mem';
-    size: 1 | 2 | 4;
+    size: 1 | 2 | 4 | 8 | 16;
+    segment?: SegmentRegisterName;
     base?: BaseRegisterName;
     index?: BaseRegisterName;
     scale?: number; // 1, 2, 4, 8

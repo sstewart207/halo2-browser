@@ -375,4 +375,87 @@ describe('AOT Lifter Execution', () => {
         expect(exports.FUN_00401003(0, 0, 0) & 0xff).toBe(1);
         expect(exports.FUN_00401461(0, 0, 0)).toBe(2);
     });
+
+    it('lifts and executes SSE floating point instructions (MOVSS, ADDSS, MULSS, CVTTSS2SI)', () => {
+        // Function computing: (2.5 + 1.5) * 3.0 = 12.0, truncated to 12
+        const sseFn: CFGFunction = {
+            name: 'test_sse_math',
+            entry: '0x403000',
+            rva: '0x3000',
+            size: 40,
+            basicBlocks: [
+                {
+                    start: '0x403000',
+                    end: '0x403028',
+                    destinations: [],
+                    instructions: [
+                        // Store 2.5 at [esp+0x10], 1.5 at [esp+0x14], 3.0 at [esp+0x18]
+                        // 2.5 = 0x40200000, 1.5 = 0x3fc00000, 3.0 = 0x40400000
+                        { addr: '0x403000', len: 7, mnemonic: 'MOV', ops: 'dword ptr [ESP + 0x10], 0x40200000' },
+                        { addr: '0x403007', len: 7, mnemonic: 'MOV', ops: 'dword ptr [ESP + 0x14], 0x3fc00000' },
+                        { addr: '0x40300e', len: 7, mnemonic: 'MOV', ops: 'dword ptr [ESP + 0x18], 0x40400000' },
+                        // MOVSS XMM0, [esp+0x10]
+                        { addr: '0x403015', len: 5, mnemonic: 'MOVSS', ops: 'XMM0, float ptr [ESP + 0x10]' },
+                        // ADDSS XMM0, [esp+0x14] -> 4.0
+                        { addr: '0x40301a', len: 5, mnemonic: 'ADDSS', ops: 'XMM0, float ptr [ESP + 0x14]' },
+                        // MULSS XMM0, [esp+0x18] -> 12.0
+                        { addr: '0x40301f', len: 5, mnemonic: 'MULSS', ops: 'XMM0, float ptr [ESP + 0x18]' },
+                        // CVTTSS2SI EAX, XMM0 -> EAX = 12
+                        { addr: '0x403024', len: 4, mnemonic: 'CVTTSS2SI', ops: 'EAX, XMM0' },
+                        { addr: '0x403028', len: 1, mnemonic: 'RET', ops: '' }
+                    ]
+                }
+            ]
+        };
+
+        const lifter = new Lifter({ memoryPages: 160 });
+        lifter.liftFunction(sseFn);
+        lifter.moduleBuilder.addExport(sseFn.name, 0, 0);
+
+        const bytes = lifter.moduleBuilder.toBinary();
+        const mod = new WebAssembly.Module(bytes);
+        const inst = new WebAssembly.Instance(mod);
+        const exports = inst.exports as any;
+
+        const result = exports.test_sse_math(0x19ff00, 0, 0);
+        expect(result).toBe(12);
+    });
+
+    it('lifts and executes x87 FPU instructions (FLD, FMUL, FISTP)', () => {
+        // Function computing: (1.5 * 4.0) = 6.0, stored via FISTP to EAX
+        const fpuFn: CFGFunction = {
+            name: 'test_fpu_math',
+            entry: '0x404000',
+            rva: '0x4000',
+            size: 30,
+            basicBlocks: [
+                {
+                    start: '0x404000',
+                    end: '0x40401e',
+                    destinations: [],
+                    instructions: [
+                        { addr: '0x404000', len: 7, mnemonic: 'MOV', ops: 'dword ptr [ESP + 0x10], 0x3fc00000' }, // 1.5
+                        { addr: '0x404007', len: 7, mnemonic: 'MOV', ops: 'dword ptr [ESP + 0x14], 0x40800000' }, // 4.0
+                        { addr: '0x40400e', len: 4, mnemonic: 'FLD', ops: 'float ptr [ESP + 0x10]' },
+                        { addr: '0x404012', len: 4, mnemonic: 'FMUL', ops: 'float ptr [ESP + 0x14]' },
+                        { addr: '0x404016', len: 4, mnemonic: 'FISTP', ops: 'dword ptr [ESP + 0x18]' },
+                        { addr: '0x40401a', len: 4, mnemonic: 'MOV', ops: 'EAX, dword ptr [ESP + 0x18]' },
+                        { addr: '0x40401e', len: 1, mnemonic: 'RET', ops: '' }
+                    ]
+                }
+            ]
+        };
+
+        const lifter = new Lifter({ memoryPages: 160 });
+        lifter.liftFunction(fpuFn);
+        lifter.moduleBuilder.addExport(fpuFn.name, 0, 0);
+
+        const bytes = lifter.moduleBuilder.toBinary();
+        const mod = new WebAssembly.Module(bytes);
+        const inst = new WebAssembly.Instance(mod);
+        const exports = inst.exports as any;
+
+        const result = exports.test_fpu_math(0x19ff00, 0, 0);
+        expect(result).toBe(6);
+    });
 });

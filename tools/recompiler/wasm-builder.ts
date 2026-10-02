@@ -165,6 +165,45 @@ export class WasmFunctionBuilder {
     i32_shl() { this.emitByte(0x74); this.watLines.push('    i32.shl'); }
     i32_shr_s() { this.emitByte(0x75); this.watLines.push('    i32.shr_s'); }
     i32_shr_u() { this.emitByte(0x76); this.watLines.push('    i32.shr_u'); }
+    i32_rotl() { this.emitByte(0x77); this.watLines.push('    i32.rotl'); }
+    i32_rotr() { this.emitByte(0x78); this.watLines.push('    i32.rotr'); }
+    i32_rem_s() { this.emitByte(0x6F); this.watLines.push('    i32.rem_s'); }
+    i32_rem_u() { this.emitByte(0x70); this.watLines.push('    i32.rem_u'); }
+
+    // Floating-Point (f32)
+    f32_const(val: number) {
+        this.emitByte(0x43);
+        const buf = Buffer.alloc(4);
+        buf.writeFloatLE(val, 0);
+        this.emitBytes([...buf]);
+        this.watLines.push(`    f32.const ${val}`);
+    }
+    f32_load(offset: number = 0, align: number = 2) {
+        this.emitByte(0x2A);
+        this.emitBytes(encodeULEB128(align));
+        this.emitBytes(encodeULEB128(offset));
+        this.watLines.push(`    f32.load offset=${offset}`);
+    }
+    f32_store(offset: number = 0, align: number = 2) {
+        this.emitByte(0x38);
+        this.emitBytes(encodeULEB128(align));
+        this.emitBytes(encodeULEB128(offset));
+        this.watLines.push(`    f32.store offset=${offset}`);
+    }
+    f32_add() { this.emitByte(0x92); this.watLines.push('    f32.add'); }
+    f32_sub() { this.emitByte(0x93); this.watLines.push('    f32.sub'); }
+    f32_mul() { this.emitByte(0x94); this.watLines.push('    f32.mul'); }
+    f32_div() { this.emitByte(0x95); this.watLines.push('    f32.div'); }
+    f32_eq() { this.emitByte(0x5B); this.watLines.push('    f32.eq'); }
+    f32_ne() { this.emitByte(0x5C); this.watLines.push('    f32.ne'); }
+    f32_lt() { this.emitByte(0x5D); this.watLines.push('    f32.lt'); }
+    f32_gt() { this.emitByte(0x5E); this.watLines.push('    f32.gt'); }
+    f32_le() { this.emitByte(0x5F); this.watLines.push('    f32.le'); }
+    f32_ge() { this.emitByte(0x60); this.watLines.push('    f32.ge'); }
+    f32_convert_i32_s() { this.emitByte(0xB2); this.watLines.push('    f32.convert_i32_s'); }
+    i32_trunc_f32_s() { this.emitByte(0xA8); this.watLines.push('    i32.trunc_f32_s'); }
+    i32_reinterpret_f32() { this.emitByte(0xBC); this.watLines.push('    i32.reinterpret_f32'); }
+    f32_reinterpret_i32() { this.emitByte(0xBE); this.watLines.push('    f32.reinterpret_i32'); }
 
     // Comparisons
     i32_eqz() { this.emitByte(0x45); this.watLines.push('    i32.eqz'); }

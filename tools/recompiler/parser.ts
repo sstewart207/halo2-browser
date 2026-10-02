@@ -9,11 +9,12 @@ import {
     ParsedInstruction,
     RegisterOperand,
     ImmediateOperand,
-    CFGInstruction
+    CFGInstruction,
+    SegmentRegisterName
 } from './types';
 
-const REG_MAP: Record<string, { base: BaseRegisterName; size: 1 | 2 | 4; high?: boolean }> = {
-    // 32-bit
+const REG_MAP: Record<string, { base: BaseRegisterName; size: 1 | 2 | 4 | 8 | 16; high?: boolean }> = {
+    // 32-bit GP
     EAX: { base: 'EAX', size: 4 },
     ECX: { base: 'ECX', size: 4 },
     EDX: { base: 'EDX', size: 4 },
@@ -22,7 +23,7 @@ const REG_MAP: Record<string, { base: BaseRegisterName; size: 1 | 2 | 4; high?: 
     EBP: { base: 'EBP', size: 4 },
     ESI: { base: 'ESI', size: 4 },
     EDI: { base: 'EDI', size: 4 },
-    // 16-bit
+    // 16-bit GP
     AX: { base: 'EAX', size: 2 },
     CX: { base: 'ECX', size: 2 },
     DX: { base: 'EDX', size: 2 },
@@ -31,16 +32,41 @@ const REG_MAP: Record<string, { base: BaseRegisterName; size: 1 | 2 | 4; high?: 
     BP: { base: 'EBP', size: 2 },
     SI: { base: 'ESI', size: 2 },
     DI: { base: 'EDI', size: 2 },
-    // 8-bit low
+    // 8-bit low GP
     AL: { base: 'EAX', size: 1 },
     CL: { base: 'ECX', size: 1 },
     DL: { base: 'EDX', size: 1 },
     BL: { base: 'EBX', size: 1 },
-    // 8-bit high
+    // 8-bit high GP
     AH: { base: 'EAX', size: 1, high: true },
     CH: { base: 'ECX', size: 1, high: true },
     DH: { base: 'EDX', size: 1, high: true },
     BH: { base: 'EBX', size: 1, high: true },
+    // SSE registers (128-bit)
+    XMM0: { base: 'XMM0', size: 16 },
+    XMM1: { base: 'XMM1', size: 16 },
+    XMM2: { base: 'XMM2', size: 16 },
+    XMM3: { base: 'XMM3', size: 16 },
+    XMM4: { base: 'XMM4', size: 16 },
+    XMM5: { base: 'XMM5', size: 16 },
+    XMM6: { base: 'XMM6', size: 16 },
+    XMM7: { base: 'XMM7', size: 16 },
+    // x87 FPU stack registers
+    ST0: { base: 'ST0', size: 8 },
+    ST1: { base: 'ST1', size: 8 },
+    ST2: { base: 'ST2', size: 8 },
+    ST3: { base: 'ST3', size: 8 },
+    ST4: { base: 'ST4', size: 8 },
+    ST5: { base: 'ST5', size: 8 },
+    ST6: { base: 'ST6', size: 8 },
+    ST7: { base: 'ST7', size: 8 },
+    // Segment registers
+    ES: { base: 'ES', size: 2 },
+    DS: { base: 'DS', size: 2 },
+    FS: { base: 'FS', size: 2 },
+    GS: { base: 'GS', size: 2 },
+    CS: { base: 'CS', size: 2 },
+    SS: { base: 'SS', size: 2 },
 };
 
 function parseNumber(s: string): number | null {
@@ -65,12 +91,23 @@ function parseNumber(s: string): number | null {
     return null;
 }
 
-export function parseOperand(opStr: string, defaultSize: 1 | 2 | 4 = 4): Operand {
+export function parseOperand(opStr: string, defaultSize: 1 | 2 | 4 | 8 | 16 = 4): Operand {
     opStr = opStr.trim();
 
+    // Check segment override prefix (e.g. "ES:EDI", "FS:[0x0]")
+    let segment: SegmentRegisterName | undefined;
+    const segMatch = opStr.match(/^(ES|DS|FS|GS|CS|SS):/i);
+    if (segMatch) {
+        segment = segMatch[1].toUpperCase() as SegmentRegisterName;
+        opStr = opStr.substring(segMatch[0].length).trim();
+    }
+
     // Check memory size prefix
-    let size: 1 | 2 | 4 = defaultSize;
+    let size: 1 | 2 | 4 | 8 | 16 = defaultSize;
     if (opStr.startsWith('dword ptr ')) {
+        size = 4;
+        opStr = opStr.substring(10).trim();
+    } else if (opStr.startsWith('float ptr ')) {
         size = 4;
         opStr = opStr.substring(10).trim();
     } else if (opStr.startsWith('word ptr ')) {
@@ -79,16 +116,25 @@ export function parseOperand(opStr: string, defaultSize: 1 | 2 | 4 = 4): Operand
     } else if (opStr.startsWith('byte ptr ')) {
         size = 1;
         opStr = opStr.substring(9).trim();
+    } else if (opStr.startsWith('qword ptr ')) {
+        size = 8;
+        opStr = opStr.substring(10).trim();
+    } else if (opStr.startsWith('double ptr ')) {
+        size = 8;
+        opStr = opStr.substring(11).trim();
+    } else if (opStr.startsWith('xmmword ptr ') || opStr.startsWith('dqword ptr ')) {
+        size = 16;
+        opStr = opStr.substring(opStr.indexOf('ptr ') + 4).trim();
     }
 
     // Memory operand: [...]
     if (opStr.startsWith('[') && opStr.endsWith(']')) {
         const inner = opStr.substring(1, opStr.length - 1).trim();
-        return parseMemoryExpression(inner, size);
+        return parseMemoryExpression(inner, size, segment);
     }
 
-    // Register operand
-    const upperOp = opStr.toUpperCase();
+    // Register operand (normalize ST(0) -> ST0)
+    const upperOp = opStr.toUpperCase().replace(/^ST\((\d)\)$/, 'ST$1');
     if (REG_MAP[upperOp]) {
         const info = REG_MAP[upperOp];
         return {
@@ -97,6 +143,7 @@ export function parseOperand(opStr: string, defaultSize: 1 | 2 | 4 = 4): Operand
             baseReg: info.base,
             size: info.size,
             highByte: info.high,
+            segment,
         };
     }
 
@@ -121,7 +168,7 @@ export function parseOperand(opStr: string, defaultSize: 1 | 2 | 4 = 4): Operand
     throw new Error(`Unrecognized operand: "${opStr}"`);
 }
 
-function parseMemoryExpression(expr: string, size: 1 | 2 | 4): MemoryOperand {
+function parseMemoryExpression(expr: string, size: 1 | 2 | 4 | 8 | 16, segment?: SegmentRegisterName): MemoryOperand {
     // Normalise '+' and '-'
     // E.g. "ESP + -0x4", "EDX + ECX*0x4 + 0xc", "0x0086d894", "ESP"
     let base: BaseRegisterName | undefined;
@@ -173,6 +220,7 @@ function parseMemoryExpression(expr: string, size: 1 | 2 | 4): MemoryOperand {
     return {
         kind: 'mem',
         size,
+        segment,
         base,
         index,
         scale,
@@ -207,7 +255,7 @@ export function parseInstruction(inst: CFGInstruction): ParsedInstruction {
         }
 
         // Infer default memory size from first register operand if available
-        let firstRegSize: 1 | 2 | 4 = 4;
+        let firstRegSize: 1 | 2 | 4 | 8 | 16 = 4;
         for (const p of parts) {
             const upper = p.toUpperCase();
             if (REG_MAP[upper]) {

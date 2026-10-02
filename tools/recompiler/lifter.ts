@@ -20,9 +20,9 @@ import { IATResolver } from './iat-resolver';
 
 // Local indices inside lifted WASM function
 export const LOCALS = {
-    ESP: 0, // param 0
-    ECX: 1, // param 1
-    EAX: 2, // param 2
+    ESP: 0, // param 0 (i32)
+    ECX: 1, // param 1 (i32)
+    EAX: 2, // param 2 (i32)
     EDX: 3,
     EBX: 4,
     EBP: 5,
@@ -35,6 +35,25 @@ export const LOCALS = {
     TMP0: 12,
     TMP1: 13,
     BLOCK_ID: 14,
+    // SSE registers (f32 locals)
+    XMM0: 15,
+    XMM1: 16,
+    XMM2: 17,
+    XMM3: 18,
+    XMM4: 19,
+    XMM5: 20,
+    XMM6: 21,
+    XMM7: 22,
+    // x87 FPU stack registers (f32 locals)
+    ST0: 23,
+    ST1: 24,
+    ST2: 25,
+    ST3: 26,
+    ST4: 27,
+    ST5: 28,
+    ST6: 29,
+    ST7: 30,
+    F32_TMP: 31,
 } as const;
 
 export const REG_TO_LOCAL: Record<BaseRegisterName, number> = {
@@ -46,6 +65,28 @@ export const REG_TO_LOCAL: Record<BaseRegisterName, number> = {
     EBP: LOCALS.EBP,
     ESI: LOCALS.ESI,
     EDI: LOCALS.EDI,
+    XMM0: LOCALS.XMM0,
+    XMM1: LOCALS.XMM1,
+    XMM2: LOCALS.XMM2,
+    XMM3: LOCALS.XMM3,
+    XMM4: LOCALS.XMM4,
+    XMM5: LOCALS.XMM5,
+    XMM6: LOCALS.XMM6,
+    XMM7: LOCALS.XMM7,
+    ST0: LOCALS.ST0,
+    ST1: LOCALS.ST1,
+    ST2: LOCALS.ST2,
+    ST3: LOCALS.ST3,
+    ST4: LOCALS.ST4,
+    ST5: LOCALS.ST5,
+    ST6: LOCALS.ST6,
+    ST7: LOCALS.ST7,
+    ES: LOCALS.TMP0,
+    DS: LOCALS.TMP0,
+    FS: LOCALS.TMP0,
+    GS: LOCALS.TMP0,
+    CS: LOCALS.TMP0,
+    SS: LOCALS.TMP0,
 };
 
 export class Lifter {
@@ -91,6 +132,8 @@ export class Lifter {
 
         // Locals: EDX, EBX, EBP, ESI, EDI, ZF, SF, CF, OF, TMP0, TMP1, BLOCK_ID (12 additional i32 locals)
         wasmFn.addLocals(12, 0x7f);
+        // Locals: XMM0..XMM7, ST0..ST7, F32_TMP (17 additional f32 locals)
+        wasmFn.addLocals(17, 0x7d);
 
         // Initialize ESP if 0
         wasmFn.local_get(LOCALS.ESP, 'esp');
@@ -579,12 +622,459 @@ export class Lifter {
                 }
                 break;
             }
-            case 'SETNZ': {
+            case 'ROL': {
+                const [dst, count] = inst.operands;
+                if (!dst || !count) return;
+                this.emitLoadOperandValue(fn, dst);
+                this.emitLoadOperandValue(fn, count);
+                fn.i32_rotl();
+                this.emitStoreOperandValue(fn, dst);
+                break;
+            }
+            case 'ROR': {
+                const [dst, count] = inst.operands;
+                if (!dst || !count) return;
+                this.emitLoadOperandValue(fn, dst);
+                this.emitLoadOperandValue(fn, count);
+                fn.i32_rotr();
+                this.emitStoreOperandValue(fn, dst);
+                break;
+            }
+            case 'NEG': {
+                const [dst] = inst.operands;
+                if (!dst) return;
+                fn.i32_const(0);
+                this.emitLoadOperandValue(fn, dst);
+                fn.i32_sub();
+                fn.local_tee(LOCALS.TMP0);
+                this.emitSetFlagsArithmetic(fn);
+                fn.local_get(LOCALS.TMP0);
+                this.emitStoreOperandValue(fn, dst);
+                break;
+            }
+            case 'NOT': {
+                const [dst] = inst.operands;
+                if (!dst) return;
+                this.emitLoadOperandValue(fn, dst);
+                fn.i32_const(-1);
+                fn.i32_xor();
+                this.emitStoreOperandValue(fn, dst);
+                break;
+            }
+            case 'CDQ': {
+                fn.local_get(LOCALS.EAX);
+                fn.i32_const(31);
+                fn.i32_shr_s();
+                fn.local_set(LOCALS.EDX);
+                break;
+            }
+            case 'ADC': {
+                const [dst, src] = inst.operands;
+                if (!dst || !src) return;
+                this.emitLoadOperandValue(fn, dst);
+                this.emitLoadOperandValue(fn, src);
+                fn.i32_add();
+                fn.local_get(LOCALS.CF);
+                fn.i32_add();
+                fn.local_tee(LOCALS.TMP0);
+                this.emitSetFlagsArithmetic(fn);
+                fn.local_get(LOCALS.TMP0);
+                this.emitStoreOperandValue(fn, dst);
+                break;
+            }
+            case 'SBB': {
+                const [dst, src] = inst.operands;
+                if (!dst || !src) return;
+                this.emitLoadOperandValue(fn, dst);
+                this.emitLoadOperandValue(fn, src);
+                fn.i32_sub();
+                fn.local_get(LOCALS.CF);
+                fn.i32_sub();
+                fn.local_tee(LOCALS.TMP0);
+                this.emitSetFlagsArithmetic(fn);
+                fn.local_get(LOCALS.TMP0);
+                this.emitStoreOperandValue(fn, dst);
+                break;
+            }
+            case 'SETZ':
+            case 'SETE': {
+                const [dst] = inst.operands;
+                if (!dst) return;
+                fn.local_get(LOCALS.ZF);
+                this.emitStoreOperandValue(fn, dst);
+                break;
+            }
+            case 'SETNZ':
+            case 'SETNE': {
                 const [dst] = inst.operands;
                 if (!dst) return;
                 fn.local_get(LOCALS.ZF);
                 fn.i32_eqz(); // 1 if ZF == 0
                 this.emitStoreOperandValue(fn, dst);
+                break;
+            }
+            case 'SETC':
+            case 'SETB': {
+                const [dst] = inst.operands;
+                if (!dst) return;
+                fn.local_get(LOCALS.CF);
+                this.emitStoreOperandValue(fn, dst);
+                break;
+            }
+            case 'SETLE':
+            case 'SETNG': {
+                const [dst] = inst.operands;
+                if (!dst) return;
+                this.emitJumpCondition(fn, 'JLE');
+                this.emitStoreOperandValue(fn, dst);
+                break;
+            }
+            case 'SETL':
+            case 'SETNGE': {
+                const [dst] = inst.operands;
+                if (!dst) return;
+                this.emitJumpCondition(fn, 'JL');
+                this.emitStoreOperandValue(fn, dst);
+                break;
+            }
+            case 'SETG':
+            case 'SETNLE': {
+                const [dst] = inst.operands;
+                if (!dst) return;
+                this.emitJumpCondition(fn, 'JG');
+                this.emitStoreOperandValue(fn, dst);
+                break;
+            }
+            case 'SETGE':
+            case 'SETNL': {
+                const [dst] = inst.operands;
+                if (!dst) return;
+                this.emitJumpCondition(fn, 'JGE');
+                this.emitStoreOperandValue(fn, dst);
+                break;
+            }
+            case 'SETO': {
+                const [dst] = inst.operands;
+                if (!dst) return;
+                fn.local_get(LOCALS.OF);
+                this.emitStoreOperandValue(fn, dst);
+                break;
+            }
+            case 'MUL': {
+                const [src] = inst.operands;
+                if (!src) return;
+                this.emitLoadOperandValue(fn, src);
+                fn.local_set(LOCALS.TMP0);
+                fn.local_get(LOCALS.EAX);
+                fn.local_get(LOCALS.TMP0);
+                fn.i32_mul();
+                fn.local_set(LOCALS.EAX);
+                break;
+            }
+            case 'DIV': {
+                const [src] = inst.operands;
+                if (!src) return;
+                this.emitLoadOperandValue(fn, src);
+                fn.local_set(LOCALS.TMP0);
+                fn.local_get(LOCALS.EAX);
+                fn.local_get(LOCALS.TMP0);
+                fn.i32_div_u();
+                fn.local_set(LOCALS.TMP1);
+                fn.local_get(LOCALS.EAX);
+                fn.local_get(LOCALS.TMP0);
+                fn.i32_rem_u();
+                fn.local_set(LOCALS.EDX);
+                fn.local_get(LOCALS.TMP1);
+                fn.local_set(LOCALS.EAX);
+                break;
+            }
+            case 'IDIV': {
+                const [src] = inst.operands;
+                if (!src) return;
+                this.emitLoadOperandValue(fn, src);
+                fn.local_set(LOCALS.TMP0);
+                fn.local_get(LOCALS.EAX);
+                fn.local_get(LOCALS.TMP0);
+                fn.i32_div_s();
+                fn.local_set(LOCALS.TMP1);
+                fn.local_get(LOCALS.EAX);
+                fn.local_get(LOCALS.TMP0);
+                fn.i32_rem_s();
+                fn.local_set(LOCALS.EDX);
+                fn.local_get(LOCALS.TMP1);
+                fn.local_set(LOCALS.EAX);
+                break;
+            }
+            // --- SSE Single-Precision Instructions ---
+            case 'MOVSS':
+            case 'MOVAPS': {
+                const [dst, src] = inst.operands;
+                if (!dst || !src) return;
+                this.emitLoadFloatValue(fn, src);
+                this.emitStoreFloatValue(fn, dst);
+                break;
+            }
+            case 'ADDSS': {
+                const [dst, src] = inst.operands;
+                if (!dst || !src) return;
+                this.emitLoadFloatValue(fn, dst);
+                this.emitLoadFloatValue(fn, src);
+                fn.f32_add();
+                this.emitStoreFloatValue(fn, dst);
+                break;
+            }
+            case 'SUBSS': {
+                const [dst, src] = inst.operands;
+                if (!dst || !src) return;
+                this.emitLoadFloatValue(fn, dst);
+                this.emitLoadFloatValue(fn, src);
+                fn.f32_sub();
+                this.emitStoreFloatValue(fn, dst);
+                break;
+            }
+            case 'MULSS': {
+                const [dst, src] = inst.operands;
+                if (!dst || !src) return;
+                this.emitLoadFloatValue(fn, dst);
+                this.emitLoadFloatValue(fn, src);
+                fn.f32_mul();
+                this.emitStoreFloatValue(fn, dst);
+                break;
+            }
+            case 'DIVSS': {
+                const [dst, src] = inst.operands;
+                if (!dst || !src) return;
+                this.emitLoadFloatValue(fn, dst);
+                this.emitLoadFloatValue(fn, src);
+                fn.f32_div();
+                this.emitStoreFloatValue(fn, dst);
+                break;
+            }
+            case 'COMISS': {
+                const [dst, src] = inst.operands;
+                if (!dst || !src) return;
+                this.emitLoadFloatValue(fn, dst);
+                this.emitLoadFloatValue(fn, src);
+                fn.f32_lt();
+                fn.local_set(LOCALS.CF);
+                this.emitLoadFloatValue(fn, dst);
+                this.emitLoadFloatValue(fn, src);
+                fn.f32_eq();
+                fn.local_set(LOCALS.ZF);
+                break;
+            }
+            case 'CVTSI2SS': {
+                const [dst, src] = inst.operands;
+                if (!dst || !src) return;
+                this.emitLoadOperandValue(fn, src);
+                fn.f32_convert_i32_s();
+                this.emitStoreFloatValue(fn, dst);
+                break;
+            }
+            case 'CVTTSS2SI': {
+                const [dst, src] = inst.operands;
+                if (!dst || !src) return;
+                this.emitLoadFloatValue(fn, src);
+                fn.i32_trunc_f32_s();
+                this.emitStoreOperandValue(fn, dst);
+                break;
+            }
+            case 'XORPS': {
+                const [dst] = inst.operands;
+                if (!dst) return;
+                fn.f32_const(0.0);
+                this.emitStoreFloatValue(fn, dst);
+                break;
+            }
+            // --- x87 FPU Instructions ---
+            case 'FLD': {
+                const [src] = inst.operands;
+                if (!src) return;
+                this.emitLoadFloatValue(fn, src);
+                fn.local_set(LOCALS.ST0);
+                break;
+            }
+            case 'FLD1': {
+                fn.f32_const(1.0);
+                fn.local_set(LOCALS.ST0);
+                break;
+            }
+            case 'FILD': {
+                const [src] = inst.operands;
+                if (!src) return;
+                this.emitLoadOperandValue(fn, src);
+                fn.f32_convert_i32_s();
+                fn.local_set(LOCALS.ST0);
+                break;
+            }
+            case 'FST':
+            case 'FSTP': {
+                const [dst] = inst.operands;
+                if (!dst) return;
+                fn.local_get(LOCALS.ST0);
+                this.emitStoreFloatValue(fn, dst);
+                break;
+            }
+            case 'FISTP': {
+                const [dst] = inst.operands;
+                if (!dst) return;
+                fn.local_get(LOCALS.ST0);
+                fn.i32_trunc_f32_s();
+                this.emitStoreOperandValue(fn, dst);
+                break;
+            }
+            case 'FADD':
+            case 'FADDP':
+            case 'FIADD': {
+                const [src] = inst.operands;
+                if (!src) return;
+                fn.local_get(LOCALS.ST0);
+                this.emitLoadFloatValue(fn, src);
+                fn.f32_add();
+                fn.local_set(LOCALS.ST0);
+                break;
+            }
+            case 'FSUB':
+            case 'FSUBP': {
+                const [src] = inst.operands;
+                if (!src) return;
+                fn.local_get(LOCALS.ST0);
+                this.emitLoadFloatValue(fn, src);
+                fn.f32_sub();
+                fn.local_set(LOCALS.ST0);
+                break;
+            }
+            case 'FSUBRP': {
+                const [src] = inst.operands;
+                if (!src) return;
+                this.emitLoadFloatValue(fn, src);
+                fn.local_get(LOCALS.ST0);
+                fn.f32_sub();
+                fn.local_set(LOCALS.ST0);
+                break;
+            }
+            case 'FMUL':
+            case 'FMULP': {
+                const [src] = inst.operands;
+                if (!src) return;
+                fn.local_get(LOCALS.ST0);
+                this.emitLoadFloatValue(fn, src);
+                fn.f32_mul();
+                fn.local_set(LOCALS.ST0);
+                break;
+            }
+            case 'FDIV':
+            case 'FDIVP': {
+                const [src] = inst.operands;
+                if (!src) return;
+                fn.local_get(LOCALS.ST0);
+                this.emitLoadFloatValue(fn, src);
+                fn.f32_div();
+                fn.local_set(LOCALS.ST0);
+                break;
+            }
+            case 'FDIVR': {
+                const [src] = inst.operands;
+                if (!src) return;
+                this.emitLoadFloatValue(fn, src);
+                fn.local_get(LOCALS.ST0);
+                fn.f32_div();
+                fn.local_set(LOCALS.ST0);
+                break;
+            }
+            case 'FCHS': {
+                fn.f32_const(0.0);
+                fn.local_get(LOCALS.ST0);
+                fn.f32_sub();
+                fn.local_set(LOCALS.ST0);
+                break;
+            }
+            case 'FABS': {
+                fn.local_get(LOCALS.ST0);
+                fn.emitByte(0x8B); // f32.abs
+                fn.watLines.push('    f32.abs');
+                fn.local_set(LOCALS.ST0);
+                break;
+            }
+            case 'FXCH': {
+                fn.local_get(LOCALS.ST0);
+                fn.local_get(LOCALS.ST1);
+                fn.local_set(LOCALS.ST0);
+                fn.local_set(LOCALS.ST1);
+                break;
+            }
+            case 'FLDCW':
+            case 'FNSTCW':
+            case 'FNSTSW':
+            case 'FCOMP':
+            case 'FCOMIP':
+                // FPU control/status word & comparison stubs
+                break;
+            case 'CMPXCHG.LOCK': {
+                const [dst, src] = inst.operands;
+                if (!dst || !src) return;
+                this.emitLoadOperandValue(fn, dst);
+                fn.local_tee(LOCALS.TMP0);
+                fn.local_get(LOCALS.EAX);
+                fn.i32_eq();
+                fn.if_block(0x40);
+                this.emitLoadOperandValue(fn, src);
+                this.emitStoreOperandValue(fn, dst);
+                fn.i32_const(1);
+                fn.local_set(LOCALS.ZF);
+                fn.else_block();
+                fn.local_get(LOCALS.TMP0);
+                fn.local_set(LOCALS.EAX);
+                fn.i32_const(0);
+                fn.local_set(LOCALS.ZF);
+                fn.end();
+                break;
+            }
+            case 'STOSD.REP': {
+                fn.block(0x40, '$stosd_end');
+                fn.loop(0x40, '$stosd_loop');
+                fn.local_get(LOCALS.ECX);
+                fn.i32_eqz();
+                fn.br_if(1);
+                fn.local_get(LOCALS.EDI);
+                fn.local_get(LOCALS.EAX);
+                fn.i32_store(0, 2);
+                fn.local_get(LOCALS.EDI);
+                fn.i32_const(4);
+                fn.i32_add();
+                fn.local_set(LOCALS.EDI);
+                fn.local_get(LOCALS.ECX);
+                fn.i32_const(1);
+                fn.i32_sub();
+                fn.local_set(LOCALS.ECX);
+                fn.br(0);
+                fn.end();
+                fn.end();
+                break;
+            }
+            case 'MOVSD.REP': {
+                fn.block(0x40, '$movsd_end');
+                fn.loop(0x40, '$movsd_loop');
+                fn.local_get(LOCALS.ECX);
+                fn.i32_eqz();
+                fn.br_if(1);
+                fn.local_get(LOCALS.EDI);
+                fn.local_get(LOCALS.ESI);
+                fn.i32_load(0, 2);
+                fn.i32_store(0, 2);
+                fn.local_get(LOCALS.ESI); fn.i32_const(4); fn.i32_add(); fn.local_set(LOCALS.ESI);
+                fn.local_get(LOCALS.EDI); fn.i32_const(4); fn.i32_add(); fn.local_set(LOCALS.EDI);
+                fn.local_get(LOCALS.ECX); fn.i32_const(1); fn.i32_sub(); fn.local_set(LOCALS.ECX);
+                fn.br(0);
+                fn.end();
+                fn.end();
+                break;
+            }
+            case 'RDTSC': {
+                fn.i32_const(0);
+                fn.local_set(LOCALS.EAX);
+                fn.i32_const(0);
+                fn.local_set(LOCALS.EDX);
                 break;
             }
             case 'NOP':
@@ -812,6 +1302,38 @@ export class Lifter {
             return;
         }
     }
+
+    emitLoadFloatValue(fn: WasmFunctionBuilder, op: Operand) {
+        if (op.kind === 'imm') {
+            fn.f32_const(op.value);
+            return;
+        }
+        if (op.kind === 'reg') {
+            const localIdx = REG_TO_LOCAL[op.baseReg];
+            fn.local_get(localIdx, op.name);
+            return;
+        }
+        if (op.kind === 'mem') {
+            this.emitEffectiveAddress(fn, op);
+            fn.f32_load(0, 2);
+            return;
+        }
+    }
+
+    emitStoreFloatValue(fn: WasmFunctionBuilder, dst: Operand) {
+        if (dst.kind === 'reg') {
+            const localIdx = REG_TO_LOCAL[dst.baseReg];
+            fn.local_set(localIdx, dst.name);
+            return;
+        }
+        if (dst.kind === 'mem') {
+            fn.local_set(LOCALS.F32_TMP);
+            this.emitEffectiveAddress(fn, dst);
+            fn.local_get(LOCALS.F32_TMP);
+            fn.f32_store(0, 2);
+            return;
+        }
+    }
 }
 
 export function liftExportedModule(cfgExport: CFGExport, options: LiftedModuleOptions = {}): {
@@ -820,10 +1342,16 @@ export function liftExportedModule(cfgExport: CFGExport, options: LiftedModuleOp
     watText: string;
 } {
     const lifter = new Lifter(options);
+    const seenNames = new Set<string>();
     for (let i = 0; i < cfgExport.functions.length; i++) {
         const fn = cfgExport.functions[i];
         lifter.liftFunction(fn);
-        lifter.moduleBuilder.addExport(fn.name, 0, i);
+        let exportName = fn.name;
+        if (seenNames.has(exportName)) {
+            exportName = `${fn.name}_${fn.entry}`;
+        }
+        seenNames.add(exportName);
+        lifter.moduleBuilder.addExport(exportName, 0, i);
     }
 
     return {
