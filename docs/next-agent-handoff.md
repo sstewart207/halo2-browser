@@ -10,3 +10,23 @@ Runtime is now NEWEST-29 (Claude Sonnet 5.5, Oct 1). FIRST CAMPAIGN GAMEPLAY IS 
 
 Budget: user is nearly out of OpenAI quota, expects Gemini access in about an hour, and is considering $20-30 of Opus API credit until their Sunday reset. No API purchase or spending authorized by this note. Use a bounded single-blocker task and concise evidence; avoid full-history re-ingestion and open-ended agent loops.
 
+
+
+## Rules for any agent, including free or smaller models (added Oct 2 by Claude Sonnet 5.5)
+
+Read in this order: this file, HANDOFF.md newest NEWEST-N entry, then `work/bottleship-research/docs/halo2-boot-recipe.md`. Work in small steps and prove each one with a screenshot, a number, or a passing test. Do not claim something works because the code compiled.
+
+**Safe, useful tasks for a smaller model:** boot the game with the recipe and test in-level input (mouse look, W/A/S/D, Escape); measure fps and guest RAM with the dev panel's System stats strip; leave the game running a few minutes and note any crash or RAM growth; improve docs; run `node node_modules/tsgo/bin/tsc -p tsconfig.json --noEmit` and the test suite (`bun test tools/tests` using the toolchain bun at `work/toolchain/node_modules/@oven/bun-windows-x64/bin/bun.exe`).
+
+**Do not (these already wasted real money):**
+- Do not post, comment, open PRs/issues, star or push to anything except `sstewart207/halo2-browser`. Always pass `--repo sstewart207/halo2-browser` to `gh`. The `upstream` git remote is push-disabled on purpose. Never touch jenissimo/bottleship, v86 or Cartographer repos.
+- Do not merge PR #7 or close issues without the user's say-so.
+- Do not use pausing breakpoints in loops, `trapWrites`, or read memory after a pause; use `breakOn(addr, {pause:false, fast:true, capture:[...]})`.
+- Do not edit files under `src/` while a game session you care about is running: Vite reloads the page and restarts the game (the "Vista compatibility" dialog returns; it is not a crash).
+- Do not commit `bun.lock`, bundles, game assets, saves, logs or screenshots. Keep the Chrome window visible and normal sized, because a hidden tab skews every fps number.
+- Do not re-open solved questions: the menu-text bug (Detours/VirtualProtect), the FUN_0049975a layout hunt, FPU strict/relaxed, and v86 SSE correctness are all closed (see NEWEST-29).
+- Do not start a decompilation or recompilation project without the user agreeing a budget first (see `docs/halo2-decomp-research.md`).
+
+**Stop and report to the user** if a tool or browser call fails three times, if you are about to spend more than a few steps on something not in the open list, or if you are unsure whether an action is outward-facing.
+
+**Privacy note for free or "stealth" models:** anonymous free preview models may log prompts for the provider's training. Do not paste game logs, saves, account data, tokens or the private bundle; stick to source files and docs.
