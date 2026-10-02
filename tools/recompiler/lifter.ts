@@ -104,6 +104,7 @@ export class Lifter {
     apiImportSigIndex: number;
     iatResolver?: IATResolver;
     apiImportMap = new Map<string, number>();
+    funcEntryMap = new Map<number, number>(); // entryAddr -> local function index (0..N-1)
 
     constructor(options: LiftedModuleOptions = {}) {
         this.options = {
@@ -135,7 +136,37 @@ export class Lifter {
         return idx;
     }
 
+    prepareModule(functions: CFGFunction[]) {
+        for (let i = 0; i < functions.length; i++) {
+            const entryAddr = parseInt(functions[i].entry, 16);
+            this.funcEntryMap.set(entryAddr, i);
+        }
+
+        if (this.iatResolver) {
+            for (const fn of functions) {
+                for (const bb of fn.basicBlocks) {
+                    for (const rawInst of bb.instructions) {
+                        if (rawInst.mnemonic === 'CALL') {
+                            const inst = parseInstruction(rawInst);
+                            const [target] = inst.operands;
+                            if (target && target.kind === 'mem') {
+                                const entry = this.iatResolver.resolve(target.disp);
+                                if (entry) {
+                                    this.getOrAddApiImport(entry.dll, entry.func);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     liftFunction(fn: CFGFunction): WasmFunctionBuilder {
+        const entryAddr = parseInt(fn.entry, 16);
+        if (!this.funcEntryMap.has(entryAddr)) {
+            this.funcEntryMap.set(entryAddr, this.moduleBuilder.functions.length);
+        }
         const wasmFn = this.moduleBuilder.addFunction(fn.name, this.funcSigIndex);
 
         // Locals: EDX, EBX, EBP, ESI, EDI, ZF, SF, CF, OF, TMP0, TMP1, BLOCK_ID (12 additional i32 locals)
@@ -1166,6 +1197,37 @@ export class Lifter {
                     }
                 }
 
+                // 2. Direct internal function call: CALL imm
+                if (target.kind === 'imm' && this.funcEntryMap.has(target.value)) {
+                    const targetLocalIdx = this.funcEntryMap.get(target.value)!;
+                    const targetWasmIdx = this.moduleBuilder.getLocalFunctionIndex(targetLocalIdx);
+                    fn.comment(`Internal Function Call: 0x${target.value.toString(16)} (wasm func ${targetWasmIdx})`);
+
+                    // Push return address: esp = esp - 4; mem[esp] = retAddr
+                    fn.local_get(LOCALS.ESP);
+                    fn.i32_const(4);
+                    fn.i32_sub();
+                    fn.local_set(LOCALS.ESP);
+
+                    fn.local_get(LOCALS.ESP);
+                    fn.i32_const(inst.addr + inst.len);
+                    fn.i32_store(0, 2);
+
+                    // Call internal function with (esp, ecx, eax)
+                    fn.local_get(LOCALS.ESP);
+                    fn.local_get(LOCALS.ECX);
+                    fn.local_get(LOCALS.EAX);
+                    fn.call_func(targetWasmIdx, `fn_0x${target.value.toString(16)}`);
+                    fn.local_set(LOCALS.EAX);
+
+                    // Pop return address: esp = esp + 4
+                    fn.local_get(LOCALS.ESP);
+                    fn.i32_const(4);
+                    fn.i32_add();
+                    fn.local_set(LOCALS.ESP);
+                    return;
+                }
+
                 fn.comment(`CALL ${inst.rawOps}`);
                 break;
             }
@@ -1381,6 +1443,7 @@ export function liftExportedModule(cfgExport: CFGExport, options: LiftedModuleOp
     watText: string;
 } {
     const lifter = new Lifter(options);
+    lifter.prepareModule(cfgExport.functions);
     const seenNames = new Set<string>();
     for (let i = 0; i < cfgExport.functions.length; i++) {
         const fn = cfgExport.functions[i];

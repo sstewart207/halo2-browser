@@ -458,4 +458,66 @@ describe('AOT Lifter Execution', () => {
         const result = exports.test_fpu_math(0x19ff00, 0, 0);
         expect(result).toBe(6);
     });
+
+    it('links and executes direct inter-function calls with stack arguments and forward references', () => {
+        // Callee: computes (arg1 + arg2) where arg1 is at [ESP+4], arg2 is at [ESP+8]
+        const calleeFn: CFGFunction = {
+            name: 'fn_callee_add',
+            entry: '0x405000',
+            rva: '0x5000',
+            size: 9,
+            basicBlocks: [
+                {
+                    start: '0x405000',
+                    end: '0x405008',
+                    destinations: [],
+                    instructions: [
+                        { addr: '0x405000', len: 4, mnemonic: 'MOV', ops: 'EAX, dword ptr [ESP + 0x4]' },
+                        { addr: '0x405004', len: 4, mnemonic: 'ADD', ops: 'EAX, dword ptr [ESP + 0x8]' },
+                        { addr: '0x405008', len: 1, mnemonic: 'RET', ops: '' }
+                    ]
+                }
+            ]
+        };
+
+        // Caller: pushes 35 (0x23), pushes 15 (0x0f), calls callee (0x405000), adds 50 (0x32) to result
+        // Total expected: 15 + 35 + 50 = 100
+        const callerFn: CFGFunction = {
+            name: 'fn_caller_math',
+            entry: '0x405100',
+            rva: '0x5100',
+            size: 24,
+            basicBlocks: [
+                {
+                    start: '0x405100',
+                    end: '0x405117',
+                    destinations: [],
+                    instructions: [
+                        { addr: '0x405100', len: 5, mnemonic: 'PUSH', ops: '0x23' },
+                        { addr: '0x405105', len: 5, mnemonic: 'PUSH', ops: '0xf' },
+                        { addr: '0x40510a', len: 5, mnemonic: 'CALL', ops: '0x405000' },
+                        { addr: '0x40510f', len: 3, mnemonic: 'ADD', ops: 'ESP, 0x8' },
+                        { addr: '0x405112', len: 5, mnemonic: 'ADD', ops: 'EAX, 0x32' },
+                        { addr: '0x405117', len: 1, mnemonic: 'RET', ops: '' }
+                    ]
+                }
+            ]
+        };
+
+        // Pass caller BEFORE callee in module to verify forward reference resolution
+        const cfgExport: CFGExport = {
+            program: 'test_call',
+            imageBase: '0x400000',
+            functions: [callerFn, calleeFn]
+        };
+
+        const { wasmBytes } = liftExportedModule(cfgExport, { memoryPages: 160 });
+        const mod = new WebAssembly.Module(wasmBytes);
+        const inst = new WebAssembly.Instance(mod);
+        const exports = inst.exports as any;
+
+        const result = exports.fn_caller_math(0x19ff00, 0, 0);
+        expect(result).toBe(100);
+    });
 });
+
