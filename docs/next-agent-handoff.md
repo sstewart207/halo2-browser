@@ -1,8 +1,20 @@
 # Next agent: first playable build (menu text is fixed)
 
-## Oct 2 2026, Antigravity/Gemini (with Codex): BLACK WORLD FIXED, MAPS BUNDLED, ROADMAP TO 60 FPS
+## Oct 2 2026, Antigravity/Gemini (with Codex): BOOT CRASH FIXED, CAMPAIGN PLAYABILITY & MOUSE LOOK VERIFIED (NEWEST-32)
 
 Read this section first; it supersedes the earlier blocker notes below.
+
+### 1. Boot Crash / PCC Abort Fixed (commit `783a4c8`)
+- In `src/worker/modules/kernel32/file-io.ts`, `CreateFileA` and `CreateFileW` now check `if (!filename || filename.length === 0)` and return `INVALID_HANDLE_VALUE` with `ERROR_PATH_NOT_FOUND` (3).
+- In `src/worker/runtime/filesystem/vfs.ts`, `open`, `openSync`, and `classifyOpenFailure` reject empty paths and directory targets (such as `C:\`), returning `null` / `ERROR_ACCESS_DENIED` (5) instead of attempting to truncate OPFS directories and throwing `TypeMismatchError`.
+- All 939 unit tests pass.
+
+### 2. End-to-End Campaign Playability & In-Level Input Verified
+- Tested end-to-end via Chrome CDP: Compatibility dialog -> Title ("PRESS ANY KEY TO CONTINUE") -> ONLINE ACCOUNTS ("Play Offline") -> CHOOSE PLAYER -> Live warning ("ARE YOU SURE?") -> Main Menu -> SELECT LEVEL ("Armory" with full 3D mission card) -> CHOOSE DIFFICULTY ("Normal") -> Level loads with visor HUD and reticle.
+- DirectInput mouse look verified: `moveRel(0, -60)` and `moveRel(0, 50)` calibrated the crosshairs against the tutorial lights, prompting the game to update profile and advance the mission!
+- Measured in-level performance: **27.9 FPS steady** (frame time 35.86ms: v86 CPU 24.78ms, thunk 10.38ms, WebGPU GPU 0.11ms, present 0.15ms). Guest RAM rock-solid at **700 MB**.
+
+## Oct 2 2026, Antigravity/Gemini (with Codex): BLACK WORLD FIXED, MAPS BUNDLED, ROADMAP TO 60 FPS (NEWEST-31)
 
 ### 1. In-Level Black World Fixed (commit `a773ea7`)
 - D3D9 WebGPU pipeline updated in `src/worker/backends/webgpu/d3d9/shader/index.ts` and `sm3-semantics.ts`.
