@@ -1,0 +1,92 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.8);
+}
+
+.logPanel {
+  width: min(1200px, 100%);
+  height: min(900px, calc(100dvh - 16px));
+  min-width: 0;
+  min-height: 0;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 6px;
+  font: 13px/1.5 Consolas, monospace;
+}
+
+.header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.controls {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 45%;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.controls > * { flex-shrink: 0; }
+.controls input[type="text"] { min-width: 0; }
+.logPanel button, .logPanel input, .logPanel label { font-size: 12px !important; }
+
+.logs {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background: #0a0a0a;
+  border: 1px solid #333;
+  border-radius: 4px;
+  padding: 8px;
+  font: 13px/24px Consolas, monospace;
+  position: relative;
+  overscroll-behavior: contain;
+}
+
+/* The virtualizer uses a 24px stride. Rows must never wrap or add margins. */
+.logRow {
+  height: 24px;
+  line-height: 24px;
+  min-width: max-content;
+  white-space: nowrap;
+  margin: 0;
+}
+
+.toolPanel {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.toolPanel > :first-child {
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.toolPanel > :first-child > div { flex-wrap: wrap; }
+.toolPanel > :not(:last-child) { flex-shrink: 0; }
+.toolPanel button { max-width: 100%; }
+.toolPanel table { white-space: nowrap; }
+
+@media (max-width: 480px), (max-height: 500px) {
+  .logPanel { padding: 8px; gap: 8px; }
+}

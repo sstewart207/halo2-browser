@@ -11,6 +11,7 @@ import { System } from "../core/system";
 import { Logger, LogCategory } from "../core/logger";
 import { EmulatorConfig } from "../core/emulator-config-manager";
 import { invalidateIniCache } from "./kernel32/profile";
+import { readStringW } from "./kernel32/file-io-strings";
 import { readAnsiFromGuest, encodeAnsi } from "./codepage-utils";
 import { Marshaler } from "../core/memory/marshaler";
 import {
@@ -93,7 +94,7 @@ export async function applyShellExecFake(commandLine: string, source: string): P
 
 const CSIDL_FLAG_CREATE = 0x8000;
 
-function getSpecialFolderPath(csidl: number): string {
+export function getSpecialFolderPath(csidl: number): string {
     switch (csidl & 0xff) {
         case 0x05: return "C:\\My Documents";                         // CSIDL_PERSONAL
         case 0x1a: return "C:\\Windows\\Application Data";            // CSIDL_APPDATA
@@ -105,7 +106,7 @@ function getSpecialFolderPath(csidl: number): string {
     }
 }
 
-function ensureSpecialFolderPath(path: string): void {
+export function ensureSpecialFolderPath(path: string): void {
     if (/^[A-Za-z]:\\?$/.test(path.trim())) return;
 
     const vfs = System.getInstance().fileSystem;
@@ -125,6 +126,29 @@ function ensureSpecialFolderPath(path: string): void {
             return;
         }
     }
+}
+
+/** SHCreateDirectoryEx: create every missing directory on the path; 0, or ERROR_ALREADY_EXISTS if it was there. */
+function shCreateDirectoryEx(path: string): number {
+    const ERROR_BAD_PATHNAME = 161;
+    const ERROR_ALREADY_EXISTS = 183;
+    if (!path) return ERROR_BAD_PATHNAME;
+
+    const vfs = System.getInstance().fileSystem;
+    const full = vfs.resolvePath(path);
+    if (vfs.directoryExists(full)) return ERROR_ALREADY_EXISTS;
+
+    const drivePath = full.match(/^([A-Za-z]:)\\(.+)$/);
+    if (!drivePath) return ERROR_BAD_PATHNAME;
+
+    let current = drivePath[1];
+    for (const part of drivePath[2].split("\\").filter(Boolean)) {
+        current += "\\" + part;
+        if (vfs.directoryExists(current)) continue;
+        const result = vfs.createDirectorySync(current);
+        if (!result.ok && result.error !== ERROR_ALREADY_EXISTS) return result.error;
+    }
+    return 0;
 }
 
 export class Shell32 implements IModule {
@@ -473,6 +497,23 @@ export class Shell32 implements IModule {
                 view.setUint16(pszPath + path.length * 2, 0, true);
             }
             return 0; // S_OK
+        };
+
+        // int SHCreateDirectoryEx(HWND hwnd, LPCTSTR pszPath, SECURITY_ATTRIBUTES* psa)
+        this.exports["SHCreateDirectoryExW"] = (ctx, mem, args) => {
+            const pszPath = args[1] >>> 0;
+            const path = pszPath ? readStringW(mem, pszPath) : "";
+            const rc = shCreateDirectoryEx(path);
+            Logger.log(LogCategory.SYSTEM, `SHCreateDirectoryExW("${path}") -> ${rc}`);
+            return rc;
+        };
+
+        this.exports["SHCreateDirectoryExA"] = (ctx, mem, args) => {
+            const pszPath = args[1] >>> 0;
+            const path = pszPath ? readAnsiFromGuest(mem, pszPath) : "";
+            const rc = shCreateDirectoryEx(path);
+            Logger.log(LogCategory.SYSTEM, `SHCreateDirectoryExA("${path}") -> ${rc}`);
+            return rc;
         };
 
         // SHAppBarMessage - taskbar/appbar notifications (not modeled in HLE).

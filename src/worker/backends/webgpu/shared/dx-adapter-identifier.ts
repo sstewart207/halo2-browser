@@ -19,7 +19,9 @@ export const DEFAULT_VENDOR_ID = 0x10de;
  * changing it just forces a one-time texture-cache rebuild, not a correctness break.
  */
 export const DEFAULT_DEVICE_ID = 0x0040;
-export const DEFAULT_DRIVER_VERSION = 0x0006000400020001n;
+// LARGE_INTEGER driver version 7.15.11.7523 (a Vista-era WDDM NVIDIA release): product.version.subVersion.build.
+// Vista-aware compatibility checks reject anything older than 7.15.11.65 for vendor 0x10de.
+export const DEFAULT_DRIVER_VERSION = 0x0007000F000B1D63n;
 export const DEFAULT_DRIVER_DLL = 'nvd3dum.dll';
 export const DEFAULT_DEVICE_DESC = 'NVIDIA GeForce 6800 Ultra';
 

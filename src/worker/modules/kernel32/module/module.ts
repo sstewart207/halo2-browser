@@ -1,7 +1,7 @@
 // Module management functions for kernel32
 // GetModuleHandle*, LoadLibrary*, GetProcAddress, FreeLibrary, GetModuleFileName*
 
-import { ThunkImplementation } from '../../../core/thunking/thunk-dispatcher';
+import { ThunkImplementation, ThunkResult } from '../../../core/thunking/thunk-dispatcher';
 import { System } from '../../../core/system';
 import { Marshaler } from '../../../core/memory/marshaler';
 import { Logger, LogCategory, LogLevel } from '../../../core/logger';
@@ -12,6 +12,9 @@ import { encodeAnsi } from '../../codepage-utils';
 import { resolveThunkedDllAlias } from '../../../core/dll-aliases';
 import { THUNKED_DLL_PSEUDO_BASE } from '../../../core/hle-system-catalog';
 import { getProcAddressRegistry } from '../../../core/diagnostics/get-proc-address-registry';
+import { buildHleExportImage } from '../hle-image';
+import { readDelayImport } from '../delay-import';
+import { Mem } from '../../../core/memory/mem-accessor';
 
 export const exports: Record<string, ThunkImplementation> = {};
 
@@ -38,9 +41,23 @@ const loadLibraryHandleCache = new Map<string, number>();
 const handleToPathCache = new Map<number, string>();
 const getProcAddressCache = new Map<string, number>();
 const getProcAddressPointerCache = new Map<string, number>();
+/** Synthetic export-image base per thunked module (see resolveHleModuleBase). */
+const hleImageBaseByName = new Map<string, number>();
+/** Reverse map: image base -> thunked module name. */
+const hleImageNameByBase = new Map<number, string>();
 const loggedUnknownModuleHandles = new Set<number>();
 let cacheOwnerProcess: any = null;
 let cacheOwnerResetGeneration = -1;
+
+/** HLE system images are pinned for the process lifetime. Native detach is
+ * not supported yet: return an NT failure rather than pretend to unload it. */
+export function unloadDllNtStatus(handle: number): number {
+    ensureProcessLocalCaches();
+    const base = handle >>> 0;
+    if (hleImageNameByBase.has(base)) return 0;
+    if (System.getInstance().process?.moduleRegistry?.getByBase(base)) return 0xc0000002; // STATUS_NOT_IMPLEMENTED
+    return 0xc0000135; // STATUS_DLL_NOT_FOUND
+}
 
 function ensureProcessLocalCaches(): void {
     const currentProcess = System.getInstance().process;
@@ -57,6 +74,8 @@ function ensureProcessLocalCaches(): void {
     handleToPathCache.clear();
     getProcAddressCache.clear();
     getProcAddressPointerCache.clear();
+    hleImageBaseByName.clear();
+    hleImageNameByBase.clear();
     loggedUnknownModuleHandles.clear();
     getProcAddressRegistry.clear();
 }
@@ -250,6 +269,13 @@ function resolveModuleFilename(hModule: number): { path: string; found: boolean 
         return { path, found: true };
     }
 
+    const hleImage = hleImageNameByBase.get(h);
+    if (hleImage) {
+        const path = formatSystemDllPath(hleImage);
+        handleToPathCache.set(h, path);
+        return { path, found: true };
+    }
+
     for (const [name, handle] of loadLibraryHandleCache) {
         if (handle === h) {
             const path = formatModulePath(name);
@@ -314,8 +340,12 @@ function resolveThunkedExportAddress(
 
     const byQualifiedName = tg.getExportAddress(`${dllName}:${exportName}`);
     if (byQualifiedName !== undefined) return byQualifiedName >>> 0;
-    const byShortName = tg.getExportAddress(exportName);
-    if (byShortName !== undefined) return byShortName >>> 0;
+    // Ordinal-style names are only meaningful inside one DLL (ord_4 is connect in ws2_32 but
+    // SysAllocStringLen in oleaut32), so they must never resolve through the DLL-less table.
+    if (!/^ord_\d+$/i.test(exportName)) {
+        const byShortName = tg.getExportAddress(exportName);
+        if (byShortName !== undefined) return byShortName >>> 0;
+    }
 
     const inApi = apiRegistry.hasExportedFunction(dllName, exportName);
     const pendingKey = `${dllName}:${exportName}`.toLowerCase();
@@ -366,6 +396,71 @@ function resolveThunkedExportAddress(
         Logger.warn(LogCategory.KERNEL32, `GetProcAddress: stub creation failed for ${dllName}:${exportName}: ${e}`);
     }
     return 0;
+}
+
+/**
+ * Guest-readable image base for a thunked (HLE) module.
+ *
+ * Guest code occasionally parses a loaded module's PE headers by hand instead
+ * of calling GetProcAddress (halo2.exe's CRT resolver walks kernel32's export
+ * directory, then calls the resolved address). Pseudo-bases have no readable
+ * image behind them, so such walks derail into unmapped memory. This builds a
+ * minimal synthetic export image (headers + export directory + jmp
+ * trampolines to the real thunk stubs), maps it into guest RAM once per boot,
+ * and returns its base. All LoadLibrary/GetModuleHandle entry points share
+ * this so handles stay consistent. Falls back to the legacy pseudo-base when
+ * mapping is impossible; the fallback is cached too, keeping one value per
+ * module per boot.
+ */
+function resolveHleModuleBase(thunkedName: string, mem: Uint8Array, fallback: number): number {
+    ensureProcessLocalCaches();
+    const key = thunkedName.toLowerCase();
+    const cached = hleImageBaseByName.get(key);
+    if (cached !== undefined) return cached;
+
+    const useFallback = (): number => {
+        hleImageBaseByName.set(key, fallback >>> 0);
+        return fallback >>> 0;
+    };
+
+    try {
+        const system = System.getInstance();
+        const dispatcher = (system.process as any)?.dispatcher;
+        const moduleRegistry = system.process?.moduleRegistry;
+        const addressSpace = system.process?.addressSpace;
+        if (!dispatcher || !moduleRegistry || !addressSpace) return useFallback();
+
+        const descriptor = APIRegistry.getInstance().getModules()
+            .find((m) => m.name.toLowerCase() === key);
+        const entries: Array<{ name: string; ordinal?: number; target: number }> = [];
+        for (const func of descriptor?.functions ?? []) {
+            if (!func?.name) continue;
+            const target = resolveThunkedExportAddress(dispatcher, key, func.name, false);
+            if (target) entries.push({ name: func.name, ordinal: func.ordinal, target: target >>> 0 });
+        }
+
+        const size = buildHleExportImage(`${key}.dll`, 0, entries).bytes.length;
+        if (size <= 0 || size > 4 * 1024 * 1024) return useFallback();
+        const base = moduleRegistry.allocateBase(size) >>> 0;
+        if (!base || base + size > mem.length) return useFallback();
+        const image = buildHleExportImage(`${key}.dll`, base, entries);
+        try {
+            addressSpace.releaseRegion(base);
+        } catch {
+            /* best-effort: mapRegion replaces overlapping entries anyway */
+        }
+        addressSpace.mapRegion(base, image.bytes.length, "rx", "ROM", "HLE", "hle-image");
+        mem.set(image.bytes, base);
+
+        hleImageBaseByName.set(key, base);
+        hleImageNameByBase.set(base, key);
+        Logger.log(LogCategory.KERNEL32,
+            `HLE image "${key}.dll" -> 0x${base.toString(16)} (${entries.length} exports)`);
+        return base;
+    } catch (e) {
+        Logger.warn(LogCategory.KERNEL32, `HLE image "${key}.dll" failed: ${e}`);
+        return useFallback();
+    }
 }
 
 /** Boot-time warmup for exports resolved only via GetProcAddress (not PE imports). */
@@ -550,25 +645,25 @@ function initModuleFunctions(): void {
 
         // Check if it's a thunked (HLE) system DLL - return pseudo-handle
         const pseudoBase = getThunkedDllBase(nameLower);
-        if (pseudoBase !== undefined) {
+        if (pseudoBase !== undefined && !EmulatorConfig.getInstance().prefersNativeDll(name)) {
             const blocked = tryBlockThunkedDllLoad(name, thunkedName, 4, "GetModuleHandleA");
             if (blocked) {
                 return blocked;
             }
             Logger.log(LogCategory.KERNEL32, `GetModuleHandleA("${name}") -> 0x${pseudoBase.toString(16)} (thunked DLL)`);
-            return { value: pseudoBase, stackCleanup: 4 };
+            return { value: resolveHleModuleBase(thunkedName, mem, pseudoBase), stackCleanup: 4 };
         }
 
         // Also check APIRegistry for any thunked module we might have missed in the pseudo-base list
         const apiRegistry = APIRegistry.getInstance();
-        if (apiRegistry.hasModule(thunkedName) && !FORCE_NATIVE_PACKAGE_LOAD.has(thunkedName)) {
+        if (apiRegistry.hasModule(thunkedName) && !FORCE_NATIVE_PACKAGE_LOAD.has(thunkedName) && !EmulatorConfig.getInstance().prefersNativeDll(name)) {
             const blocked = tryBlockThunkedDllLoad(name, thunkedName, 4, "GetModuleHandleA");
             if (blocked) {
                 return blocked;
             }
             const hash = computeGeneratedPseudoBase(thunkedName);
             Logger.log(LogCategory.KERNEL32, `GetModuleHandleA("${name}") -> 0x${hash.toString(16)} (thunked DLL, generated)`);
-            return { value: hash, stackCleanup: 4 };
+            return { value: resolveHleModuleBase(thunkedName, mem, hash), stackCleanup: 4 };
         }
 
         Logger.log(LogCategory.KERNEL32, `GetModuleHandleA("${name}") -> 0 (not found)`);
@@ -609,28 +704,28 @@ function initModuleFunctions(): void {
 
         // Check if it's a thunked (HLE) system DLL - return pseudo-handle
         const pseudoBase = getThunkedDllBase(nameLower);
-        if (pseudoBase !== undefined) {
+        if (pseudoBase !== undefined && !EmulatorConfig.getInstance().prefersNativeDll(name)) {
             const blocked = tryBlockThunkedDllLoad(name, thunkedName, 4, "GetModuleHandleW");
             if (blocked) {
                 return blocked;
             }
             Logger.verbose(LogCategory.KERNEL32, `GetModuleHandleW("${name}") -> 0x${pseudoBase.toString(16)} (thunked DLL)`);
-            return { value: pseudoBase, stackCleanup: 4 };
+            return { value: resolveHleModuleBase(thunkedName, mem, pseudoBase), stackCleanup: 4 };
         }
 
         // Also check APIRegistry for any thunked module we might have missed
         const apiRegistry = APIRegistry.getInstance();
-        if (apiRegistry.hasModule(thunkedName) && !FORCE_NATIVE_PACKAGE_LOAD.has(thunkedName)) {
+        if (apiRegistry.hasModule(thunkedName) && !FORCE_NATIVE_PACKAGE_LOAD.has(thunkedName) && !EmulatorConfig.getInstance().prefersNativeDll(name)) {
             const blocked = tryBlockThunkedDllLoad(name, thunkedName, 4, "GetModuleHandleW");
             if (blocked) {
                 return blocked;
             }
             const hash = computeGeneratedPseudoBase(thunkedName);
             Logger.verbose(LogCategory.KERNEL32, `GetModuleHandleW("${name}") -> 0x${hash.toString(16)} (thunked DLL, generated)`);
-            return { value: hash, stackCleanup: 4 };
+            return { value: resolveHleModuleBase(thunkedName, mem, hash), stackCleanup: 4 };
         }
 
-        Logger.verbose(LogCategory.KERNEL32, `GetModuleHandleW("${name}") -> 0 (not found)`);
+        Logger.log(LogCategory.KERNEL32, `GetModuleHandleW("${name}") -> 0 (not found)`);
         system.process!.lastError = 126; // ERROR_MOD_NOT_FOUND
         return { value: 0, stackCleanup: 4 };
     };
@@ -685,7 +780,7 @@ function initModuleFunctions(): void {
             if (moduleHandle === 0) {
                 const thunkedName = getThunkedModuleName(name);
                 const pseudoBase = getThunkedDllBase(nameLower);
-                if (pseudoBase !== undefined) {
+                if (pseudoBase !== undefined && !EmulatorConfig.getInstance().prefersNativeDll(name)) {
                     const blocked = tryBlockThunkedDllLoad(name, thunkedName, 12, "GetModuleHandleExW");
                     if (blocked) {
                         if (phModule !== 0 && phModule + 4 <= mem.length) {
@@ -694,13 +789,13 @@ function initModuleFunctions(): void {
                         }
                         return blocked;
                     }
-                    moduleHandle = pseudoBase;
+                    moduleHandle = resolveHleModuleBase(thunkedName, mem, pseudoBase);
                     Logger.verbose(LogCategory.KERNEL32, `GetModuleHandleExW("${name}") -> 0x${moduleHandle.toString(16)} (thunked DLL)`);
                 }
             }
 
             if (moduleHandle === 0) {
-                Logger.verbose(LogCategory.KERNEL32, `GetModuleHandleExW("${name}") -> 0 (not found)`);
+                Logger.log(LogCategory.KERNEL32, `GetModuleHandleExW("${name}") -> 0 (not found)`);
                 system.process!.lastError = 126; // ERROR_MOD_NOT_FOUND
                 if (phModule !== 0 && phModule + 4 <= mem.length) {
                     const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
@@ -773,13 +868,13 @@ function initModuleFunctions(): void {
                         }
                         return blocked;
                     }
-                    moduleHandle = pseudoBase;
+                    moduleHandle = resolveHleModuleBase(thunkedName, mem, pseudoBase);
                     Logger.verbose(LogCategory.KERNEL32, `GetModuleHandleExA("${name}") -> 0x${moduleHandle.toString(16)} (thunked DLL)`);
                 }
             }
 
             if (moduleHandle === 0) {
-                Logger.verbose(LogCategory.KERNEL32, `GetModuleHandleExA("${name}") -> 0 (not found)`);
+                Logger.log(LogCategory.KERNEL32, `GetModuleHandleExA("${name}") -> 0 (not found)`);
                 system.process!.lastError = 126;
                 if (phModule !== 0 && phModule + 4 <= mem.length) {
                     const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
@@ -883,19 +978,21 @@ function initModuleFunctions(): void {
         // PRIORITY 2: Check if it's a thunked DLL
         const thunkedName = getThunkedModuleName(dllName);
         const thunkedBase = getThunkedDllBase(dllName);
-        if (thunkedBase !== undefined) {
+        if (thunkedBase !== undefined && !EmulatorConfig.getInstance().prefersNativeDll(dllName)) {
             const blocked = tryBlockThunkedDllLoad(dllName, thunkedName, 12, "LoadLibraryExW");
             if (blocked) {
                 return blocked;
             }
             rememberLoadLibraryHandle(dllName, thunkedBase);
             Logger.log(LogCategory.KERNEL32, `LoadLibraryExW("${dllName}") -> 0x${thunkedBase.toString(16)} (thunked DLL)`);
-            return { value: thunkedBase, stackCleanup: 12 };
+            const hleBaseExW = resolveHleModuleBase(thunkedName, mem, thunkedBase);
+            rememberLoadLibraryHandle(dllName, hleBaseExW);
+            return { value: hleBaseExW, stackCleanup: 12 };
         }
 
         // Also check APIRegistry for any thunked module not in the explicit list
         const apiRegistry = APIRegistry.getInstance();
-        if (apiRegistry.hasModule(thunkedName) && !FORCE_NATIVE_PACKAGE_LOAD.has(thunkedName)) {
+        if (apiRegistry.hasModule(thunkedName) && !FORCE_NATIVE_PACKAGE_LOAD.has(thunkedName) && !EmulatorConfig.getInstance().prefersNativeDll(dllName)) {
             const blocked = tryBlockThunkedDllLoad(dllName, thunkedName, 12, "LoadLibraryExW");
             if (blocked) {
                 return blocked;
@@ -903,7 +1000,9 @@ function initModuleFunctions(): void {
             const hash = computeGeneratedPseudoBase(thunkedName);
             rememberLoadLibraryHandle(dllName, hash);
             Logger.log(LogCategory.KERNEL32, `LoadLibraryExW("${dllName}") -> 0x${hash.toString(16)} (thunked DLL, generated)`);
-            return { value: hash, stackCleanup: 12 };
+            const hleBaseExWGen = resolveHleModuleBase(thunkedName, mem, hash);
+            rememberLoadLibraryHandle(dllName, hleBaseExWGen);
+            return { value: hleBaseExWGen, stackCleanup: 12 };
         }
 
         // PRIORITY 3: Try to load real DLL from VFS
@@ -957,19 +1056,21 @@ function initModuleFunctions(): void {
         // PRIORITY 2: Check if it's a thunked DLL
         const thunkedName = getThunkedModuleName(dllName);
         const thunkedBase = getThunkedDllBase(dllName);
-        if (thunkedBase !== undefined) {
+        if (thunkedBase !== undefined && !EmulatorConfig.getInstance().prefersNativeDll(dllName)) {
             const blocked = tryBlockThunkedDllLoad(dllName, thunkedName, 12, "LoadLibraryExA");
             if (blocked) {
                 return blocked;
             }
             rememberLoadLibraryHandle(dllName, thunkedBase);
             Logger.log(LogCategory.KERNEL32, `LoadLibraryExA("${dllName}") -> 0x${thunkedBase.toString(16)} (thunked DLL)`);
-            return { value: thunkedBase, stackCleanup: 12 };
+            const hleBaseExA = resolveHleModuleBase(thunkedName, mem, thunkedBase);
+            rememberLoadLibraryHandle(dllName, hleBaseExA);
+            return { value: hleBaseExA, stackCleanup: 12 };
         }
 
         // Also check APIRegistry for any thunked module not in the explicit list
         const apiRegistry = APIRegistry.getInstance();
-        if (apiRegistry.hasModule(thunkedName) && !FORCE_NATIVE_PACKAGE_LOAD.has(thunkedName)) {
+        if (apiRegistry.hasModule(thunkedName) && !FORCE_NATIVE_PACKAGE_LOAD.has(thunkedName) && !EmulatorConfig.getInstance().prefersNativeDll(dllName)) {
             const blocked = tryBlockThunkedDllLoad(dllName, thunkedName, 12, "LoadLibraryExA");
             if (blocked) {
                 return blocked;
@@ -977,7 +1078,9 @@ function initModuleFunctions(): void {
             const hash = computeGeneratedPseudoBase(thunkedName);
             rememberLoadLibraryHandle(dllName, hash);
             Logger.log(LogCategory.KERNEL32, `LoadLibraryExA("${dllName}") -> 0x${hash.toString(16)} (thunked DLL, generated)`);
-            return { value: hash, stackCleanup: 12 };
+            const hleBaseExAGen = resolveHleModuleBase(thunkedName, mem, hash);
+            rememberLoadLibraryHandle(dllName, hleBaseExAGen);
+            return { value: hleBaseExAGen, stackCleanup: 12 };
         }
 
         // PRIORITY 3: Try to load real DLL from VFS
@@ -1017,6 +1120,7 @@ function initModuleFunctions(): void {
         ensureProcessLocalCaches();
         const cached = getCachedLoadLibraryHandle(dllName);
         if (cached !== undefined) {
+            Logger.log(LogCategory.KERNEL32, `LoadLibraryW("${dllName}") -> 0x${cached.toString(16)} (cached)`);
             return { value: cached, stackCleanup: 4 };
         }
 
@@ -1028,6 +1132,7 @@ function initModuleFunctions(): void {
         if (moduleRegistry) {
             const existing = moduleRegistry.getByName(dllName);
             if (existing) {
+                Logger.log(LogCategory.KERNEL32, `LoadLibraryW("${dllName}") -> 0x${existing.baseAddress.toString(16)} (already loaded)`);
                 rememberLoadLibraryHandle(dllName, existing.baseAddress);
                 return { value: existing.baseAddress, stackCleanup: 4 };
             }
@@ -1036,21 +1141,24 @@ function initModuleFunctions(): void {
         // PRIORITY 2: thunked DLL
         const thunkedName = getThunkedModuleName(dllName);
         const thunkedBase = getThunkedDllBase(dllName);
-        if (thunkedBase !== undefined) {
+        if (thunkedBase !== undefined && !EmulatorConfig.getInstance().prefersNativeDll(dllName)) {
+            Logger.log(LogCategory.KERNEL32, `LoadLibraryW("${dllName}") -> thunked DLL`);
             const blocked = tryBlockThunkedDllLoad(dllName, thunkedName, 4, "LoadLibraryW");
             if (blocked) return blocked;
-            rememberLoadLibraryHandle(dllName, thunkedBase);
-            return { value: thunkedBase, stackCleanup: 4 };
+            const hleBaseW = resolveHleModuleBase(thunkedName, mem, thunkedBase);
+            rememberLoadLibraryHandle(dllName, hleBaseW);
+            return { value: hleBaseW, stackCleanup: 4 };
         }
 
         // Also check APIRegistry for generated thunked module pseudo-bases.
         const apiRegistry = APIRegistry.getInstance();
-        if (apiRegistry.hasModule(thunkedName) && !FORCE_NATIVE_PACKAGE_LOAD.has(thunkedName)) {
+        if (apiRegistry.hasModule(thunkedName) && !FORCE_NATIVE_PACKAGE_LOAD.has(thunkedName) && !EmulatorConfig.getInstance().prefersNativeDll(dllName)) {
             const blocked = tryBlockThunkedDllLoad(dllName, thunkedName, 4, "LoadLibraryW");
             if (blocked) return blocked;
             const hash = computeGeneratedPseudoBase(thunkedName);
-            rememberLoadLibraryHandle(dllName, hash);
-            return { value: hash, stackCleanup: 4 };
+            const hleBaseWGen = resolveHleModuleBase(thunkedName, mem, hash);
+            rememberLoadLibraryHandle(dllName, hleBaseWGen);
+            return { value: hleBaseWGen, stackCleanup: 4 };
         }
 
         // PRIORITY 3: load native DLL from VFS
@@ -1058,6 +1166,7 @@ function initModuleFunctions(): void {
             try {
                 const module = await loader.loadDll(dllName, true);
                 if (module) {
+                    Logger.log(LogCategory.KERNEL32, `LoadLibraryW("${dllName}") -> 0x${module.baseAddress.toString(16)} (loaded from VFS)`);
                     rememberLoadLibraryHandle(dllName, module.baseAddress);
                     const dllInits = loader.getPendingDllInits();
                     if (dllInits.length > 0) {
@@ -1070,9 +1179,7 @@ function initModuleFunctions(): void {
             }
         }
 
-        if (verbose) {
-            Logger.verbose(LogCategory.KERNEL32, `LoadLibraryW("${dllName}") -> NOT FOUND`);
-        }
+        Logger.log(LogCategory.KERNEL32, `LoadLibraryW("${dllName}") -> NOT FOUND (err=126)`);
         system.process!.lastError = 126; // ERROR_MOD_NOT_FOUND
         return { value: 0, stackCleanup: 4 };
     };
@@ -1119,7 +1226,7 @@ function initModuleFunctions(): void {
 
         // PRIORITY 2: thunked DLL
         const thunkedBase = getThunkedDllBase(dllName);
-        if (thunkedBase !== undefined) {
+        if (thunkedBase !== undefined && !EmulatorConfig.getInstance().prefersNativeDll(dllName)) {
             const blocked = tryBlockThunkedDllLoad(dllName, thunkedName, 4, "LoadLibraryA", callerInfo);
             if (blocked) return blocked;
 
@@ -1131,17 +1238,20 @@ function initModuleFunctions(): void {
             }
 
             rememberLoadLibraryHandle(dllName, thunkedBase);
-            return { value: thunkedBase, stackCleanup: 4 };
+            const hleBaseA = resolveHleModuleBase(thunkedName, mem, thunkedBase);
+            rememberLoadLibraryHandle(dllName, hleBaseA);
+            return { value: hleBaseA, stackCleanup: 4 };
         }
 
         // Also check APIRegistry for generated thunked module pseudo-bases.
         const apiRegistry = APIRegistry.getInstance();
-        if (apiRegistry.hasModule(thunkedName) && !FORCE_NATIVE_PACKAGE_LOAD.has(thunkedName)) {
+        if (apiRegistry.hasModule(thunkedName) && !FORCE_NATIVE_PACKAGE_LOAD.has(thunkedName) && !EmulatorConfig.getInstance().prefersNativeDll(dllName)) {
             const blocked = tryBlockThunkedDllLoad(dllName, thunkedName, 4, "LoadLibraryA", callerInfo);
             if (blocked) return blocked;
             const hash = computeGeneratedPseudoBase(thunkedName);
-            rememberLoadLibraryHandle(dllName, hash);
-            return { value: hash, stackCleanup: 4 };
+            const hleBaseAGen = resolveHleModuleBase(thunkedName, mem, hash);
+            rememberLoadLibraryHandle(dllName, hleBaseAGen);
+            return { value: hleBaseAGen, stackCleanup: 4 };
         }
 
         // PRIORITY 3: load native DLL from VFS
@@ -1258,7 +1368,7 @@ function initModuleFunctions(): void {
             return finish(cached);
         }
         // Retry previously-missed thunked exports — stubs may appear after warmup / HMR.
-        if (cached === 0 && (THUNKED_DLL_PSEUDO_BY_BASE.has(hModule) || getHashToDllNameMap().has(hModule))) {
+        if (cached === 0 && (THUNKED_DLL_PSEUDO_BY_BASE.has(hModule) || hleImageNameByBase.has(hModule) || getHashToDllNameMap().has(hModule))) {
             getProcAddressCache.delete(cacheKey);
         } else if (cached === 0) {
             system.process!.lastError = 127;
@@ -1304,7 +1414,7 @@ function initModuleFunctions(): void {
             }
 
             if (address === 0 && hModule !== 0) {
-                let dllName = THUNKED_DLL_PSEUDO_BY_BASE.get(hModule) ?? null;
+                let dllName = THUNKED_DLL_PSEUDO_BY_BASE.get(hModule) ?? hleImageNameByBase.get(hModule) ?? null;
                 if (!dllName) {
                     dllName = getHashToDllNameMap().get(hModule) ?? null;
                 }
@@ -1351,6 +1461,83 @@ function initModuleFunctions(): void {
     };
 
     exports['GetProcAddress'] = getProcAddressImpl;
+
+    exports['ResolveDelayLoadedAPI'] = async (ctx, mem, args): Promise<ThunkResult> => {
+        const [base, descriptor, dllHook, systemHook, thunk, flags] = args;
+        const system = System.getInstance();
+        const process = system.process!;
+        const fail = (error: number): ThunkResult => {
+            system.scheduler.setLastError(error);
+            return { value: 0, stackCleanup: 24 };
+        };
+        const target = flags === 0 ? readDelayImport(mem, base, descriptor, thunk) : null;
+        if (!target) return fail(87);
+        let module = Mem.readUint32(target.moduleHandleAddress) ?? 0;
+        let dllInits: NonNullable<ThunkResult['dllInits']> = [];
+        if (!module) {
+            const loaded = await exports['LoadLibraryA'](ctx, mem, [target.dllNameAddress]);
+            module = typeof loaded === 'number' ? loaded : loaded.value;
+            if (typeof loaded === 'object') dllInits = loaded.dllInits ?? [];
+        }
+        const resolved = module ? getProcAddressImpl(ctx, mem, [module, target.procedureAddressOrOrdinal]) : null;
+        const address = resolved?.value ?? 0;
+        const error = module ? 127 : 126;
+        Logger.log(LogCategory.KERNEL32, `ResolveDelayLoadedAPI: ${Marshaler.readString(mem, target.dllNameAddress)}!${target.byName ? Marshaler.readString(mem, target.procedureAddressOrOrdinal) : '#' + target.procedureAddressOrOrdinal} -> 0x${address.toString(16)}`);
+        if (module) Mem.writeUint32(target.moduleHandleAddress, module);
+        if (address) Mem.writeUint32(thunk, address);
+        if (!address) system.scheduler.setLastError(error);
+        if (dllInits.length === 0 && (address || (!dllHook && !systemHook))) {
+            return { value: address, stackCleanup: 24 };
+        }
+        const callbacks = process.dispatcher.callbackManager;
+        if (!callbacks) return fail(50);
+        return {
+            value: address, stackCleanup: 24,
+            startCallbackChain: ({ esp, returnAddr }) => {
+                const frame = callbacks.saveSuspendedThunkContext({ esp, returnAddr } as Parameters<typeof callbacks.saveSuspendedThunkContext>[0], 24, 'DelayLoad');
+                if (!frame) return false;
+                const finish = (value: number): number => {
+                    if (value) Mem.writeUint32(thunk, value);
+                    return value >>> 0;
+                };
+                const runSystemHook = (): number | null => {
+                    if (!systemHook) return finish(0);
+                    callbacks.invokeCallback(systemHook, [target.dllNameAddress, target.procedureAddressOrOrdinal], 0, finish, false, 'DelayLoad-SystemHook', frame);
+                    return null;
+                };
+                const resolveOrHook = (): number | null => {
+                    if (address) return finish(address);
+                    if (!dllHook) return runSystemHook();
+                    // DELAYLOAD_INFO (PE32), as defined by delayloadhandler.h.
+                    const info = process.memory.alloc(36, 'THUNK_DATA', 'rw');
+                    [36, descriptor, thunk, target.dllNameAddress, target.byName ? 1 : 0,
+                        target.procedureAddressOrOrdinal, module, 0, error]
+                        .forEach((value, index) => Mem.writeUint32(info + index * 4, value));
+                    callbacks.invokeCallback(dllHook, [4, info], 0, value => value ? finish(value) : runSystemHook(), false, 'DelayLoad-DllHook', frame);
+                    return null;
+                };
+                let index = 0;
+                const initNext = (result: number): number | null => {
+                    if (!result) {
+                        system.scheduler.setLastError(1114);
+                        return finish(0);
+                    }
+                    index++;
+                    if (index >= dllInits.length) return resolveOrHook();
+                    const next = dllInits[index];
+                    callbacks.invokeCallback(next.entryPoint, [next.baseAddress, 1, 0], 0, initNext, false, 'DelayLoad-DllMain', frame);
+                    return null;
+                };
+                if (dllInits.length) {
+                    const first = dllInits[0];
+                    callbacks.invokeCallback(first.entryPoint, [first.baseAddress, 1, 0], 0, initNext, false, 'DelayLoad-DllMain', frame);
+                } else {
+                    resolveOrHook(); // Failure path necessarily starts a hook callback.
+                }
+                return true;
+            },
+        };
+    };
 }
 
 initModuleFunctions();
@@ -1383,6 +1570,10 @@ export function prePopulateGetProcAddressCache(dispatcher: any): void {
 
 /**
  * Register GetModuleHandleA fast path — covers the common case of thunked DLL lookups.
+ * Returns the HLE image base when one is built (so manual PE-header walks see a
+ * real image); otherwise falls through to the slow path, which builds the image
+ * on demand. Never returns the legacy pseudo-base: unmapped pseudo-bases derail
+ * hand-rolled export-table walkers (halo2.exe CRT init) into unmapped memory.
  */
 export function registerFastPathModuleFunctions(dispatcher: any): void {
     if (!dispatcher?.registerFastPath) return;
@@ -1394,10 +1585,37 @@ export function registerFastPathModuleFunctions(dispatcher: any): void {
         if (lpName === 0) return getMainExeHandle();
         const name = Marshaler.readString(mem8, lpName);
         const base = getThunkedDllBase(name.toLowerCase().replace(/\.dll$/, ''));
-        if (base !== undefined) return base;
-        return null; // Fall through to slow path for real DLLs, exe name, etc.
+        if (base === undefined) return null; // Fall through to slow path for real DLLs, exe name, etc.
+        // Serve the HLE image base so manual PE-header walks see a real image.
+        // When no image is built yet, fall through: the slow path builds it.
+        const canonical = getThunkedModuleName(name);
+        return hleImageBaseByName.get(canonical) ?? null;
     };
 
     dispatcher.registerFastPath('kernel32', 'GetModuleHandleA', impl);
     Logger.log(LogCategory.KERNEL32, 'Registered fast path for GetModuleHandleA');
+}
+
+/**
+ * Eagerly build + map HLE export images for every thunked module (optional
+ * warmup: the slow paths build images on demand anyway, and the GetModuleHandleA
+ * fast path falls through until one exists). Call once the dispatcher, module
+ * registry, address space and guest memory are live if eager warmup is ever
+ * wanted; currently unused by the boot path.
+ */
+export function prebuildHleModuleImages(mem: Uint8Array): void {
+    ensureProcessLocalCaches();
+    const system = System.getInstance();
+    if (!system.process?.dispatcher || !system.process?.moduleRegistry || !system.process?.addressSpace) {
+        return;
+    }
+    let built = 0;
+    for (const mod of APIRegistry.getInstance().getModules()) {
+        const key = mod.name.toLowerCase();
+        if (!key || hleImageBaseByName.has(key)) continue;
+        const pseudo = getThunkedDllBase(key);
+        const fallback = pseudo ?? computeGeneratedPseudoBase(key);
+        if (resolveHleModuleBase(key, mem, fallback) !== (fallback >>> 0)) built++;
+    }
+    Logger.log(LogCategory.KERNEL32, `HLE images prebuilt: ${built} modules`);
 }

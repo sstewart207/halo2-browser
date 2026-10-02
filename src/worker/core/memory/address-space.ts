@@ -2,6 +2,8 @@ import { Logger, LogCategory } from "../logger";
 import {
     MEM_HEAP_BASE,
     MEM_HEAP_SIZE,
+    MEM_HEAP_HI_BASE,
+    MEM_HEAP_HI_SIZE,
     MEM_SURFACE_BASE,
     MEM_SURFACE_SIZE,
     MEM_THUNK_CODE_BASE,
@@ -17,6 +19,9 @@ import {
 export type RegionKind =
     | "LOW_MEM"
     | "HEAP"
+    // Overflow arena for guest heap allocations, above the JIT guard band. Present
+    // whenever RAM reaches past SURFACE; see MEM_HEAP_HI_BASE in emulator-config.ts.
+    | "HEAP_HI"
     | "SURFACE"
     | "THUNK_CODE"
     | "THUNK_DATA"
@@ -26,6 +31,16 @@ export type RegionKind =
     | "OPFS"
     | "BORROWED"
     | "RESERVED";
+
+/**
+ * True for the buckets that serve ordinary guest heap allocations. HEAP and HEAP_HI
+ * are one logical pool to the guest — only the arena they bump from differs — so every
+ * "is this guest heap memory?" test must accept both, or HEAP_HI blocks become
+ * invisible to VirtualQuery / allocation snapshots / commit fallbacks.
+ */
+export function isHeapBucketKind(kind: RegionKind | undefined): boolean {
+    return kind === "HEAP" || kind === "HEAP_HI";
+}
 
 export type RegionPerms = "r" | "rw" | "rx" | "rwx" | "noaccess";
 
@@ -71,6 +86,7 @@ export function bumpFastmemGeneration(source: number): void {
 // non-RAM regions (ROM/THUNK_CODE/CALLBACK_STUB/…) never get marked.
 const WRITE_MAP_FAST_KINDS: ReadonlySet<RegionKind> = new Set<RegionKind>([
     "HEAP",
+    "HEAP_HI",
     "SURFACE",
     "THUNK_DATA",
 ]);
@@ -276,6 +292,22 @@ export class AddressSpace {
             kind: "SURFACE",
             owner: "Layout",
             tag: "surface-pool",
+            allowOverlap: true,
+        });
+
+        // HEAP_HI: overflow guest-heap arena, above the guard band so it stays on the
+        // JIT fast path. Sized by the RAM actually present, so a 1GB machine gets a
+        // 256MB arena and a 2GB machine gets the full 1.25GB. It sits immediately after
+        // SURFACE, so the two pools can never collide however the RAM is sized.
+        const heapHiBase = MEM_HEAP_HI_BASE;
+        const heapHiLimit = Math.min(linearSize, MEM_HEAP_HI_BASE + MEM_HEAP_HI_SIZE);
+        layoutBuckets.push({
+            base: heapHiBase,
+            size: Math.max(0, heapHiLimit - heapHiBase),
+            perms: "rw",
+            kind: "HEAP_HI",
+            owner: "Layout",
+            tag: "heap-hi-pool",
             allowOverlap: true,
         });
 

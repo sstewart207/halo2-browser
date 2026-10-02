@@ -29,6 +29,7 @@
 
 import { Logger, LogCategory } from '../../core/logger';
 import { devices, stateBlocks } from './shared-state';
+import { d3d9ResourceLifetime } from '../../backends/webgpu/d3d9/resource-lifetime';
 import {
     resolveVertexShaderComPtr,
     resolvePixelShaderComPtr,
@@ -299,14 +300,14 @@ export function registerFastPathD3D9Functions(dispatcher: any): void {
         return device.captureStateBlockData(block);
     }, { trivial: true });
 
-    // Resource AddRef/Release — our COM objects are never reference-freed (dummy
-    // refcounts: AddRef→2, Release→1). Hot in the per-frame texture/surface churn
-    // (NFSU: ~94K Texture AddRef + ~94K Release / interval). Trivial constant returns.
-    const addRefFn = () => 2;
-    const releaseFn = () => 1;
-    for (const prefix of ['IDirect3DTexture9', 'IDirect3DCubeTexture9', 'IDirect3DSurface9', 'IDirect3DVertexBuffer9', 'IDirect3DIndexBuffer9']) {
+    // Resource references must cross into JS: a final Release frees guest/GPU backing.
+    const addRefFn = (cpu: any, _mem: Uint8Array, _mem32: Uint32Array, view: DataView) =>
+        d3d9ResourceLifetime.addRef(view.getUint32(cpu.reg32[4] + 4, true));
+    const releaseFn = (cpu: any, _mem: Uint8Array, _mem32: Uint32Array, view: DataView) =>
+        d3d9ResourceLifetime.release(view.getUint32(cpu.reg32[4] + 4, true));
+    for (const prefix of ['IDirect3DVolumeTexture9', 'IDirect3DVolume9', 'IDirect3DTexture9', 'IDirect3DCubeTexture9', 'IDirect3DSurface9', 'IDirect3DVertexBuffer9', 'IDirect3DIndexBuffer9']) {
         dispatcher.registerFastPath('d3d9', `${prefix}_AddRef`, addRefFn, { trivial: true });
-        dispatcher.registerFastPath('d3d9', `${prefix}_Release`, releaseFn, { trivial: true });
+        dispatcher.registerFastPath('d3d9', `${prefix}_Release`, releaseFn);
     }
 
     Logger.log(LogCategory.D3D9, 'Registered FastPath for hot D3D9 state setters, shader constants, draw calls, and resource AddRef/Release');
@@ -579,17 +580,7 @@ export function registerFastPathD3D9Functions(dispatcher: any): void {
             });
     }
 
-    // ── COM AddRef/Release → zero-crossing constant-return stubs ─────────────
-    // Our COM resources are never reference-freed (dummy refcounts, see the FastPath
-    // block above, which stays as a safety net). Patch the stub itself to
-    // `mov eax, N; ret 4` — no trap, no ring, no JS. Kill-switch: __noComRefStubs.
-    if (typeof dispatcher.registerConstantReturnStub === 'function'
-        && !(globalThis as any).__noComRefStubs) {
-        for (const prefix of ['IDirect3DTexture9', 'IDirect3DCubeTexture9', 'IDirect3DSurface9', 'IDirect3DVertexBuffer9', 'IDirect3DIndexBuffer9']) {
-            dispatcher.registerConstantReturnStub('d3d9', `${prefix}_AddRef`, 2, 4);
-            dispatcher.registerConstantReturnStub('d3d9', `${prefix}_Release`, 1, 4);
-        }
-    }
+    // No constant-return COM stubs: they would bypass reference ownership and leak.
 
     // Shader constants — WBUF with inline capture-at-call (dedicated trampoline).
     if (typeof dispatcher.registerShaderConstantWriteBufferFunction === 'function') {

@@ -459,13 +459,13 @@ const deviceMethodSpecs = [
     { name: "CreateIndexBuffer", args: 7 },
     { name: "CreateRenderTarget", args: 9 },
     { name: "CreateDepthStencilSurface", args: 9 },
-    { name: "UpdateSurface", args: 6 },
+    { name: "UpdateSurface", args: 5 },
     { name: "UpdateTexture", args: 3 },
     { name: "GetRenderTargetData", args: 3 },
     { name: "GetFrontBufferData", args: 3 },
     { name: "StretchRect", args: 6 },
     { name: "ColorFill", args: 4 },
-    { name: "CreateOffscreenPlainSurface", args: 8 },
+    { name: "CreateOffscreenPlainSurface", args: 7 },
     { name: "SetRenderTarget", args: 3 },
     { name: "GetRenderTarget", args: 3 },
     { name: "SetDepthStencilSurface", args: 2 },
@@ -774,6 +774,35 @@ export const IDirect3DTexture9: InterfaceDescriptor = {
     ]
 };
 
+export const IDirect3DVolumeTexture9: InterfaceDescriptor = {
+    name: "IDirect3DVolumeTexture9",
+    inherits: "IDirect3DBaseTexture9",
+    methods: [
+        ...IUnknown.methods,
+        ...textureMethodSpecs.slice(0, 14).map(spec => makeMethod(spec.name, spec.args)),
+        makeMethod("GetLevelDesc", 3),
+        makeMethod("GetVolumeLevel", 3),
+        makeMethod("LockBox", 5, { category: "lock" }),
+        makeMethod("UnlockBox", 2, { category: "lock" }),
+        makeMethod("AddDirtyBox", 2),
+    ],
+};
+
+export const IDirect3DVolume9: InterfaceDescriptor = {
+    name: "IDirect3DVolume9",
+    methods: [
+        ...IUnknown.methods,
+        makeMethod("GetDevice", 2),
+        makeMethod("SetPrivateData", 5),
+        makeMethod("GetPrivateData", 4),
+        makeMethod("FreePrivateData", 2),
+        makeMethod("GetContainer", 3),
+        makeMethod("GetDesc", 2),
+        makeMethod("LockBox", 4, { category: "lock" }),
+        makeMethod("UnlockBox", 1, { category: "lock" }),
+    ],
+};
+
 // IDirect3DCubeTexture9 — same IDirect3DBaseTexture9 vtable as IDirect3DTexture9,
 // but the per-image accessors take a CubeMapFace selector: GetCubeMapSurface
 // (replaces GetSurfaceLevel), and LockRect/UnlockRect/AddDirtyRect gain a FaceType
@@ -1010,12 +1039,50 @@ export const IDirect3DShaderValidator9: InterfaceDescriptor = {
     ],
 };
 
+// Extended interfaces preserve every inherited slot before appending the SDK methods.
+export const IDirect3D9Ex: InterfaceDescriptor = {
+    name: "IDirect3D9Ex", inherits: "IDirect3D9",
+    iid: "02177241-69FC-400C-8FF1-93A44DF6861D",
+    methods: [
+        ...IDirect3D9.methods,
+        makeMethod("GetAdapterModeCountEx", 3),
+        makeMethod("EnumAdapterModesEx", 5),
+        makeMethod("GetAdapterDisplayModeEx", 4),
+        makeMethod("CreateDeviceEx", 8, { async: true }),
+        makeMethod("GetAdapterLUID", 3),
+    ],
+};
+
+export const IDirect3DDevice9Ex: InterfaceDescriptor = {
+    name: "IDirect3DDevice9Ex", inherits: "IDirect3DDevice9",
+    iid: "B18B10CE-2649-405A-870F-95F777D4313A",
+    methods: [
+        ...IDirect3DDevice9.methods,
+        makeMethod("SetConvolutionMonoKernel", 5),
+        makeMethod("ComposeRects", 9),
+        makeMethod("PresentEx", 6, { async: true }),
+        makeMethod("GetGPUThreadPriority", 2),
+        makeMethod("SetGPUThreadPriority", 2),
+        makeMethod("WaitForVBlank", 2),
+        makeMethod("CheckResourceResidency", 3),
+        makeMethod("SetMaximumFrameLatency", 2),
+        makeMethod("GetMaximumFrameLatency", 2),
+        makeMethod("CheckDeviceState", 2),
+        makeMethod("CreateRenderTargetEx", 10),
+        makeMethod("CreateOffscreenPlainSurfaceEx", 8),
+        makeMethod("CreateDepthStencilSurfaceEx", 10),
+        makeMethod("ResetEx", 3),
+        makeMethod("GetDisplayModeEx", 4),
+    ],
+};
+
 // Complete D3D9 module descriptor
 export const d3d9Module: ModuleDescriptor = {
     name: "d3d9",
     version: "9.0c",
     description: "Direct3D 9 Graphics API",
     functions: [
+        makeMethod("Direct3DCreate9Ex", 2),
         {
             name: "Direct3DCreate9",
             params: [
@@ -1043,9 +1110,13 @@ export const d3d9Module: ModuleDescriptor = {
     interfaces: [
         IDirect3D9,
         IDirect3DDevice9,
+        IDirect3D9Ex,
+        IDirect3DDevice9Ex,
         IDirect3DVertexBuffer9,
         IDirect3DIndexBuffer9,
         IDirect3DTexture9,
+        IDirect3DVolumeTexture9,
+        IDirect3DVolume9,
         IDirect3DCubeTexture9,
         IDirect3DSurface9,
         IDirect3DStateBlock9,

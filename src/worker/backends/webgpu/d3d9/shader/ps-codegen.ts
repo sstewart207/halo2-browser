@@ -90,7 +90,7 @@ export function analyzePs(prog: SmProgram): PsAnalysis {
     };
 }
 
-export function emitPsMain(prog: SmProgram, a: PsAnalysis, alphaTest: AlphaTest | null = null, cubeMask: number = 0, projectedStages: number = 0): string {
+export function emitPsMain(prog: SmProgram, a: PsAnalysis, alphaTest: AlphaTest | null = null, cubeMask: number = 0, projectedStages: number = 0, colorTargetCount = 1): string {
     const ps1x = prog.major === 1;
     const maxConstIdx = Math.max(0, a.constantCount - 1);
 
@@ -133,7 +133,14 @@ export function emitPsMain(prog: SmProgram, a: PsAnalysis, alphaTest: AlphaTest 
     for (const n of [...a.readsTexcoord].sort((x, y) => x - y)) {
         body.push(`var t${n}: vec4<f32> = in.${texField(n)};`);
     }
-    if (!ps1x) body.push(`var oC0: vec4<f32> = vec4<f32>(0.0);`);
+    if (!ps1x) {
+        const outputs = new Set<number>(Array.from({length: colorTargetCount}, (_, n) => n));
+        for (const instruction of prog.instructions) {
+            if (instruction.dst?.reg.type === RegType.COLOROUT) outputs.add(instruction.dst.reg.num);
+            for (const source of instruction.src) if (source.reg.type === RegType.COLOROUT) outputs.add(source.reg.num);
+        }
+        for (const output of outputs) body.push(`var oC${output}: vec4<f32> = vec4<f32>(0.0);`);
+    }
     for (const [num, vals] of a.defConsts) {
         body.push(`let dc${num} = vec4<f32>(${fmt(vals[0])}, ${fmt(vals[1])}, ${fmt(vals[2])}, ${fmt(vals[3])});`);
     }
@@ -151,6 +158,12 @@ export function emitPsMain(prog: SmProgram, a: PsAnalysis, alphaTest: AlphaTest 
     const outVar = ps1x ? "r0" : "oC0";
     const atest = alphaTestSnippet(alphaTest, `${outVar}.a`);
     if (atest) body.push(atest);
+    if (colorTargetCount > 1) {
+        const fields = Array.from({length: colorTargetCount}, (_, n) => `@location(${n}) color${n}: vec4<f32>,`).join('\n');
+        const values = Array.from({length: colorTargetCount}, (_, n) => n === 0 ? outVar : ps1x ? 'vec4<f32>(0.0)' : `oC${n}`).join(', ');
+        body.push(`return MrtOutput(${values});`);
+        return `struct MrtOutput {\n${fields}\n}\n@fragment\nfn fs_main(in: Interp) -> MrtOutput {\n    ${body.join("\n    ")}\n}`;
+    }
     body.push(`return ${outVar};`);
 
     return `@fragment\nfn fs_main(in: Interp) -> @location(0) vec4<f32> {\n    ${body.join("\n    ")}\n}`;
@@ -202,7 +215,8 @@ function emitTexOp(
             body.push(`// tex (stage ${stage}${isCube ? ", cube" : ""}${projected ? ", proj.w" : ""}${biased ? ", bias" : ""})`);
             body.push(`let ${tc} = ${coordExpr};`);
             const projd = projected ? `((${tc}) / (${tc}).w)` : `(${tc})`;
-            const coord = isCube ? `${projd}.xyz` : `${projd}.xy`;
+            const isVolume = ((cubeMask >> (stage + 8)) & 1) !== 0;
+            const coord = (isCube || isVolume) ? `${projd}.xyz` : `${projd}.xy`;
             const sampleExpr = biased
                 ? `textureSampleBias(tex${stage}, samp, ${coord}, (${tc}).w)`
                 : `textureSample(tex${stage}, samp, ${coord})`;

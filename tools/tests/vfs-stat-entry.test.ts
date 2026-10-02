@@ -77,4 +77,20 @@ describe("VFS statEntry / directoryExists fast path", () => {
         expect(vfs.directoryExists("C:\\Morrowind.exe")).toBe(false);
         expect(vfs.directoryExists("C:\\Data Files\\Bloodmoon.esm")).toBe(false);
     });
+
+    test("open and openSync reject empty path and directories", async () => {
+        // Empty path
+        expect(vfs.openSync("", 0x80000000, 2)).toBeNull();
+        expect(await vfs.open("", 0x80000000, 2)).toBeNull();
+        expect(vfs.classifyOpenFailure("", 2)).toBe(3); // ERROR_PATH_NOT_FOUND
+
+        // Directory target (root or subdirectory)
+        expect(vfs.openSync("C:\\", 0x80000000, 2)).toBeNull();
+        expect(await vfs.open("C:\\", 0x80000000, 2)).toBeNull();
+        expect(vfs.classifyOpenFailure("C:\\", 2)).toBe(5); // ERROR_ACCESS_DENIED
+
+        expect(vfs.openSync("C:\\Data Files", 0x80000000, 2)).toBeNull();
+        expect(await vfs.open("C:\\Data Files", 0x80000000, 2)).toBeNull();
+        expect(vfs.classifyOpenFailure("C:\\Data Files", 2)).toBe(5); // ERROR_ACCESS_DENIED
+    });
 });

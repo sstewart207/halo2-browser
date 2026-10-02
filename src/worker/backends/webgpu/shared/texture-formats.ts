@@ -121,7 +121,7 @@ export interface DecodeD3DTextureOptions {
     surfaceFormat?: FormatInfo;
 }
 
-function bytesPerPixelFromBpp(bpp: number): number {
+export function bytesPerPixelFromBpp(bpp: number): number {
     return Math.max(1, Math.floor(bpp / 8));
 }
 

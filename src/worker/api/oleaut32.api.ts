@@ -42,8 +42,8 @@ export const oleaut32Module: ModuleDescriptor = {
         makeFunc("VariantCopy", 2),
         makeFunc("ord_12", 4, { ordinal: 12 }),   // VariantChangeType
         makeFunc("VariantChangeType", 4),
-        makeFunc("ord_13", 6, { ordinal: 13 }),   // VariantChangeTypeEx
-        makeFunc("VariantChangeTypeEx", 6),
+        makeFunc("ord_147", 5, { ordinal: 147 }), // VariantChangeTypeEx
+        makeFunc("VariantChangeTypeEx", 5),
 
         // Active object registration (ordinal + named alias)
         makeFunc("ord_33", 3, { ordinal: 33 }),   // RegisterActiveObject
@@ -53,6 +53,8 @@ export const oleaut32Module: ModuleDescriptor = {
 
         // SafeArray
         makeFunc("SafeArrayCreate", 3),
+        makeFunc("ord_314", 4, { ordinal: 314 }), // VarBstrCmp (verified Windows DLL export)
+        makeFunc("VarBstrCmp", 4),
         makeFunc("SafeArrayDestroy", 1),
         makeFunc("SafeArrayGetDim", 1),
         makeFunc("SafeArrayGetLBound", 3),
@@ -107,10 +109,10 @@ export const oleaut32Module: ModuleDescriptor = {
         makeFunc("VarBstrFromCy", 5),
 
         // Error info (ordinal + named alias)
-        makeFunc("ord_200", 1, { ordinal: 200 }), // GetErrorInfo
-        makeFunc("GetErrorInfo", 1),
-        makeFunc("ord_201", 1, { ordinal: 201 }), // SetErrorInfo
-        makeFunc("SetErrorInfo", 1),
+        makeFunc("ord_200", 2, { ordinal: 200 }), // GetErrorInfo(DWORD dwReserved, IErrorInfo**)
+        makeFunc("GetErrorInfo", 2),
+        makeFunc("ord_201", 2, { ordinal: 201 }), // SetErrorInfo(DWORD dwReserved, IErrorInfo*)
+        makeFunc("SetErrorInfo", 2),
         makeFunc("ord_202", 1, { ordinal: 202 }), // CreateErrorInfo
         makeFunc("CreateErrorInfo", 1),
 

@@ -311,3 +311,114 @@ describe("alpha test", () => {
         expect(res.wgsl).toContain("discard");
     });
 });
+
+
+describe("SM3 semantic register mapping", () => {
+    const declaration = (type: RegType, num: number, usage: number, index = 0) =>
+        [Op.DCL | (2 << 24), usage | (index << 16), dst(type, num)];
+    const move = (outType: RegType, outNum: number, inType: RegType, inNum: number) =>
+        [Op.MOV | (2 << 24), dst(outType, outNum), src(inType, inNum)];
+    test("links reordered position and interpolator registers by semantic", () => {
+        const vs = compileVertexShader(new Uint32Array([
+            version(false, 3, 0), ...declaration(RegType.INPUT, 0, 0),
+            ...declaration(RegType.OUTPUT, 5, 0), ...declaration(RegType.OUTPUT, 1, 5, 2),
+            ...move(RegType.OUTPUT, 5, RegType.INPUT, 0),
+            ...move(RegType.OUTPUT, 1, RegType.INPUT, 0), END,
+        ]));
+        const ps = compilePixelShader(new Uint32Array([
+            version(true, 3, 0), ...declaration(RegType.INPUT, 3, 5, 2),
+            ...move(RegType.COLOROUT, 0, RegType.INPUT, 3),
+            ...move(RegType.COLOROUT, 1, RegType.INPUT, 3), END,
+        ]));
+        const linked = linkProgram({vs, ps, declElements: [
+            {stream: 0, offset: 0, type: 3, usage: 0, usageIndex: 0},
+        ], streamStride: 16});
+        expect(vs.prog.instructions[0].dst!.reg.type).toBe(RegType.RASTOUT);
+        expect(ps.prog.instructions[0].src[0].reg.type).toBe(RegType.TEXTURE);
+        expect(ps.prog.instructions[0].src[0].reg.num).toBe(2);
+        expect(linked.wgsl).toContain('in.tex2');
+        expect(linked.wgsl).not.toContain('in.col3');
+        expect(linked.wgsl).toContain('var oC1');
+    });
+    test("does not silently overwrite packed semantic declarations", () => {
+        expect(() => compilePixelShader(new Uint32Array([
+            version(true, 3, 0), ...declaration(RegType.INPUT, 1, 5, 0),
+            ...declaration(RegType.INPUT, 1, 5, 1), END,
+        ]))).toThrow('Packed SM3');
+    });
+});
+
+
+test('D3D9 separates a 12-byte position stream from a 16-byte texture stream', () => {
+    const vs = compileVertexShader(new Uint32Array([
+        version(false, 3, 0), ...dcl(0, 0, 0), ...dcl(5, 0, 1),
+        Op.DCL | (2 << 24), 0, dst(RegType.OUTPUT, 0),
+        Op.MOV | (2 << 24), dst(RegType.OUTPUT, 0), src(RegType.INPUT, 0), END,
+    ]));
+    const linked = linkProgram({vs, ps: null, declElements: [
+        {stream: 0, offset: 0, type: 2, usage: 0, usageIndex: 0},
+        {stream: 1, offset: 0, type: 3, usage: 5, usageIndex: 0},
+    ], streamStride: 12, streamStrides: [12, 16]});
+    expect(linked.vertexBuffers.map(b => b!.arrayStride)).toEqual([12, 16]);
+    expect(linked.vertexBuffers[0]!.attributes).toHaveLength(1);
+    expect(linked.vertexBuffers[1]!.attributes).toHaveLength(1);
+});
+
+
+test('SM3 MRT emits independent color outputs for both render attachments', () => {
+    const vs = compileVertexShader(buildVs());
+    const ps = compilePixelShader(new Uint32Array([
+        version(true, 3, 0),
+        Op.MOV | (2 << 24), dst(RegType.COLOROUT, 0), src(RegType.CONST, 0),
+        Op.MOV | (2 << 24), dst(RegType.COLOROUT, 1), src(RegType.CONST, 1), END,
+    ]));
+    const linked = linkProgram({vs, ps, declElements: null, streamStride: 32, colorTargetCount: 2});
+    expect(linked.wgsl).toContain('@location(1) color1: vec4<f32>');
+    expect(linked.wgsl).toContain('return MrtOutput(oC0, oC1);');
+    expect(linked.wgsl).toContain('fn fs_main(in: Interp) -> MrtOutput');
+});
+
+test('D3DDECLTYPE DEC3N (14) and UDEC3 (13) produce 4-byte uint32 attributes and WGSL unpacking', () => {
+    const vs = compileVertexShader(new Uint32Array([
+        version(false, 3, 0), ...dcl(0, 0, 0), ...dcl(3, 0, 1),
+        Op.DCL | (2 << 24), 0, dst(RegType.OUTPUT, 0),
+        Op.DCL | (2 << 24), 3, dst(RegType.OUTPUT, 1),
+        Op.MOV | (2 << 24), dst(RegType.OUTPUT, 0), src(RegType.INPUT, 0),
+        Op.MOV | (2 << 24), dst(RegType.OUTPUT, 1), src(RegType.INPUT, 1),
+        END,
+    ]));
+    const linked = linkProgram({vs, ps: null, declElements: [
+        {stream: 0, offset: 0, type: 2, usage: 0, usageIndex: 0},
+        {stream: 0, offset: 12, type: 14, usage: 3, usageIndex: 0},
+    ], streamStride: 16});
+    expect(linked.vertexAttributes).toHaveLength(2);
+    expect(linked.vertexAttributes[1].format).toBe('uint32');
+    expect(linked.vertexAttributes[1].offset).toBe(12);
+    expect(linked.wgsl).toContain('clamp(f32(i32((in.v1) << 22u) >> 22) / 511.0, -1.0, 1.0)');
+});
+
+test('SM3 normal, tangent, and binormal semantics link without throwing', () => {
+    const vs = compileVertexShader(new Uint32Array([
+        version(false, 3, 0),
+        Op.DCL | (2 << 24), 0, dst(RegType.OUTPUT, 0),
+        Op.DCL | (2 << 24), 3, dst(RegType.OUTPUT, 1),
+        Op.DCL | (2 << 24), 6, dst(RegType.OUTPUT, 2),
+        Op.DCL | (2 << 24), 7, dst(RegType.OUTPUT, 3),
+        Op.MOV | (2 << 24), dst(RegType.OUTPUT, 0), src(RegType.CONST, 0),
+        Op.MOV | (2 << 24), dst(RegType.OUTPUT, 1), src(RegType.CONST, 1),
+        Op.MOV | (2 << 24), dst(RegType.OUTPUT, 2), src(RegType.CONST, 2),
+        Op.MOV | (2 << 24), dst(RegType.OUTPUT, 3), src(RegType.CONST, 3),
+        END,
+    ]));
+    const ps = compilePixelShader(new Uint32Array([
+        version(true, 3, 0),
+        Op.DCL | (2 << 24), 3, dst(RegType.INPUT, 0),
+        Op.DCL | (2 << 24), 6, dst(RegType.INPUT, 1),
+        Op.MOV | (2 << 24), dst(RegType.COLOROUT, 0), src(RegType.INPUT, 0),
+        Op.MOV | (2 << 24), dst(RegType.TEMP, 0), src(RegType.INPUT, 1),
+        END,
+    ]));
+    const linked = linkProgram({vs, ps, declElements: null, streamStride: 16});
+    expect(linked.wgsl).toContain('in.tex8');
+    expect(linked.wgsl).toContain('in.tex10');
+});

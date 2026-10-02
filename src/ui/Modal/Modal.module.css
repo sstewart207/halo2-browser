@@ -10,19 +10,19 @@
   align-items: center;
   justify-content: center;
   z-index: 1000;
-  padding: 20px;
+  padding: 8px;
   animation: modal-fade var(--t) var(--ease-out);
 }
 
 .modal-content {
-  background:
-    linear-gradient(180deg, rgba(70, 200, 216, 0.04), transparent 120px),
-    var(--surf-1);
+  background: var(--surf-1);
   border: 1px solid var(--line-2);
   border-radius: var(--r-lg);
   box-shadow: var(--sh-3);
-  max-width: 90vw;
-  max-height: 90vh;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 16px);
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -30,6 +30,8 @@
 }
 
 .modal-header {
+  flex-shrink: 0;
+  gap: 8px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -67,6 +69,8 @@
 }
 
 .modal-body {
+  min-width: 0;
+  min-height: 0;
   flex: 1;
   overflow: hidden;
   display: flex;
@@ -76,13 +80,13 @@
 
 /* Wide modal shell — OPFS tool + Storage manager */
 .opfs-tool-modal {
-  min-width: 800px;
-  min-height: 500px;
+  width: 1000px;
+  height: min(800px, calc(100dvh - 16px));
 }
 
 @media (max-width: 1000px) {
   .opfs-tool-modal {
-    min-width: 600px;
+    width: calc(100vw - 16px);
   }
 }
 

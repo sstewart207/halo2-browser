@@ -12,14 +12,9 @@
  * beyond the configured size (e.g., reading uninitialized pointers). Without full
  * mapping, these accesses would #PF — but before paging they silently succeeded.
  *
- * Guest memory layout (in the 15MB gap between LOW_MEM and HEAP):
- *   Page Directory: 0x00B00000 (4KB, 1024 PDEs)
- *   Page Tables:    0x00B01000 (~4MB for 1024 PTs covering full 4GB)
- *   Total:          ~4.004MB (0x00B00000 - 0x00F01000)
- *
- * Must NOT overlap with PE image region (0x00400000 + sizeOfImage).
- * The old location (0x00100000) overlapped with typical PE loads at 0x00400000,
- * causing page table initialization to overwrite game code/data → #GP on startup.
+ * The caller reserves a page-aligned PD + PT allocation in THUNK_DATA.
+ * Fixed low-memory addresses are unsafe: Halo 2's image extends to 0x01202000,
+ * so the former 0x00B00000..0x00F01000 tables overwrote its code and globals.
  */
 
 import { Logger, LogCategory } from '../logger';
@@ -27,13 +22,11 @@ import { setWriteMapBase } from './address-space';
 import { MEM_THUNK_CODE_BASE, MEM_THUNK_CODE_SIZE } from '../cpu/emulator-config';
 
 // Page table constants
-// Placed at 11MB (still below HEAP at 16MB) to avoid overlap with larger PE images.
-const PAGE_DIR_ADDR = 0x00B00000;
-const PAGE_TABLES_ADDR = 0x00B01000;
 const PAGE_SIZE = 0x1000; // 4KB
 const ENTRIES_PER_TABLE = 1024;
 const PAGES_PER_TABLE = 1024; // Each PT covers 4MB
 const FULL_PD_ENTRIES = 1024; // Always map full 4GB
+export const PAGE_TABLE_REGION_SIZE = (FULL_PD_ENTRIES + 1) * PAGE_SIZE;
 
 // PTE/PDE flags
 const PTE_PRESENT = 0x01;
@@ -52,8 +45,15 @@ export class PageTableManager {
     private pagingEnabled = false;
     private getMemory: () => Uint8Array;
     private getWasmExports: () => any;
+    private readonly pageTablesAddress: number;
 
-    constructor(getMemory: () => Uint8Array, getWasmExports: () => any) {
+    constructor(getMemory: () => Uint8Array, getWasmExports: () => any,
+        private readonly pageDirectoryAddress: number) {
+        if (!Number.isInteger(pageDirectoryAddress) || pageDirectoryAddress < PAGE_SIZE ||
+            pageDirectoryAddress % PAGE_SIZE !== 0) {
+            throw new Error('PageTableManager: directory allocation must be page-aligned');
+        }
+        this.pageTablesAddress = pageDirectoryAddress + PAGE_SIZE;
         this.getMemory = getMemory;
         this.getWasmExports = getWasmExports;
     }
@@ -70,20 +70,23 @@ export class PageTableManager {
      */
     initialize(totalMemoryBytes: number, win9x = false): void {
         const mem = this.getMemory();
+        if (this.pageDirectoryAddress + PAGE_TABLE_REGION_SIZE > mem.byteLength) {
+            throw new Error('PageTableManager: directory allocation exceeds guest memory');
+        }
         const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
 
         // Zero page directory (4KB)
-        mem.fill(0, PAGE_DIR_ADDR, PAGE_DIR_ADDR + PAGE_SIZE);
+        mem.fill(0, this.pageDirectoryAddress, this.pageDirectoryAddress + PAGE_SIZE);
 
         // Write all 1024 PDEs — each points to a page table
         for (let i = 0; i < FULL_PD_ENTRIES; i++) {
-            const ptAddr = PAGE_TABLES_ADDR + i * PAGE_SIZE;
-            view.setUint32(PAGE_DIR_ADDR + i * 4, ptAddr | PTE_DEFAULT, true);
+            const ptAddr = this.pageTablesAddress + i * PAGE_SIZE;
+            view.setUint32(this.pageDirectoryAddress + i * 4, ptAddr | PTE_DEFAULT, true);
         }
 
         // Write page table entries — identity map full 4GB
         for (let pdIdx = 0; pdIdx < FULL_PD_ENTRIES; pdIdx++) {
-            const ptBase = PAGE_TABLES_ADDR + pdIdx * PAGE_SIZE;
+            const ptBase = this.pageTablesAddress + pdIdx * PAGE_SIZE;
             for (let ptIdx = 0; ptIdx < ENTRIES_PER_TABLE; ptIdx++) {
                 const physPage = (pdIdx * PAGES_PER_TABLE + ptIdx) * PAGE_SIZE;
                 view.setUint32(ptBase + ptIdx * 4, physPage | PTE_DEFAULT, true);
@@ -97,7 +100,7 @@ export class PageTableManager {
         // We guard up to page 6 max because the bootloader/GDT/IDT/handlers
         // live at 0x7C00-0x8700+ (pages 7-8) and must remain present.
         const NULL_GUARD_PAGES = win9x ? 0 : 7;
-        const pt0Base = PAGE_TABLES_ADDR; // First page table covers 0x00000000-0x003FFFFF
+        const pt0Base = this.pageTablesAddress; // First page table covers 0x00000000-0x003FFFFF
         for (let i = 0; i < NULL_GUARD_PAGES; i++) {
             view.setUint32(pt0Base + i * 4, 0, true); // Clear Present bit
         }
@@ -106,7 +109,7 @@ export class PageTableManager {
         Logger.log(LogCategory.SYSTEM,
             `[PageTableManager] Initialized: ${FULL_PD_ENTRIES} page tables (4GB identity-mapped), ` +
             `null guard 0x0-0x${(NULL_GUARD_PAGES * PAGE_SIZE).toString(16)}, ` +
-            `PT region 0x${PAGE_DIR_ADDR.toString(16)}-0x${(PAGE_DIR_ADDR + ptRegionSize).toString(16)} ` +
+            `PT region 0x${this.pageDirectoryAddress.toString(16)}-0x${(this.pageDirectoryAddress + ptRegionSize).toString(16)} ` +
             `(${(ptRegionSize / 1024).toFixed(0)}KB), guest memory=${(totalMemoryBytes / (1024 * 1024)).toFixed(0)}MB`);
     }
 
@@ -118,7 +121,7 @@ export class PageTableManager {
         if (this.pagingEnabled) return;
 
         // Set CR3 = page directory physical address
-        cpu.cr[3] = PAGE_DIR_ADDR;
+        cpu.cr[3] = this.pageDirectoryAddress;
 
         // Set CR0.PG (paging) + CR0.WP (write protect for ring 0)
         cpu.cr[0] = (cpu.cr[0] | CR0_PG | CR0_WP) >>> 0;
@@ -134,7 +137,7 @@ export class PageTableManager {
         this.pagingEnabled = true;
 
         Logger.log(LogCategory.SYSTEM,
-            `[PageTableManager] Paging enabled: CR3=0x${PAGE_DIR_ADDR.toString(16)}, ` +
+            `[PageTableManager] Paging enabled: CR3=0x${this.pageDirectoryAddress.toString(16)}, ` +
             `CR0=0x${(cpu.cr[0] >>> 0).toString(16)}`);
     }
 
@@ -408,6 +411,6 @@ export class PageTableManager {
     private _getPteOffset(pageNumber: number): number {
         const pdIndex = (pageNumber >>> 10); // pageNumber / 1024
         const ptIndex = pageNumber & 0x3FF;  // pageNumber % 1024
-        return PAGE_TABLES_ADDR + pdIndex * PAGE_SIZE + ptIndex * 4;
+        return this.pageTablesAddress + pdIndex * PAGE_SIZE + ptIndex * 4;
     }
 }

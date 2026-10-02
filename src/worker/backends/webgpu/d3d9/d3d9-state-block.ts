@@ -6,6 +6,7 @@
  */
 
 import { D3D9Device } from "./d3d9-device";
+import { ResourceBindings } from "./resource-lifetime";
 import {
     resolveVertexDeclComPtr,
     resolveVertexShaderComPtr,
@@ -36,6 +37,7 @@ export type StateBlockEntry =
     | { op: "pixelShaderConstantF"; start: number; data: Float32Array };
 
 export interface D3D9StateBlockData {
+    resourceRefs?: ResourceBindings;
     devicePtr: number;
     blockType: number;
     entries: StateBlockEntry[];
@@ -53,6 +55,13 @@ export interface D3D9StateBlockData {
      *  can resolve) of a wasm-slotted block; refreshed/applied on the JS path while the
      *  bulk (renderState/sampler0/shader-constant) set lives in the slot. */
     handleEntries?: StateBlockEntry[];
+}
+
+export function retainStateBlockTextures(data: D3D9StateBlockData): void {
+    data.resourceRefs ??= new ResourceBindings();
+    for (const entry of data.handleEntries ?? data.entries) {
+        if (entry.op === 'texture') data.resourceRefs.set(`texture:${entry.stage}`, entry.texPtr);
+    }
 }
 
 /**

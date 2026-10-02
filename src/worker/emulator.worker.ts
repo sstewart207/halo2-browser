@@ -1,4 +1,6 @@
 import { V86 } from "v86";
+import * as v86Module from "v86";
+import { liftV86MemoryClamp } from "./core/cpu/v86-memory-patch";
 import { ThunkGenerator } from "./core/thunking/thunk-generator";
 import { Process } from "./core/process";
 import { System } from "./core/system";
@@ -47,6 +49,8 @@ import { Wintrust } from "./modules/wintrust";
 import { Crypt32 } from "./modules/crypt32";
 import { Ws2_32 } from "./modules/ws2_32";
 import { Psapi } from "./modules/psapi";
+import { Powrprof } from "./modules/powrprof";
+import { XInput910 } from "./modules/xinput9_1_0";
 import { Iphlpapi } from "./modules/iphlpapi";
 import { Tapi32 } from "./modules/tapi32";
 import { Setupapi } from "./modules/setupapi";
@@ -61,6 +65,7 @@ import { D3D8 } from "./modules/d3d8";
 import { D3dx9 } from "./modules/d3dx9";
 import { OpenAL, ALUT } from "./modules/openal/openal";
 import { Quartz } from "./modules/quartz";
+import { MediaFoundation } from "./modules/media-foundation";
 import { A3d } from "./modules/a3d";
 import { Avifil32 } from "./modules/avifil32";
 import { Rpcrt4 } from "./modules/rpcrt4";
@@ -938,10 +943,14 @@ const loadPeData = async (peData: Uint8Array, skipReset: boolean = false) => {
     // Initialize page tables in guest memory (identity-mapped).
     // Pages are all Present+RW+User. Paging is ENABLED later by thunk dispatcher
     // when bootloader signals PM+IDT ready (0xDEAD0003 marker).
-    const { PageTableManager } = await import('./core/memory/page-table-manager');
+    const { PageTableManager, PAGE_TABLE_REGION_SIZE } = await import('./core/memory/page-table-manager');
+    // Reserve the tables through the allocator so PE images and later allocations
+    // cannot occupy the same bytes. A fixed address below HEAP can lie inside a PE.
+    const pageTableBase = system.process!.memory.alloc(PAGE_TABLE_REGION_SIZE, 'THUNK_DATA', 'rw', 0x1000);
     const ptm = new PageTableManager(
         () => system.process!.v86.mem8 || system.process!.v86.v86?.cpu?.mem8,
-        () => cpu.wm?.exports
+        () => cpu.wm?.exports,
+        pageTableBase
     );
     const { VER_PLATFORM_WIN32_WINDOWS } = await import('./core/emulator-config-manager');
     const win9x = EmulatorConfig.getInstance().osVersion.platformId === VER_PLATFORM_WIN32_WINDOWS;
@@ -950,6 +959,47 @@ const loadPeData = async (peData: Uint8Array, skipReset: boolean = false) => {
 
     // Provide stack bounds to scheduler for main thread TEB allocation
     system.scheduler.setMainStackInfo(stackPointer, mainStackSize);
+
+    // Check if an AOT recompiled WebAssembly binary is available for this game
+    try {
+      const { RecompilerRunner } = await import("./core/recompiler/recompiler-runner");
+      const aotWasmBytes = await RecompilerRunner.tryFetchRecompiledWasm("halo2_recompiled.wasm");
+      if (aotWasmBytes) {
+        Logger.log(LogCategory.SYSTEM, `[Recompiler] Booting ${aotWasmBytes.byteLength.toLocaleString()} bytes via native AOT WebAssembly!`);
+        const runner = new RecompilerRunner();
+        const wasmMemory = cpu.wasm_memory ?? cpu.wm?.exports?.memory;
+        system.scheduler.initializeMainThreadTeb();
+        framePacer.start();
+        gameSessionActive = true;
+        setTimeout(() => {
+          runner.start({
+            system,
+            memory: wasmMemory,
+            memoryOffset: mem8.byteOffset,
+            memoryLength: mem8.byteLength,
+            wasmBytes: aotWasmBytes,
+            stackTop: stackPointer,
+            stackBase: stackPointer - mainStackSize,
+            entryName: '___tmainCRTStartup',
+            logCalls: false,
+          }).then(result => {
+            gameSessionActive = false;
+            framePacer.stop();
+            const message = `[Recompiler] AOT entry exited with code 0x${(result >>> 0).toString(16)} before a persistent game loop`;
+            Logger.error(LogCategory.SYSTEM, message);
+            postMessage({ type: 'error', message });
+          }).catch(err => {
+            gameSessionActive = false;
+            framePacer.stop();
+            Logger.error(LogCategory.SYSTEM, `[Recompiler] Fatal execution error: ${err}`);
+            postMessage({ type: 'error', message: String(err) });
+          });
+        }, 0);
+        return true;
+      }
+    } catch (e) {
+      Logger.warn(LogCategory.SYSTEM, `[Recompiler] AOT check failed, falling back to CPU emulation: ${e}`);
+    }
 
     // Set CPU to start executing the bootloader in real mode
     // After system.reset() -> v86.restart(), the CPU is already in Real Mode.
@@ -971,6 +1021,7 @@ const loadPeData = async (peData: Uint8Array, skipReset: boolean = false) => {
     resumeEmulator();
     framePacer.start();
     gameSessionActive = true;
+    return true;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     Logger.error(LogCategory.SYSTEM, `PE load failed: ${message}`);
@@ -978,6 +1029,7 @@ const loadPeData = async (peData: Uint8Array, skipReset: boolean = false) => {
     // "game crashed" dialog with a copyable report (e.g. a missing HLE API
     // discovered while generating import thunks), instead of a silent worker log.
     system.reportGuestCrash({ reason: `PE load failed: ${message}`, eip: 0, threadId: null });
+    return false;
   }
 };
 
@@ -1711,7 +1763,9 @@ const loadBundleImpl = async (payload: { data?: Uint8Array; url?: string; blob?:
     system.fileSystem.setCurrentDirectory(executableDir);
     Logger.log(LogCategory.SYSTEM, `Executable: name="${exeName}", path="${executablePath}", args="${system.executableArgs}"`);
 
-    await loadPeData(bundle.entrypointBytes, true);
+    // Do not announce a successful boot after the loader has reported a crash:
+    // that progress message would clear the host's crash dialog.
+    if (!(await loadPeData(bundle.entrypointBytes, true))) return;
     bootMark("pe-loaded");
 
     // Signal host that loading is done and the game is starting
@@ -1747,9 +1801,33 @@ const loadBundle = (payload: { data?: Uint8Array; url?: string; blob?: Blob; blo
 };
 
 const initV86 = async (canvas: OffscreenCanvas) => {
+  // Lift v86's signed-int32 2GB clamp BEFORE any V86 is constructed. Must happen here:
+  // the clamp lives inside CPU.create_memory, which runs from V86's constructor, so a
+  // patch installed afterwards would be too late for the memory it is meant to size.
+  // libv86.mjs exports `CPU` but the vendored .d.ts does not declare it (see
+  // v86-memory-patch.ts), so it is read off the module namespace with a cast.
+  liftV86MemoryClamp((v86Module as unknown as { CPU?: any }).CPU);
+
   // Try to apply RAM configuration from pending bundle if available
   let ramSize = EMU_MEMORY_SIZE;
-  if (pendingBundle) {
+  // Explicit page-set override, replayed from localStorage BEFORE any game loads (see
+  // the set_debug_flag handler). This is the reliable way to size RAM from the harness:
+  // v86's linear memory is fixed at init, and the manifest path below only applies when
+  // the bundle arrives BEFORE emulator-ready — a bundle loaded after that keeps the
+  // default and cannot be resized without re-creating v86.
+  //
+  // RAM above 1GB is what materializes the HEAP_HI overflow arena (guest heap backing
+  // at 0x40000000+, above the JIT guard band), so this is how a memory-hungry title gets
+  // more guest address space. Clamped to the same 64MB..4GB range EmulatorConfig uses.
+  // 3GB is the useful setting for Halo 2: it yields 512MB + 1.5GB = 2GB of guest heap,
+  // against a measured need of ~1.5GB.
+  const dbgRam = (globalThis as any).__ramBytes;
+  if (typeof dbgRam === 'number' && Number.isFinite(dbgRam) && dbgRam > 0) {
+    const clamped = Math.max(64 * 1024 * 1024, Math.min(4 * 1024 * 1024 * 1024, Math.floor(dbgRam)));
+    ramSize = clamped;
+    Logger.log(LogCategory.SYSTEM,
+      `EmulatorConfig: RAM override __ramBytes applied: ${(ramSize / 1024 / 1024).toFixed(0)} MB`);
+  } else if (pendingBundle) {
     try {
       let bundle;
       if (pendingBundle.url) {
@@ -1936,6 +2014,8 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       const smackw32 = new SmackW32();
       const binkw32 = new BinkW32();
       const quartz = new Quartz();
+      const mf = new MediaFoundation('mf');
+      const mfplat = new MediaFoundation('mfplat');
       const a3d = new A3d();
       const avifil32 = new Avifil32();
       const rpcrt4 = new Rpcrt4();
@@ -1969,6 +2049,8 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       const setupapi = new Setupapi();
       const netapi32 = new Netapi32();
       const psapi = new Psapi();
+      const powrprof = new Powrprof();
+      const xinput9_1_0 = new XInput910();
       const imagehlp = new ImageHlp();
       const ifc20 = new IFC20();
       const gdiplus = new GdiPlus();
@@ -2003,6 +2085,8 @@ const initV86 = async (canvas: OffscreenCanvas) => {
           crypt32.name,
           ws2_32.name,
           psapi.name,
+          powrprof.name,
+          xinput9_1_0.name,
           imagehlp.name,
           iphlpapi.name,
           tapi32.name,
@@ -2042,6 +2126,8 @@ const initV86 = async (canvas: OffscreenCanvas) => {
         binkw32.initialize(process);
       }
       quartz.initialize(process);
+      mf.initialize(process);
+      mfplat.initialize(process);
       a3d.initialize(process);
       avifil32.initialize(process);
       rpcrt4.initialize(process);
@@ -2073,6 +2159,8 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       crypt32.initialize(process);
       ws2_32.initialize(process);
       psapi.initialize(process);
+      powrprof.initialize(process);
+      xinput9_1_0.initialize(process);
       imagehlp.initialize(process);
       ifc20.initialize(process);
       gdiplus.initialize(process);
@@ -2106,6 +2194,8 @@ const initV86 = async (canvas: OffscreenCanvas) => {
         process.registerModule(binkw32.name, binkw32);
       }
       process.registerModule(quartz.name, quartz);
+      process.registerModule(mf.name, mf);
+      process.registerModule(mfplat.name, mfplat);
       process.registerModule(a3d.name, a3d);
       process.registerModule(avifil32.name, avifil32);
       process.registerModule(rpcrt4.name, rpcrt4);
@@ -2135,6 +2225,8 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       process.registerModule(crypt32.name, crypt32);
       process.registerModule(ws2_32.name, ws2_32);
       process.registerModule(psapi.name, psapi);
+      process.registerModule(powrprof.name, powrprof);
+      process.registerModule(xinput9_1_0.name, xinput9_1_0);
       process.registerModule(iphlpapi.name, iphlpapi);
       process.registerModule(tapi32.name, tapi32);
       process.registerModule(setupapi.name, setupapi);
@@ -2171,6 +2263,8 @@ const initV86 = async (canvas: OffscreenCanvas) => {
         process.dispatcher.registerModule(binkw32.name, binkw32.exports);
       }
       process.dispatcher.registerModule(quartz.name, quartz.exports);
+      process.dispatcher.registerModule(mf.name, mf.exports);
+      process.dispatcher.registerModule(mfplat.name, mfplat.exports);
       process.dispatcher.registerModule(a3d.name, a3d.exports);
       process.dispatcher.registerModule(avifil32.name, avifil32.exports);
       process.dispatcher.registerModule(rpcrt4.name, rpcrt4.exports);
@@ -2201,6 +2295,8 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       process.dispatcher.registerModule(crypt32.name, crypt32.exports);
       process.dispatcher.registerModule(ws2_32.name, ws2_32.exports);
       process.dispatcher.registerModule(psapi.name, psapi.exports);
+      process.dispatcher.registerModule(powrprof.name, powrprof.exports);
+      process.dispatcher.registerModule(xinput9_1_0.name, xinput9_1_0.exports);
       process.dispatcher.registerModule(iphlpapi.name, iphlpapi.exports);
       process.dispatcher.registerModule(tapi32.name, tapi32.exports);
       process.dispatcher.registerModule(setupapi.name, setupapi.exports);

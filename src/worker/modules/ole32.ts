@@ -10,6 +10,7 @@ import { allocateComObject } from "../core/com/com-memory";
 import { installComVtable, ComVtableMethod } from "../core/com/install-com-vtable";
 import { tryInprocCoCreateInstance, startInprocFromFactory } from "../core/com/inproc-com";
 import { Mem } from "../core/memory/mem-accessor";
+import { CLSID_KNOWN_FOLDER_MANAGER, createKnownFolderManager } from "./known-folder-manager";
 import { MEM_THUNK_CODE_BASE, MEM_THUNK_CODE_SIZE } from "../core/cpu/emulator-config";
 
 // COM error codes
@@ -745,6 +746,8 @@ export class Ole32 implements IModule {
             return REGDB_E_CLASSNOTREG;
         } else if (clsidNormalized === "e436ebb3-524f-11ce-9f53-0020af0ba770") {
             Logger.log(LogCategory.COM, `CoCreateInstance: FilterGraph CLSID detected, routing to Quartz`);
+        } else if (clsidNormalized === CLSID_KNOWN_FOLDER_MANAGER) {
+            return createKnownFolderManager(process, iidNormalized, ppv);
         } else if (clsidNormalized === "1440ad10-6aa8-11d1-b6f9-00a024ddafd1") {
             Logger.warn(LogCategory.COM, `CoCreateInstance: Blowfish inproc failed, falling back to HLE`);
             const objAddr = this.createBlowfishObject(mem, view, ppv);

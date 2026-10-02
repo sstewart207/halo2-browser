@@ -9,7 +9,8 @@ import { createVTablesFromDescriptor, VTableInfo } from '../../api/adapters/modu
 import { d3d9Module } from '../../api/d3d9.api';
 import { D3D9Device } from '../../backends/webgpu/d3d9/d3d9-device';
 import { Logger, LogCategory } from '../../core/logger';
-import { clearResourceRegistry } from './resource-registry';
+import { clearResourceRegistry, destroyResource } from './resource-registry';
+import { d3d9ResourceLifetime } from '../../backends/webgpu/d3d9/resource-lifetime';
 import type { D3D9StateBlockData } from '../../backends/webgpu/d3d9/d3d9-state-block';
 import { clearD3D9ComObjectRegistries } from '../../backends/webgpu/d3d9/d3d9-com-objects';
 import { resetShaderValidators } from './shader-validator';
@@ -49,6 +50,13 @@ export function createComObject(vtableAddress: number): number {
     // Write vtable pointer to memory (first field of COM object)
     view.setUint32(objPtr, vtableAddress, true);
 
+    for (const kind of ['IDirect3DVolumeTexture9', 'IDirect3DVolume9', 'IDirect3DTexture9', 'IDirect3DCubeTexture9', 'IDirect3DSurface9', 'IDirect3DVertexBuffer9', 'IDirect3DIndexBuffer9', 'IDirect3DStateBlock9']) {
+        if (vtables?.[kind]?.address === vtableAddress) {
+            d3d9ResourceLifetime.register(objPtr, () => destroyResource(objPtr, kind));
+            break;
+        }
+    }
+
     return objPtr;
 }
 
@@ -68,6 +76,10 @@ export function getVTables(): Record<string, VTableInfo> {
     return vtables;
 }
 
+export function setVTablesForTesting(v: Record<string, VTableInfo> | null): void {
+    vtables = v;
+}
+
 /**
  * Reset shared state - clear vtables and device registry.
  * Called during system reset to ensure fresh state for new applications.
@@ -81,6 +93,7 @@ export function resetD3D9SharedState(): void {
     devices.clear();
     deviceToD3D9.clear();
     resourceToDevice.clear();
+    d3d9ResourceLifetime.clear();
     stateBlocks.clear();
     d3d9WasmArena.resetBlockSlots(); // every block ptr just dropped — slot ownership resets with them
     clearD3D9ComObjectRegistries();

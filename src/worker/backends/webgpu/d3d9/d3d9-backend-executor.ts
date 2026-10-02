@@ -118,6 +118,7 @@ export class D3D9BackendExecutor {
     // Cube fallback (1×1×6) for cube-sampler stages with no bound texture.
     private fallbackCubeTexture: GPUTexture | null = null;
     private fallbackCubeView: GPUTextureView | null = null;
+    private fallbackVolumeView: GPUTextureView | null = null;
 
     // Performance metrics
     public metrics = {
@@ -130,6 +131,14 @@ export class D3D9BackendExecutor {
         progConstWrites: 0,
         progConstReuseHits: 0,
     };
+
+    public lastExecutedCommand: {
+        frameIndex: number;
+        commandIndex: number;
+        commandType: number;
+        pipelineId: number | null;
+        timestamp: number;
+    } | null = null;
 
     constructor(backend: WebGPUBackend) {
         this.backend = backend;
@@ -203,7 +212,7 @@ export class D3D9BackendExecutor {
                 entries.push({
                     binding: PROG_BIND.TEX_BASE + n,
                     visibility: GPUShaderStage.FRAGMENT,
-                    texture: { sampleType: "float", viewDimension: ((cubeMask >> n) & 1) ? "cube" : "2d" },
+                    texture: { sampleType: "float", viewDimension: ((cubeMask >> n) & 1) ? "cube" : ((cubeMask >> (n + 8)) & 1) ? "3d" : "2d" },
                 });
             }
             const bindGroupLayout = device.createBindGroupLayout({ entries });
@@ -361,6 +370,7 @@ export class D3D9BackendExecutor {
          *  never present). */
         target?: {
             colorView: GPUTextureView;
+            extraColorViews?: GPUTextureView[];
             depthView?: GPUTextureView;
             /** When set, used directly (shared FFP depth with stencil load/clear semantics). */
             depthStencil?: GPURenderPassDepthStencilAttachment;
@@ -421,6 +431,11 @@ export class D3D9BackendExecutor {
                 storeOp: "store",
             }];
 
+            for (const view of target?.extraColorViews ?? []) colorAttachments.push({
+                view, clearValue: frame.clear.color,
+                loadOp: (frame.hasClear && clearTarget) ? 'clear' : 'load', storeOp: 'store',
+            });
+
             const depthStencilAttachment: GPURenderPassDepthStencilAttachment = target?.depthStencil ?? {
                 view: target ? target.depthView! : this.depthView!,
                 depthClearValue: frame.clear.depth,
@@ -436,6 +451,13 @@ export class D3D9BackendExecutor {
             // Execute commands
             for (let i = 0; i < frame.commandTypes.length; i++) {
                 const type = frame.commandTypes[i];
+                this.lastExecutedCommand = {
+                    frameIndex: (frame as any).frameIndex ?? 0,
+                    commandIndex: i,
+                    commandType: type,
+                    pipelineId: this.currentPipelineId,
+                    timestamp: performance.now(),
+                };
                 switch (type) {
                     case RenderCommandType.SetPipeline: {
                         const newPipelineId = frame.commandA[i];
@@ -669,6 +691,12 @@ export class D3D9BackendExecutor {
         return { width: canvas.width, height: canvas.height };
     }
 
+    getBackBufferTexture(): GPUTexture | null {
+        if (!this.backend.getDevice()) return null;
+        this.ensureOffscreenTarget();
+        return this.offscreenTexture;
+    }
+
     private ensureOffscreenTarget(): void {
         const device = this.backend.getDevice()!;
         const format = this.backend.getFormat()!;
@@ -691,7 +719,7 @@ export class D3D9BackendExecutor {
         this.offscreenTexture = device.createTexture({
             size: { width: size.width, height: size.height, depthOrArrayLayers: 1 },
             format,
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
         });
         this.offscreenView = this.offscreenTexture.createView();
 
@@ -974,6 +1002,7 @@ export class D3D9BackendExecutor {
         const device = this.backend.getDevice()!;
         const { bindGroupLayout } = this.getProgrammableLayout(cubeMask);
         const fallback2d = this.getFallbackTextureView();
+        const fallbackVolume = (cubeMask >> 8) ? this.getFallbackVolumeView() : fallback2d;
         const fallbackCube = cubeMask ? this.getFallbackCubeView() : fallback2d;
         const entries: GPUBindGroupEntry[] = [
             { binding: PROG_BIND.VS_UNIFORM, resource: { buffer: this.vsArena!.buffer!, offset: 0, size: VS_BIND_SIZE } },
@@ -981,7 +1010,7 @@ export class D3D9BackendExecutor {
             { binding: PROG_BIND.SAMPLER, resource: sampler },
         ];
         for (let n = 0; n < MAX; n++) {
-            const fallback = ((cubeMask >> n) & 1) ? fallbackCube : fallback2d;
+            const fallback = ((cubeMask >> n) & 1) ? fallbackCube : ((cubeMask >> (n + 8)) & 1) ? fallbackVolume : fallback2d;
             entries.push({ binding: PROG_BIND.TEX_BASE + n, resource: textures[n] ?? fallback });
         }
         const bindGroup = device.createBindGroup({ layout: bindGroupLayout, entries });
@@ -1034,6 +1063,17 @@ export class D3D9BackendExecutor {
 
     /** 1×1×6 white cube for cube-sampler stages with no bound texture (keeps the bind group
      *  valid against a cube-dimension layout slot). */
+    private getFallbackVolumeView(): GPUTextureView {
+        if (!this.fallbackVolumeView) {
+            const texture = this.backend.getDevice()!.createTexture({ dimension: '3d', size: [1, 1, 1],
+                format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+            this.backend.getQueue()!.writeTexture({ texture }, new Uint8Array([255, 255, 255, 255]),
+                { bytesPerRow: 4, rowsPerImage: 1 }, [1, 1, 1]);
+            this.fallbackVolumeView = texture.createView({ dimension: '3d' });
+        }
+        return this.fallbackVolumeView;
+    }
+
     private getFallbackCubeView(): GPUTextureView {
         if (!this.fallbackCubeView) {
             const device = this.backend.getDevice()!;

@@ -4,6 +4,15 @@ import { Logger, LogCategory } from "../../core/logger";
 export type RegistryValueType = "REG_SZ" | "REG_DWORD" | "REG_BINARY" | "REG_MULTI_SZ";
 
 const VALID_REG_TYPES = new Set<string>(["REG_SZ", "REG_DWORD", "REG_BINARY", "REG_MULTI_SZ"]);
+const ROOT_ALIASES: Record<string, string> = {
+    HKEY_CLASSES_ROOT: "HKCR",
+    HKEY_CURRENT_USER: "HKCU",
+    HKEY_LOCAL_MACHINE: "HKLM",
+    HKEY_USERS: "HKU",
+    HKEY_CURRENT_CONFIG: "HKCC",
+    HKEY_DYN_DATA: "HKDD",
+    HKEY_PERFORMANCE_DATA: "HKPD",
+};
 const IMPLICIT_EMPTY_KEYS = new Set<string>([
     "hkcu\\software",
     "hklm\\software",
@@ -298,13 +307,15 @@ export class RegistryStore {
     }
 
     private normalizeKey(root: string, path: string): string {
-        const cleanRoot = root.toUpperCase();
+        const upperRoot = root.toUpperCase();
+        const cleanRoot = ROOT_ALIASES[upperRoot] ?? upperRoot;
         const cleanPath = path.replace(/\//g, "\\").replace(/^\\+/, "").replace(/\\+$/, "");
         return `${cleanRoot}\\${cleanPath}`.toLowerCase();
     }
 
     private resolveKey(baseKey: string, subKey?: string): string {
-        const cleanBase = baseKey.replace(/\//g, "\\").replace(/^\\+/, "").replace(/\\+$/, "").toLowerCase();
+        const baseParts = baseKey.replace(/\//g, "\\").replace(/^\\+/, "").replace(/\\+$/, "").split("\\");
+        const cleanBase = this.normalizeKey(baseParts[0], baseParts.slice(1).join("\\")).replace(/\\$/, "");
         if (!subKey) return cleanBase;
         const cleanSub = subKey.replace(/\//g, "\\").replace(/^\\+/, "").replace(/\\+$/, "");
         if (!cleanSub) return cleanBase;
@@ -367,7 +378,7 @@ export class RegistryStore {
                     data: valueData.data,
                 });
             }
-            this.keys.set(keyPath, values);
+            this.keys.set(this.resolveKey(keyPath), values);
         }
     }
 

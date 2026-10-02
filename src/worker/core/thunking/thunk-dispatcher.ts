@@ -1608,8 +1608,16 @@ export class ThunkDispatcher {
                 ? this.cachedDataView.getUint32(espAtEntry, true) >>> 0 : 0;
             apiCensus.record(thunkName, impl.length, censusCaller);
 
+            // Publish the in-flight API name for allocation attribution. A guest heap
+            // block can only be attributed to "some WinAPI" at best from a JS stack
+            // (Vite's dev function-name inference is unreliable), but the thunk name here
+            // is the exact string we resolved. MemoryManager's large-alloc log reads it
+            // so `heapReport` can say WHICH api handed out the block.
+            (globalThis as any).__currentThunkName = thunkName;
             result = impl(ctx, this.cachedMem8, this.reusableArgs);
+            (globalThis as any).__currentThunkName = '';
         } catch (e) {
+            (globalThis as any).__currentThunkName = '';
             this._slowPathHandleThunkError(functionId, thunkName, e, cpu);
             if (profileThunk) profiler.endAsync(thunkName);
             this.setBoundaryAndNotify(cpu, ThunkBoundaryKind.THUNK_STUB, 0);
@@ -3658,6 +3666,24 @@ export class ThunkDispatcher {
         for (const [name, impl] of Object.entries(exports)) {
             this.register(moduleName, name, impl);
         }
+    }
+
+    /** ABI metadata for direct AOT calls; use the same normalized lookup as emulated thunks. */
+    getStubByName(dllName: string, functionName: string): ThunkStub | undefined {
+        return this.findStubsByName(dllName, functionName)[0];
+    }
+
+    getImplementation(dllName: string, functionName: string): ThunkImplementation | null {
+        const key = `${dllName}:${functionName}`.toLowerCase();
+        const pending = this.pendingRegistrations.get(key)
+            ?? this.pendingRegistrations.get(`${dllName.replace(/\.dll$/i, '')}:${functionName}`.toLowerCase());
+        if (pending) return pending.impl;
+        const stubs = this.findStubsByName(dllName, functionName);
+        if (stubs.length > 0) {
+            const impl = this.dispatchTable[stubs[0].functionId];
+            if (impl) return impl;
+        }
+        return null;
     }
 
     /**
@@ -6543,5 +6569,9 @@ export class ThunkDispatcher {
         } catch { }
         this.sehDispatchStack = [];
         this.sehDispatchGeneration = 0;
+    }
+
+    getStubByAddress(address: number): ThunkStub | undefined {
+        return this.thunkGenerator.getStubByAddress(address);
     }
 }

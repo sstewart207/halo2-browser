@@ -16,7 +16,7 @@ import { HarnessError, HarnessErrorCode } from "../rpc";
 import { sys, proc } from "../serialize";
 import { dbg } from "../../core/debug/dbg-commands";
 import { apiBreaks } from "../api-breaks";
-import { eipBreaks, type BreakWhen } from "../eip-breaks";
+import { eipBreaks, type BreakCapture, type BreakWhen } from "../eip-breaks";
 import { symbolMap } from "../symbol-map";
 
 function toAddr(x: number | string): number {
@@ -37,7 +37,7 @@ function assertNotSpinLoop(addr: number): void {
 
 /** Arm an awaitable EIP breakpoint (auto JIT-off). Resolves on hit, or returns
  *  immediately when continuous. */
-function armEip(addr: number, ctx: HarnessCtx, opts: { continuous?: boolean; pause?: boolean; when?: BreakWhen; fast?: boolean }, extra: Record<string, unknown>): Promise<unknown> {
+function armEip(addr: number, ctx: HarnessCtx, opts: { continuous?: boolean; pause?: boolean; when?: BreakWhen; capture?: BreakCapture[]; fast?: boolean }, extra: Record<string, unknown>): Promise<unknown> {
     assertNotSpinLoop(addr);
     let warning: string;
     if (opts.fast) {
@@ -57,6 +57,7 @@ function armEip(addr: number, ctx: HarnessCtx, opts: { continuous?: boolean; pau
             once: !opts.continuous,
             pause: opts.pause !== false,
             when: opts.when,
+            capture: opts.capture,
             onHit: opts.continuous ? undefined : (snap) => resolve({ hit: snap, addr: addr >>> 0, warning, ...extra }),
         });
         if (opts.continuous) resolve({ armed: true, id, addr: addr >>> 0, continuous: true, warning, ...extra });
@@ -65,6 +66,16 @@ function armEip(addr: number, ctx: HarnessCtx, opts: { continuous?: boolean; pau
 }
 
 export function registerBreakpointCommands(svc: HarnessService): void {
+    /** Inspect the live WASM debugger, rather than assuming a breakpoint armed. */
+    svc.register("debugState", () => {
+        const w = (globalThis as any).preemption?.getWasmExports?.();
+        return {
+            available: !!w,
+            exports: ["dbg_enable", "dbg_add_bp", "dbg_clear", "set_jit_config", "get_jit_config", "jit_clear_cache_js"].filter(n => typeof w?.[n] === "function"),
+            jitDisabled: w?.get_jit_config?.(0) ?? null,
+            breakpoints: eipBreaks.list(),
+        };
+    });
     /** breakOn(eip, opts) — raw linear EIP. */
     svc.register("breakOn", (args, ctx) => {
         const addr = toAddr(args[0] as number | string);

@@ -74,7 +74,7 @@ function input() {
 
 /** Input commands that mutate guest state — recorded by the present-serial
  *  recorder and replayable. (dialogs/findControl are read-only queries, excluded.) */
-export const RECORDABLE_INPUT = new Set(["click", "clickAt", "move", "drag", "wheel", "key", "type"]);
+export const RECORDABLE_INPUT = new Set(["click", "clickAt", "move", "moveRel", "drag", "wheel", "key", "type"]);
 
 /**
  * Apply one input command — the single implementation shared by the registered
@@ -113,6 +113,10 @@ export function applyInput(cmd: string, args: unknown[]): any {
         case "move": {
             const x = Number(args[0]) | 0, y = Number(args[1]) | 0;
             return { ok: im.injectMoveAtScreen(x, y), x, y };
+        }
+        case "moveRel": {
+            const dx = Number(args[0]) | 0, dy = Number(args[1]) | 0;
+            return { ok: im.injectRelativeMove(dx, dy), dx, dy };
         }
         case "drag": {
             const [x0, y0, x1, y1, button] = args.map((a, i) => (i < 4 ? Number(a) | 0 : Number(a ?? 0) | 0));

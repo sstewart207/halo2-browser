@@ -16,6 +16,7 @@ import { analyzeVs, emitVsMain, VsAnalysis } from "./vs-codegen";
 import { analyzePs, emitPsMain, PsAnalysis } from "./ps-codegen";
 import { colField, texField, AlphaTest, alphaTestSnippet } from "./sm-wgsl";
 import { TexType } from "./sm-enums";
+import { normalizeSm3Semantics } from './sm3-semantics';
 
 export { parseShader } from "./sm-parser";
 
@@ -54,13 +55,13 @@ export interface CompiledPs {
 }
 
 export function compileVertexShader(tokens: Uint32Array): CompiledVs {
-    const prog = parseShader(tokens);
+    const prog = normalizeSm3Semantics(parseShader(tokens));
     if (prog.isPixelShader) throw new Error("Expected a vertex shader");
     return { prog, analysis: analyzeVs(prog) };
 }
 
 export function compilePixelShader(tokens: Uint32Array): CompiledPs {
-    const prog = parseShader(tokens);
+    const prog = normalizeSm3Semantics(parseShader(tokens));
     if (!prog.isPixelShader) throw new Error("Expected a pixel shader");
     return { prog, analysis: analyzePs(prog) };
 }
@@ -81,6 +82,14 @@ export function computeCubeMask(ps: CompiledPs | null): number {
     return mask;
 }
 
+export function computeVolumeMask(ps: CompiledPs | null): number {
+    let mask = 0;
+    if (ps) for (const [stage, type] of ps.analysis.samplerTexType) {
+        if (stage < PROG_BIND.MAX_TEX && type === TexType.VOLUME) mask |= 1 << stage;
+    }
+    return mask;
+}
+
 export interface LinkResult {
     wgsl: string;
     vertexAttributes: GPUVertexAttribute[];
@@ -97,6 +106,7 @@ export interface LinkResult {
 }
 
 export interface LinkOptions {
+    colorTargetCount?: number;
     vs: CompiledVs;
     ps: CompiledPs | null;
     declElements: RawVertexElement[] | null;
@@ -171,11 +181,11 @@ export function linkProgram(opts: LinkOptions): LinkResult {
     // Per-stage cube-sampler mask: a cube sampler declares texture_cube<f32> + samples with a
     // 3-component direction (ps-codegen). The bind-group layout's viewDimension must match. The
     // override (dcl_cube ∪ bound-cube at draw time) lets ps_1_x/no-dcl shaders sample a bound cube.
-    const cubeMask = cubeMaskOverride ?? computeCubeMask(ps);
+    const cubeMask = cubeMaskOverride ?? (computeCubeMask(ps) | (computeVolumeMask(ps) << 8));
     if (hasTexture) {
         lines.push(`@group(0) @binding(${PROG_BIND.SAMPLER}) var samp: sampler;`);
         for (const n of fragSamplers) {
-            const kind = (cubeMask >> n) & 1 ? "texture_cube<f32>" : "texture_2d<f32>";
+            const kind = (cubeMask >> n) & 1 ? "texture_cube<f32>" : (cubeMask >> (n + 8)) & 1 ? "texture_3d<f32>" : "texture_2d<f32>";
             lines.push(`@group(0) @binding(${PROG_BIND.TEX_BASE + n}) var tex${n}: ${kind};`);
         }
     }
@@ -203,7 +213,7 @@ export function linkProgram(opts: LinkOptions): LinkResult {
     lines.push("");
 
     if (ps) {
-        lines.push(emitPsMain(ps.prog, psA!, alphaTest, cubeMask, projectedStages));
+        lines.push(emitPsMain(ps.prog, psA!, alphaTest, cubeMask, projectedStages, opts.colorTargetCount ?? 1));
     } else {
         const dftStage = hasTexture ? fragSamplers[0] : null;
         const dftCube = dftStage !== null && ((cubeMask >> dftStage) & 1) !== 0;
@@ -269,6 +279,18 @@ function declTypeInfo(type: number): DeclTypeInfo {
         case 10: return { format: "snorm16x4", wgslType: "vec4<f32>",  size: 8,  expand: f => f };                                  // SHORT4N
         case 11: return { format: "unorm16x2", wgslType: "vec2<f32>",  size: 4,  expand: f => `vec4<f32>(${f}, 0.0, 1.0)` };        // USHORT2N
         case 12: return { format: "unorm16x4", wgslType: "vec4<f32>",  size: 8,  expand: f => f };                                  // USHORT4N
+        case 13: return {
+            format: "uint32",
+            wgslType: "u32",
+            size: 4,
+            expand: f => `vec4<f32>(f32((${f}) & 0x3FFu), f32(((${f}) >> 10u) & 0x3FFu), f32(((${f}) >> 20u) & 0x3FFu), 1.0)`,
+        }; // UDEC3 (10-10-10 unsigned)
+        case 14: return {
+            format: "uint32",
+            wgslType: "u32",
+            size: 4,
+            expand: f => `vec4<f32>(clamp(f32(i32((${f}) << 22u) >> 22) / 511.0, -1.0, 1.0), clamp(f32(i32((${f}) << 12u) >> 22) / 511.0, -1.0, 1.0), clamp(f32(i32((${f}) << 2u) >> 22) / 511.0, -1.0, 1.0), 1.0)`,
+        }; // DEC3N (10-10-10-2 signed normalized)
         case 15: return { format: "float16x2", wgslType: "vec2<f32>",  size: 4,  expand: f => `vec4<f32>(${f}, 0.0, 1.0)` };        // FLOAT16_2
         case 16: return { format: "float16x4", wgslType: "vec4<f32>",  size: 8,  expand: f => f };                                  // FLOAT16_4
         default: return { format: "float32x4", wgslType: "vec4<f32>",  size: 16, expand: f => f };                                  // fallback

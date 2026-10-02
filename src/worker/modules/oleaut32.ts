@@ -184,8 +184,11 @@ export class Oleaut32 implements IModule {
         };
         this.exports["ord_12"] = variantChangeType;
         this.exports["VariantChangeType"] = variantChangeType;
-        this.exports["VariantChangeTypeEx"] = (ctx, mem, args) =>
-            variantChangeType(ctx, mem, [args[0], args[1], args[3]]);
+        // VariantChangeTypeEx(dest, src, lcid, wFlags, vt)
+        const variantChangeTypeEx = (ctx: unknown, mem: Uint8Array, args: number[]) =>
+            variantChangeType(ctx, mem, [args[0], args[1], args[4]]);
+        this.exports["ord_147"] = variantChangeTypeEx;
+        this.exports["VariantChangeTypeEx"] = variantChangeTypeEx;
 
         // ---- Active Object Registration ----
 
@@ -232,11 +235,33 @@ export class Oleaut32 implements IModule {
 
         // ---- Error Info ----
 
+        // GetErrorInfo(dwReserved, IErrorInfo**): S_FALSE with a NULL object means no error info is set.
         this.exports["ord_200"] = (ctx, mem, args) => {
-            const pperrinfo = args[0] >>> 0;
+            const pperrinfo = args[1] >>> 0;
             if (pperrinfo) Mem.writeUint32(pperrinfo, 0);
             return 0x00000001;
         };
+
+        // HRESULT VarBstrCmp(BSTR left, BSTR right, LCID, ULONG flags) -> VARCMP_LT/EQ/GT. A NULL BSTR equals "".
+        // Comparison is by UTF-16 code unit (NORM_IGNORECASE folds case); LCID collation is not modeled.
+        const varBstrCmp: ThunkImplementation = (_ctx, mem, args) => {
+            const VARCMP_LT = 0, VARCMP_EQ = 1, VARCMP_GT = 2;
+            const NORM_IGNORECASE = 0x1;
+            const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
+            const readBstr = (p: number): string => {
+                if (!p || p < 4 || p + 2 > mem.length) return "";
+                const chars = Math.min(view.getUint32(p - 4, true) >>> 1, (mem.length - p) >>> 1);
+                let s = "";
+                for (let i = 0; i < chars; i++) s += String.fromCharCode(view.getUint16(p + i * 2, true));
+                return s;
+            };
+            let a = readBstr(args[0] >>> 0);
+            let b = readBstr(args[1] >>> 0);
+            if ((args[3] >>> 0) & NORM_IGNORECASE) { a = a.toLowerCase(); b = b.toLowerCase(); }
+            return a === b ? VARCMP_EQ : a < b ? VARCMP_LT : VARCMP_GT;
+        };
+        this.exports["ord_314"] = varBstrCmp;
+        this.exports["VarBstrCmp"] = varBstrCmp;
 
         this.exports["ord_201"] = () => S_OK;
 
@@ -340,6 +365,7 @@ export class Oleaut32 implements IModule {
 
         const toI4 = (): number | null => {
             switch (srcVt) {
+                case VT_EMPTY: return 0;
                 case VT_I2: return view.getInt16(src + 8, true);
                 case VT_I4: return view.getInt32(src + 8, true);
                 case VT_UI4: return view.getUint32(src + 8, true) | 0;
@@ -357,6 +383,7 @@ export class Oleaut32 implements IModule {
 
         const toR8 = (): number | null => {
             switch (srcVt) {
+                case VT_EMPTY: return 0;
                 case VT_I2: return view.getInt16(src + 8, true);
                 case VT_I4: return view.getInt32(src + 8, true);
                 case VT_UI4: return view.getUint32(src + 8, true);
@@ -375,6 +402,7 @@ export class Oleaut32 implements IModule {
         const toBstr = (): number | null => {
             let text = "";
             switch (srcVt) {
+                case VT_EMPTY: break;
                 case VT_I2: text = String(view.getInt16(src + 8, true)); break;
                 case VT_I4: text = String(view.getInt32(src + 8, true)); break;
                 case VT_UI4: text = String(view.getUint32(src + 8, true)); break;

@@ -37,6 +37,16 @@ function toCategoryEnums(names?: string[]): LogCategory[] | undefined {
 const categoryName = (c: LogCategory): string => (LogCategory as any)[c] ?? String(c);
 
 export function registerLogCommands(svc: HarnessService): void {
+    // Opt-in boot capture: the default 50-line context can lose the first error
+    // while module export stubs are being generated. Set before loading a bundle.
+    svc.register("logBufferSize", (args) => {
+        const size = args[0];
+        if (typeof size !== "number" || !Number.isInteger(size) || size < 50 || size > 20000) {
+            throw new HarnessError("logBufferSize expects 50..20000 entries", HarnessErrorCode.BAD_ARGS);
+        }
+        Logger.setBufferSize(size);
+        return { size, cleared: true };
+    });
     svc.register("streamLogs", (args) => {
         const categories = toCategoryEnums(args[0] as string[] | undefined);
         Logger.setStreamCallback((batch) => {

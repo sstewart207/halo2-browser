@@ -1,3 +1,4 @@
+import diagnostics from "./Diagnostics.module.css";
 import React, { useEffect, useRef, useState } from "react";
 
 type FrameDebugSnapshot = {
@@ -521,12 +522,13 @@ export default function DebugGPUPanel({ isOpen, onClose, worker }: DebugGPUPanel
     if (!isOpen) return null;
 
     return (
-        <div style={{
+        <div className={diagnostics.toolPanel} style={{
             position: "fixed",
             top: 10,
             right: 10,
-            width: 800,
-            maxHeight: "90vh",
+            width: "min(800px, calc(100vw - 20px))",
+            height: "min(800px, calc(100dvh - 20px))",
+            maxHeight: "calc(100dvh - 20px)",
             backgroundColor: "#1a1a2e",
             border: "1px solid #4a4a6a",
             borderRadius: 8,
@@ -921,7 +923,7 @@ export default function DebugGPUPanel({ isOpen, onClose, worker }: DebugGPUPanel
             </div>
 
             {/* Content Area */}
-            <div style={{ padding: 10, overflowY: "auto", flex: 1 }}>
+            <div style={{ padding: 10, overflow: "auto", minHeight: 0, minWidth: 0, flex: 1 }}>
                 {activeTab === "ddraw" && (
                     <div>
                         <div style={{ marginBottom: 10, fontWeight: "bold", color: "#888" }}>

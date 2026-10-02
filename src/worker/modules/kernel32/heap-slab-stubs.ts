@@ -16,7 +16,8 @@ import type { StubAllocator } from '../../core/thunking/thunk-memory-manager';
  * slab handler can allocate from the same slab and run zero_block. Real slow
  * paths (uninitialized slab, dwBytes=0, >4KB,
  * non-slab free, exhausted bump, bad header) falls through via JMP rel32 to
- * the original OUT-trap stub — existing JS/WASM fallback layers handle it.
+ * the original OUT-trap stub. JS HeapAlloc succeeds for dwBytes=0 (unique
+ * freeable block, HeapSize 0); other slow cases stay on the JS/WASM fallback.
  *
  * Reference logic: `handle_heap_alloc` / `handle_heap_free` in
  * vendor/v86/src/rust/cpu/hypercall.rs:1441–1538.

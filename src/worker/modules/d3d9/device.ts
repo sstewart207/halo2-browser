@@ -15,6 +15,7 @@ import { WebGPUBackend } from '../../backends/webgpu/webgpu-backend';
 import { writeDeviceCaps9 } from './caps';
 import { getVTables, devices, createComObject, resourceToDevice, deviceToD3D9 } from './shared-state';
 import { deviceBoundDepthStencil, surfaceMeta } from './resource-registry';
+import { d3d9ResourceLifetime } from '../../backends/webgpu/d3d9/resource-lifetime';
 
 const D3DFMT_X8R8G8B8 = 22;
 const D3DFMT_R5G6B5 = 23;
@@ -75,6 +76,8 @@ function bindAutoDepthStencil(device: D3D9Device, devicePtr: number, mem: Uint8A
         height: h,
     });
     deviceBoundDepthStencil.set(devicePtr, surfacePtr);
+    device.resourceBindings.set('depthStencil', surfacePtr);
+    d3d9ResourceLifetime.release(surfacePtr); // Initial reference transfers to the device.
     Logger.log(LogCategory.D3D9, `auto depth-stencil ${w}x${h} fmt=${format} -> 0x${surfacePtr.toString(16)} (bound)`);
 }
 
@@ -250,22 +253,28 @@ export function createDeviceExports(): Record<string, ThunkImplementation> {
         // in surfaceMeta). A surface with no texture parent (the implicit backbuffer from
         // GetBackBuffer / a NULL restore) → texturePtr 0 = render to the swap-chain.
         const meta = surfacePtr ? surfaceMeta.get(surfacePtr) : undefined;
+        if ((args[1] >>> 0) === 0 && !surfacePtr) return D3DERR_INVALIDCALL;
+        if (surfacePtr && (!meta || resourceToDevice.get(surfacePtr) !== device)) return D3DERR_INVALIDCALL;
         const texturePtr = surfacePtr ? (meta?.texturePtr ?? 0) : 0;
         // A cube-face surface carries its face index (GetCubeMapSurface recorded it); -1 = 2D RT.
         const face = meta?.face ?? -1;
         device.noteRtResolve(surfacePtr, !!meta, texturePtr);
         Logger.verbose(LogCategory.D3D9, `SetRenderTarget(index=${args[1]}, surface=0x${surfacePtr.toString(16)} -> tex=0x${texturePtr.toString(16)} face=${face})`);
-        device.setRenderTarget(args[1] >>> 0, texturePtr >>> 0, face);
-        return D3D_OK;
+        return device.setRenderTarget(args[1] >>> 0, texturePtr >>> 0, face, surfacePtr);
     };
 
     exports['IDirect3DDevice9_GetRenderTarget'] = (_ctx, mem, args) => {
         const device = devices.get(args[0]);
         const ppRenderTarget = args[2];
         if (!device || !ppRenderTarget) return D3DERR_INVALIDCALL;
-        // Return NULL: games that save/restore the RT pass this back to SetRenderTarget, where
-        // texturePtr 0 correctly restores the swap-chain backbuffer.
-        return Mem.writeUint32(ppRenderTarget, 0) ? D3D_OK : D3DERR_INVALIDCALL;
+        const index = args[1] >>> 0;
+        if (index >= 2) return D3DERR_INVALIDCALL;
+        const surface = device.getRenderTargetSurface(index);
+        if (!surface && index !== 0) return Mem.writeUint32(ppRenderTarget, 0) ? 0x88760866 : D3DERR_INVALIDCALL;
+        if (!surface) return exports['IDirect3DDevice9_GetBackBuffer'](_ctx, mem, [args[0], 0, 0, 0, ppRenderTarget]);
+        if (!Mem.writeUint32(ppRenderTarget, surface)) return D3DERR_INVALIDCALL;
+        d3d9ResourceLifetime.addRef(surface);
+        return D3D_OK;
     };
 
     exports['IDirect3DDevice9_BeginScene'] = (ctx, mem, args) => {
@@ -374,8 +383,7 @@ export function createDeviceExports(): Record<string, ThunkImplementation> {
         }
 
         Logger.verbose(LogCategory.D3D9, `DrawIndexedPrimitive(Type=${PrimitiveType}, Base=${BaseVertexIndex}, Start=${startIndex}, Count=${primCount})`);
-        device.drawIndexedPrimitive(PrimitiveType, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount);
-        return D3D_OK;
+        return device.drawIndexedPrimitive(PrimitiveType, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount);
     };
 
     exports['IDirect3DDevice9_DrawPrimitiveUP'] = (ctx, mem, args) => {
@@ -460,12 +468,18 @@ export function createDeviceExports(): Record<string, ThunkImplementation> {
         const ppBackBuffer = args[4];
 
         const device = devices.get(pDevice);
-        if (!device) {
+        if (!device || !ppBackBuffer || iSwapChain !== 0 || iBackBuffer !== 0 || Type !== 0) {
             Logger.error(LogCategory.D3D9, `GetBackBuffer: invalid device ${pDevice}`);
             return D3DERR_INVALIDCALL;
         }
 
-        // Create a valid COM object for the back buffer surface
+        const cachedSurface = device.getImplicitBackBufferSurface();
+        if (cachedSurface) {
+            if (!Mem.writeUint32(ppBackBuffer, cachedSurface)) return D3DERR_INVALIDCALL;
+            d3d9ResourceLifetime.addRef(cachedSurface);
+            return D3D_OK;
+        }
+        // The swap chain owns its implicit surface independently of each caller.
         const vtables = getVTables();
         const vtableAddr = vtables['IDirect3DSurface9']?.address;
         if (!vtableAddr) {
@@ -477,6 +491,11 @@ export function createDeviceExports(): Record<string, ThunkImplementation> {
         
         // Register surface with device for method calls
         resourceToDevice.set(surfacePtr, device);
+        const canvas = device.getBackBufferSize();
+        surfaceMeta.set(surfacePtr, { format: D3DFMT_X8R8G8B8, type: D3DRTYPE_SURFACE, usage: 1,
+            pool: D3DPOOL_DEFAULT, multiSampleType: 0, multiSampleQuality: 0,
+            width: canvas?.width || 800, height: canvas?.height || 600 });
+        device.retainImplicitBackBufferSurface(surfacePtr);
 
         if (ppBackBuffer) {
             const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
@@ -510,6 +529,7 @@ export function createDeviceExports(): Record<string, ThunkImplementation> {
         }
 
         deviceBoundDepthStencil.set(pDevice, pNewZStencil);
+        device.resourceBindings.set('depthStencil', pNewZStencil);
         Logger.verbose(LogCategory.D3D9, `SetDepthStencilSurface(0x${pNewZStencil.toString(16)})`);
         return D3D_OK;
     };
@@ -529,8 +549,38 @@ export function createDeviceExports(): Record<string, ThunkImplementation> {
             return D3DERR_INVALIDCALL;
         }
 
+        if (bound) d3d9ResourceLifetime.addRef(bound);
+
         return D3D_OK;
     };
+
+    exports['IDirect3D9Ex_CreateDeviceEx'] = async (ctx, mem, args) => {
+        const ppDevice = args[7];
+        if (!ppDevice || !Mem.writeUint32(ppDevice, 0)) return D3DERR_INVALIDCALL;
+        if (args[6] && Mem.readUint32(args[6]) !== 24) return D3DERR_INVALIDCALL;
+        const vtable = getVTables()['IDirect3DDevice9Ex']?.address;
+        if (!vtable) return 0x8876086a;
+        const result = await exports['IDirect3D9_CreateDevice'](ctx, mem,
+            [...args.slice(0, 6), ppDevice]);
+        const hr = typeof result === 'number' ? result : result.value;
+        if (hr !== D3D_OK) return hr;
+        const ptr = Mem.readUint32(ppDevice) ?? 0;
+        if (!ptr || !devices.has(ptr)) return D3DERR_INVALIDCALL;
+        Mem.writeUint32(ptr, vtable);
+        Logger.log(LogCategory.D3D9, `Created extended device at 0x${ptr.toString(16)}`);
+        return D3D_OK;
+    };
+    exports['IDirect3DDevice9Ex_PresentEx'] = (ctx, mem, args) => {
+        // Flags that alter queuing/overlay semantics require separate backend support.
+        if (args[5] !== 0) return 0x8876086a;
+        return exports['IDirect3DDevice9_Present'](ctx, mem, args.slice(0, 5));
+    };
+    exports['IDirect3DDevice9Ex_ResetEx'] = (ctx, mem, args) => {
+        if (args[2] && Mem.readUint32(args[2]) !== 24) return D3DERR_INVALIDCALL;
+        return exports['IDirect3DDevice9_Reset'](ctx, mem, args.slice(0, 2));
+    };
+    exports['IDirect3DDevice9Ex_CheckDeviceState'] = (ctx, mem, args) =>
+        exports['IDirect3DDevice9_TestCooperativeLevel'](ctx, mem, args.slice(0, 1));
 
     return exports;
 }

@@ -18,6 +18,7 @@ const makeFunc = (name: string, argCount: number, overrides: Partial<FunctionDes
 export const ntdllModule: ModuleDescriptor = {
   name: "ntdll",
   functions: [
+    makeFunc("LdrUnloadDll", 1),
     makeFunc("RtlInitializeCriticalSection", 1),
     makeFunc("RtlInitializeCriticalSectionAndSpinCount", 2),
     makeFunc("RtlDeleteCriticalSection", 1),

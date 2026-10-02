@@ -1,3 +1,4 @@
+import diagnostics from "./Diagnostics.module.css";
 import React, { useState } from "react";
 import MemoryMonitorBody from "./MemoryMonitorBody";
 import MemWatchBody from "./MemWatchBody";
@@ -40,12 +41,13 @@ export default function MemoryPanel({ isOpen, onClose, worker }: MemoryPanelProp
     );
 
     return (
-        <div style={{
+        <div className={diagnostics.toolPanel} style={{
             position: "fixed",
             top: 10,
             right: 10,
-            width: 650,
-            maxHeight: "90vh",
+            width: "min(650px, calc(100vw - 20px))",
+            height: "min(800px, calc(100dvh - 20px))",
+            maxHeight: "calc(100dvh - 20px)",
             backgroundColor: "#1a1a2e",
             border: "1px solid #4a4a6a",
             borderRadius: 8,

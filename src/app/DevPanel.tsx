@@ -1,8 +1,10 @@
 import React from "react";
 import { ActionButton } from "../ui/ActionButton";
+import DevStatsPanel from "./DevStatsPanel";
 import s from "./DevPanel.module.css";
 
 interface DevPanelProps {
+  worker: Worker | null;
   onLoadFile: (file: File) => boolean;
   onOpenSettings: () => void;
   onCaptureFrame: () => void;
@@ -82,6 +84,7 @@ export default function DevPanel(props: DevPanelProps) {
           {props.loggingEnabled ? "🔊 Logs ON" : "🔇 Logs OFF"}
         </ActionButton>
       </div>
+      <DevStatsPanel worker={props.worker} />
     </div>
   );
 }

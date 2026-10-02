@@ -30,6 +30,7 @@ import { registerVc9SetjmpExports } from "./crt-vc9-setjmp";
 import { registerCrtMathExports } from "./crt-math";
 import { registerCrtTimeExports } from "./crt-time";
 import { registerCrtStringExports } from "./crt-string";
+import { memcpySafe } from "./crt-memory-safe";
 import { registerCrtMbExports } from "./crt-mb";
 import { registerCrtConvExports } from "./crt-conv";
 import { registerCrtPathExports } from "./crt-path";
@@ -179,6 +180,14 @@ export class Msvcrt implements IModule {
 
         exports["memset"] = (ctx, mem, args) => this.memset(args[0] ?? 0, args[1] ?? 0, args[2] ?? 0);
         exports["memcpy"] = (ctx, mem, args) => this.memcpy(args[0] ?? 0, args[1] ?? 0, args[2] ?? 0);
+        exports["memcpy_s"] = (ctx, mem, args) => memcpySafe({
+            copy: (destination, source, count) => { this.memmove(destination, source, count); },
+            clear: (destination, size) => { this.memset(destination, 0, size); },
+            invalidParameter: (code) => {
+                this.setErrno(code);
+                exports["_invalid_parameter_noinfo"]?.(ctx, mem, []);
+            },
+        }, args[0] ?? 0, args[1] ?? 0, args[2] ?? 0, args[3] ?? 0);
         exports["memmove"] = (ctx, mem, args) => this.memmove(args[0] ?? 0, args[1] ?? 0, args[2] ?? 0);
 
         exports["strlen"] = (ctx, mem, args) => this.strlen(args[0] ?? 0);
@@ -350,6 +359,9 @@ export class Msvcrt implements IModule {
             compareCString: (a, b, ci, n) => this.compareCString(a, b, ci, n),
             ischartype: (ch, mask) => this.ischartype(ch, mask),
             setMbcp: (cp) => this.setMbcp(cp),
+            localeCodePage: () => this.currentLocale === "C" || this.currentLocale === "POSIX" ? 0 : EmulatorConfig.getInstance().ansiCodePage,
+            setErrno: (code) => { this.setErrno(code); },
+            invalidParameter: (ctx, mem) => { exports["_invalid_parameter_noinfo"]?.(ctx, mem, []); },
         });
 
         // --- Conversion functions — see crt-conv.ts ---

@@ -18,6 +18,8 @@ const makeFunc = (name: string, argCount: number, overrides: Partial<FunctionDes
 export const psapiModule: ModuleDescriptor = {
     name: "psapi",
     functions: [
+        makeFunc("EnumProcessModules", 4),
+        makeFunc("EnumProcessModulesEx", 5),
         makeFunc("GetModuleInformation", 4),
         makeFunc("GetModuleFileNameExA", 4),
         makeFunc("GetModuleFileNameExW", 4),

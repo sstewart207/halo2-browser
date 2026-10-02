@@ -16,6 +16,15 @@ export const DEFAULT_CDP_PORT = 9333;
 export const DEFAULT_DEV_URL = "http://localhost:5174/?game=dev";
 export const GAME_DEV_FILTER = "game=dev";
 const IS_MAC = process.platform === "darwin";
+if (typeof (globalThis as any).Bun === "undefined") {
+    (globalThis as any).Bun = {
+        sleep: (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
+        write: async (path: string, data: any) => {
+            const fs = await import("fs/promises");
+            await fs.writeFile(path, data);
+        },
+    };
+}
 const CHROME_PATH = IS_MAC
     ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
     : "C:/Program Files/Google/Chrome/Application/chrome.exe";
@@ -334,6 +343,7 @@ export async function workerStack(
 
 /** Capture a page screenshot (PNG base64). */
 export async function screenshot(session: CdpSession): Promise<string> {
+    await session.send("Page.enable").catch(() => {});
     const r = await session.send("Page.captureScreenshot", { format: "png" });
     return r.result?.data ?? "";
 }

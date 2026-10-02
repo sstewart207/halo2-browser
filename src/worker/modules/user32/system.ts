@@ -797,6 +797,107 @@ export function createSystemExports(): Record<string, ThunkImplementation> {
         return exports['wsprintfA']!(ctx, mem, syntheticArgs) as number;
     };
 
+    // wsprintfW - wide variant. In the W form %s/%c take wide arguments and %S/%C take ANSI ones.
+    // Supports %d %i %u %x %X %c %C %s %S %% with flags 0 and width/precision (the documented set).
+    const wsprintfWImpl = (mem: Uint8Array, lpOut: number, lpFmt: number, argAt: (i: number) => number): number => {
+        const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
+        const memEnd = mem.length;
+        let out = lpOut;
+        const putChar = (c: number): void => { if (out + 2 <= memEnd) { view.setUint16(out, c & 0xffff, true); out += 2; } };
+        const putText = (s: string): void => { for (let i = 0; i < s.length; i++) putChar(s.charCodeAt(i)); };
+        const readWide = (addr: number, max: number): string => {
+            let s = '';
+            for (let i = 0; i < max && addr + i * 2 + 2 <= memEnd; i++) {
+                const c = view.getUint16(addr + i * 2, true);
+                if (c === 0) break;
+                s += String.fromCharCode(c);
+            }
+            return s;
+        };
+        const readAnsi = (addr: number, max: number): string => {
+            let s = '';
+            for (let i = 0; i < max && addr + i < memEnd && mem[addr + i] !== 0; i++) s += String.fromCharCode(mem[addr + i]);
+            return s;
+        };
+
+        let fi = lpFmt;
+        let argIndex = 0;
+        while (fi + 2 <= memEnd) {
+            const ch = view.getUint16(fi, true);
+            fi += 2;
+            if (ch === 0) break;
+            if (ch !== 0x25) { putChar(ch); continue; }
+
+            let zeroPad = false;
+            let width = 0;
+            let precision: number | null = null;
+            let c = fi + 2 <= memEnd ? view.getUint16(fi, true) : 0;
+            if (c === 0x25) { putChar(0x25); fi += 2; continue; }
+            if (c === 0x30) { zeroPad = true; fi += 2; c = view.getUint16(fi, true); }
+            while (c >= 0x30 && c <= 0x39) { width = width * 10 + (c - 0x30); fi += 2; c = view.getUint16(fi, true); }
+            if (c === 0x2e) {
+                precision = 0; fi += 2; c = view.getUint16(fi, true);
+                while (c >= 0x30 && c <= 0x39) { precision = precision * 10 + (c - 0x30); fi += 2; c = view.getUint16(fi, true); }
+            }
+            while (c === 0x68 || c === 0x6c || c === 0x77 || c === 0x4c) { fi += 2; c = view.getUint16(fi, true); } // h l w L
+            if (c === 0) break;
+            fi += 2;
+
+            const pad = (text: string, numeric: boolean): void => {
+                let body = text;
+                if (numeric && precision !== null) body = body.replace(/^(-?)(\d+)$/, (_m, s, d) => s + d.padStart(precision!, '0'));
+                const fill = zeroPad && numeric && precision === null ? '0' : ' ';
+                if (body.length < width) {
+                    if (fill === '0' && body.startsWith('-')) body = '-' + body.slice(1).padStart(width - 1, '0');
+                    else body = body.padStart(width, fill);
+                }
+                putText(body);
+            };
+
+            switch (c) {
+                case 0x64: case 0x69: pad(String(argAt(argIndex++) | 0), true); break;           // d i
+                case 0x75: pad(String(argAt(argIndex++) >>> 0), true); break;                     // u
+                case 0x78: pad((argAt(argIndex++) >>> 0).toString(16), true); break;              // x
+                case 0x58: pad((argAt(argIndex++) >>> 0).toString(16).toUpperCase(), true); break; // X
+                case 0x63: pad(String.fromCharCode(argAt(argIndex++) & 0xffff), false); break;    // c (wide)
+                case 0x43: pad(String.fromCharCode(argAt(argIndex++) & 0xff), false); break;      // C (ansi)
+                case 0x73: { // s (wide)
+                    const p = argAt(argIndex++) >>> 0;
+                    pad(p ? readWide(p, precision ?? 0x7fffffff) : '(null)', false);
+                    break;
+                }
+                case 0x53: { // S (ansi)
+                    const p = argAt(argIndex++) >>> 0;
+                    pad(p ? readAnsi(p, precision ?? 0x7fffffff) : '(null)', false);
+                    break;
+                }
+                default: putChar(0x25); putChar(c);
+            }
+        }
+        if (out + 2 <= memEnd) view.setUint16(out, 0, true);
+        return (out - lpOut) >> 1;
+    };
+
+    // int __cdecl wsprintfW(LPWSTR lpOut, LPCWSTR lpFmt, ...) — varargs are read straight off the caller's stack.
+    exports['wsprintfW'] = (ctx, mem, args) => {
+        const lpOut = args[0] >>> 0;
+        const lpFmt = args[1] >>> 0;
+        if (!lpOut || !lpFmt) return -1;
+        const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
+        const base = (ctx.esp >>> 0) + 12; // [ret][lpOut][lpFmt][vararg0...]
+        return wsprintfWImpl(mem, lpOut, lpFmt, (i) => (base + i * 4 + 4 <= mem.length ? view.getUint32(base + i * 4, true) : 0));
+    };
+
+    // int WINAPI wvsprintfW(LPWSTR lpOut, LPCWSTR lpFmt, va_list arglist)
+    exports['wvsprintfW'] = (ctx, mem, args) => {
+        const lpOut = args[0] >>> 0;
+        const lpFmt = args[1] >>> 0;
+        const lpArgList = args[2] >>> 0;
+        if (!lpOut || !lpFmt) return -1;
+        const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
+        return wsprintfWImpl(mem, lpOut, lpFmt, (i) => (lpArgList && lpArgList + i * 4 + 4 <= mem.length ? view.getUint32(lpArgList + i * 4, true) : 0));
+    };
+
     // MapVirtualKeyA - convert virtual key code to scan code or character
     exports['MapVirtualKeyA'] = (ctx, mem, args) => {
         const uCode = args[0];

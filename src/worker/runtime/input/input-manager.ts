@@ -1108,12 +1108,18 @@ export class InputManager {
         const x = screenX | 0;
         const y = screenY | 0;
         const step = (buttons: number): void => {
+            const oldX = view[INPUT_INDEX.mouseX];
+            const oldY = view[INPUT_INDEX.mouseY];
+            const dx = x - oldX;
+            const dy = y - oldY;
             this.beginInputWrite(view);
             view[INPUT_INDEX.mouseX] = x;
             view[INPUT_INDEX.mouseY] = y;
             view[INPUT_INDEX.mouseInside] = 1;
             view[INPUT_INDEX.buttons] = buttons;
             this.endInputWrite(view);
+            if (dx !== 0) Atomics.add(view, INPUT_INDEX.dinputDX, dx);
+            if (dy !== 0) Atomics.add(view, INPUT_INDEX.dinputDY, dy);
             this.poll(true);
         };
         step(0); // move onto the control
@@ -1139,9 +1145,34 @@ export class InputManager {
     injectMoveAtScreen(screenX: number, screenY: number): boolean {
         const view = this.inputView;
         if (!view) return false;
+        const targetX = screenX | 0;
+        const targetY = screenY | 0;
+        const oldX = view[INPUT_INDEX.mouseX];
+        const oldY = view[INPUT_INDEX.mouseY];
+        const dx = targetX - oldX;
+        const dy = targetY - oldY;
         this.beginInputWrite(view);
-        view[INPUT_INDEX.mouseX] = screenX | 0;
-        view[INPUT_INDEX.mouseY] = screenY | 0;
+        view[INPUT_INDEX.mouseX] = targetX;
+        view[INPUT_INDEX.mouseY] = targetY;
+        view[INPUT_INDEX.mouseInside] = 1;
+        this.endInputWrite(view);
+        if (dx !== 0) Atomics.add(view, INPUT_INDEX.dinputDX, dx);
+        if (dy !== 0) Atomics.add(view, INPUT_INDEX.dinputDY, dy);
+        this.poll(true);
+        return true;
+    }
+
+    /** Inject raw relative mouse movement into DirectInput accumulators and update cursor position. */
+    injectRelativeMove(dx: number, dy: number): boolean {
+        const view = this.inputView;
+        if (!view) return false;
+        const deltaX = dx | 0;
+        const deltaY = dy | 0;
+        if (deltaX !== 0) Atomics.add(view, INPUT_INDEX.dinputDX, deltaX);
+        if (deltaY !== 0) Atomics.add(view, INPUT_INDEX.dinputDY, deltaY);
+        this.beginInputWrite(view);
+        view[INPUT_INDEX.mouseX] = (view[INPUT_INDEX.mouseX] + deltaX) | 0;
+        view[INPUT_INDEX.mouseY] = (view[INPUT_INDEX.mouseY] + deltaY) | 0;
         view[INPUT_INDEX.mouseInside] = 1;
         this.endInputWrite(view);
         this.poll(true);
@@ -1152,13 +1183,21 @@ export class InputManager {
     injectButtonAtScreen(screenX: number, screenY: number, button: number, down: boolean): boolean {
         const view = this.inputView;
         if (!view) return false;
+        const targetX = screenX | 0;
+        const targetY = screenY | 0;
+        const oldX = view[INPUT_INDEX.mouseX];
+        const oldY = view[INPUT_INDEX.mouseY];
+        const dx = targetX - oldX;
+        const dy = targetY - oldY;
         const mask = this.mouseMaskFor(button);
         this.beginInputWrite(view);
-        view[INPUT_INDEX.mouseX] = screenX | 0;
-        view[INPUT_INDEX.mouseY] = screenY | 0;
+        view[INPUT_INDEX.mouseX] = targetX;
+        view[INPUT_INDEX.mouseY] = targetY;
         view[INPUT_INDEX.mouseInside] = 1;
         view[INPUT_INDEX.buttons] = down ? (view[INPUT_INDEX.buttons] | mask) : (view[INPUT_INDEX.buttons] & ~mask);
         this.endInputWrite(view);
+        if (dx !== 0) Atomics.add(view, INPUT_INDEX.dinputDX, dx);
+        if (dy !== 0) Atomics.add(view, INPUT_INDEX.dinputDY, dy);
         this.poll(true);
         return true;
     }
@@ -1182,12 +1221,20 @@ export class InputManager {
     injectWheelAtScreen(screenX: number, screenY: number, delta: number): boolean {
         const view = this.inputView;
         if (!view) return false;
+        const targetX = screenX | 0;
+        const targetY = screenY | 0;
+        const oldX = view[INPUT_INDEX.mouseX];
+        const oldY = view[INPUT_INDEX.mouseY];
+        const dx = targetX - oldX;
+        const dy = targetY - oldY;
         this.beginInputWrite(view);
-        view[INPUT_INDEX.mouseX] = screenX | 0;
-        view[INPUT_INDEX.mouseY] = screenY | 0;
+        view[INPUT_INDEX.mouseX] = targetX;
+        view[INPUT_INDEX.mouseY] = targetY;
         view[INPUT_INDEX.mouseInside] = 1;
         Atomics.store(view, INPUT_INDEX.mouseWheel, delta | 0); // poll() consumes + resets it
         this.endInputWrite(view);
+        if (dx !== 0) Atomics.add(view, INPUT_INDEX.dinputDX, dx);
+        if (dy !== 0) Atomics.add(view, INPUT_INDEX.dinputDY, dy);
         this.poll(true);
         return true;
     }

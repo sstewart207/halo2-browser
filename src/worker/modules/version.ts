@@ -1,6 +1,14 @@
 /**
- * VERSION.dll implementation.
- * Provides file version information APIs used by apps to check DLL/EXE versions.
+ * VERSION.dll implementation backed by real PE RT_VERSION resources.
+ *
+ * GetFileVersionInfoSize and GetFileVersionInfo resolve the guest filename to
+ * the actual version blob: first from the matching loaded PE image in guest
+ * memory, otherwise from a synchronous VFS read of the on-disk file parsed
+ * with findVersionInFile. VerQueryValue* parses the caller's pBlock blob
+ * (copied there by GetFileVersionInfo) and answers the root block,
+ * VarFileInfo Translation and StringFileInfo lang-codepage key
+ * queries. Anything unresolvable fails with FALSE/0 and a real last-error
+ * code instead of fabricated Need For Speed III metadata.
  */
 
 import { IModule } from "../core/module";
@@ -8,14 +16,36 @@ import { Process } from "../core/process";
 import { ThunkImplementation } from "../core/thunking/thunk-dispatcher";
 import { Logger, LogCategory } from "../core/logger";
 import { Mem } from "../core/memory/mem-accessor";
+import { Marshaler } from "../core/memory/marshaler";
+import { System } from "../core/system";
 import { encodeAnsi } from "./codepage-utils";
+import { APIRegistry } from "../core/api-registry";
+import { EmulatorConfig } from "../core/emulator-config-manager";
+import {
+    buildFixedVersionBlob,
+    VS_FIXEDFILEINFO_SIGNATURE,
+    VS_FIXEDFILEINFO_SIZE,
+    MAX_VERSION_BLOB_BYTES,
+    findVersionInFile,
+    findVersionInImage,
+    parseVersionInfo,
+    queryVersionInfo,
+} from "./version-resource";
 
 const TRUE = 1;
 const FALSE = 0;
 const VERSION_STR_BUF_A_SIZE = 0x400;
-const VERSION_STR_BUF_W_SIZE = 0x800;
-const VERSION_TRANSLATION_BUF_SIZE = 4;
-const DEFAULT_VERSION_STR = "1.0.0.1";
+
+const ERROR_FILE_NOT_FOUND = 2;
+const ERROR_PATH_NOT_FOUND = 3;
+const ERROR_INVALID_PARAMETER = 87;
+const ERROR_INSUFFICIENT_BUFFER = 122;
+const ERROR_RESOURCE_DATA_NOT_FOUND = 1812;
+
+const GENERIC_READ = 0x80000000;
+const OPEN_EXISTING = 3;
+/** Largest file we will synchronously buffer for version extraction (EXEs are small). */
+const MAX_VERSION_FILE_BYTES = 64 * 1024 * 1024;
 
 const readAsciiZ = (mem: Uint8Array, ptr: number, maxChars = 260): string => {
     if (!ptr || ptr < 0 || ptr >= mem.length) return "";
@@ -47,347 +77,298 @@ const writeAsciiZ = (addr: number, value: string): number => {
     return bytes.length;
 };
 
-const writeWideZ = (addr: number, value: string): number => {
-    let off = addr;
-    for (let i = 0; i < value.length; i++) {
-        Mem.writeUint16(off, value.charCodeAt(i));
-        off += 2;
-    }
-    Mem.writeUint16(off, 0);
-    return (value.length + 1) * 2;
-};
-
-const resolveStringValue = (normalizedSubBlock: string): string => {
-    if (normalizedSubBlock.endsWith("\\fileversion")) return DEFAULT_VERSION_STR;
-    if (normalizedSubBlock.endsWith("\\productversion")) return DEFAULT_VERSION_STR;
-    if (normalizedSubBlock.endsWith("\\productname")) return "Need For Speed III";
-    if (normalizedSubBlock.endsWith("\\originalfilename")) return "nfs3.exe";
-    if (normalizedSubBlock.endsWith("\\internalname")) return "nfs3";
-    return DEFAULT_VERSION_STR;
-};
-
-/**
- * Fake VS_FIXEDFILEINFO structure for version queries.
- * Most games just check if GetFileVersionInfo succeeds, they don't care about actual version.
- */
-const createFakeVersionInfo = (mem: Uint8Array, bufferPtr: number, bufferSize: number): void => {
-    // VS_FIXEDFILEINFO structure (52 bytes)
-    // We return a minimal valid structure
-    if (bufferSize < 52) return;
-
-    const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
-    let offset = bufferPtr;
-
-    // dwSignature (0xFEEF04BD)
-    view.setUint32(offset, 0xFEEF04BD, true);
-    offset += 4;
-
-    // dwStrucVersion (0x00010000 = 1.0)
-    view.setUint32(offset, 0x00010000, true);
-    offset += 4;
-
-    // dwFileVersionMS (high 32 bits of version: 4.0.0.0 -> 0x00040000)
-    view.setUint32(offset, 0x00040000, true);
-    offset += 4;
-
-    // dwFileVersionLS (low 32 bits of version: 4.0.0.0 -> 0x00000000)
-    view.setUint32(offset, 0x00000000, true);
-    offset += 4;
-
-    // dwProductVersionMS (high 32 bits of product version: 4.0.0.0)
-    view.setUint32(offset, 0x00040000, true);
-    offset += 4;
-
-    // dwProductVersionLS (low 32 bits of product version: 4.0.0.0)
-    view.setUint32(offset, 0x00000000, true);
-    offset += 4;
-
-    // dwFileFlagsMask (0x3F)
-    view.setUint32(offset, 0x0000003F, true);
-    offset += 4;
-
-    // dwFileFlags (0x0 = final version)
-    view.setUint32(offset, 0x00000000, true);
-    offset += 4;
-
-    // dwFileOS (VOS_NT_WINDOWS32 = 0x00040004)
-    view.setUint32(offset, 0x00040004, true);
-    offset += 4;
-
-    // dwFileType (VFT_DLL = 0x2)
-    view.setUint32(offset, 0x00000002, true);
-    offset += 4;
-
-    // dwFileSubtype (0x0)
-    view.setUint32(offset, 0x00000000, true);
-    offset += 4;
-
-    // dwFileDateMS (0x0)
-    view.setUint32(offset, 0x00000000, true);
-    offset += 4;
-
-    // dwFileDateLS (0x0)
-    view.setUint32(offset, 0x00000000, true);
-};
-
 export class Version implements IModule {
     name = "version";
     exports: Record<string, ThunkImplementation> = {};
     private process!: Process;
     private versionStrBufA = 0;
-    private versionStrBufW = 0;
-    private versionTranslationBuf = 0;
+    /** filename key (lowercased) -> extracted version blob. Successes only. */
+    private blobCache = new Map<string, Uint8Array>();
 
     initialize(process: Process): void {
         this.process = process;
         this.versionStrBufA = process.memory.alloc(VERSION_STR_BUF_A_SIZE, "THUNK_DATA", "rw");
-        this.versionStrBufW = process.memory.alloc(VERSION_STR_BUF_W_SIZE, "THUNK_DATA", "rw");
-        this.versionTranslationBuf = process.memory.alloc(VERSION_TRANSLATION_BUF_SIZE, "THUNK_DATA", "rw");
 
-        // GetFileVersionInfoSizeA(lptstrFilename, lpdwHandle)
-        // Returns: size of version info in bytes, or 0 on error
-        // lpdwHandle is output param (usually ignored, set to 0)
-        this.exports["GetFileVersionInfoSizeA"] = (ctx, mem, args) => {
-            const lptstrFilename = args[0];
-            const lpdwHandle = args[1];
+        this.exports["GetFileVersionInfoSizeA"] = (ctx, mem, args) =>
+            this.getSizeImpl(mem, args[0], args[1], false);
+        this.exports["GetFileVersionInfoSizeW"] = (ctx, mem, args) =>
+            this.getSizeImpl(mem, args[0], args[1], true);
+        this.exports["GetFileVersionInfoSizeExW"] = (ctx, mem, args) =>
+            this.getSizeImpl(mem, args[1], args[2], true);
+        this.exports["GetFileVersionInfoSizeExA"] = (ctx, mem, args) =>
+            this.getSizeImpl(mem, args[1], args[2], false);
 
-            if (lptstrFilename === 0) {
-                Logger.verbose(LogCategory.SYSTEM, `GetFileVersionInfoSizeA: NULL filename`);
-                return 0;
-            }
+        this.exports["GetFileVersionInfoA"] = (ctx, mem, args) =>
+            this.getInfoImpl(mem, args[0], args[2], args[3], false);
+        this.exports["GetFileVersionInfoW"] = (ctx, mem, args) =>
+            this.getInfoImpl(mem, args[0], args[2], args[3], true);
+        this.exports["GetFileVersionInfoExW"] = (ctx, mem, args) =>
+            this.getInfoImpl(mem, args[1], args[3], args[4], true);
 
-            // Read filename (for logging)
-            let filename = "<invalid>";
-            try {
-                const bytes: number[] = [];
-                let addr = lptstrFilename;
-                while (addr < mem.length && mem[addr] !== 0) {
-                    bytes.push(mem[addr]);
-                    addr++;
-                    if (bytes.length > 260) break; // MAX_PATH
-                }
-                filename = String.fromCharCode(...bytes);
-            } catch {}
+        this.exports["VerQueryValueA"] = (ctx, mem, args) =>
+            this.queryImpl(mem, args[0], args[1], args[2], args[3], false);
+        this.exports["VerQueryValueW"] = (ctx, mem, args) =>
+            this.queryImpl(mem, args[0], args[1], args[2], args[3], true);
 
-            // Set handle to 0 (ignored by most apps)
-            if (lpdwHandle !== 0) {
-                const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
-                view.setUint32(lpdwHandle, 0, true);
-            }
-
-            // Return fixed size (VS_FIXEDFILEINFO = 52 bytes)
-            const versionInfoSize = 52;
-            Logger.verbose(LogCategory.SYSTEM,
-                `GetFileVersionInfoSizeA: file="${filename}" -> size=${versionInfoSize}`
-            );
-
-            return versionInfoSize;
-        };
-
-        // GetFileVersionInfoSizeW(lptstrFilename, lpdwHandle)
-        this.exports["GetFileVersionInfoSizeW"] = (ctx, mem, args) => {
-            const lptstrFilename = args[0];
-            const lpdwHandle = args[1];
-
-            if (lptstrFilename === 0) {
-                Logger.verbose(LogCategory.SYSTEM, `GetFileVersionInfoSizeW: NULL filename`);
-                return 0;
-            }
-
-            if (lpdwHandle !== 0) {
-                const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
-                view.setUint32(lpdwHandle, 0, true);
-            }
-
-            return 52;
-        };
-
-        // GetFileVersionInfoSizeExW(dwFlags, lptstrFilename, lpdwHandle)
-        this.exports["GetFileVersionInfoSizeExW"] = (ctx, mem, args) => {
-            const lptstrFilename = args[1];
-            const lpdwHandle = args[2];
-            if (lptstrFilename === 0) return 0;
-            if (lpdwHandle !== 0) {
-                const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
-                view.setUint32(lpdwHandle, 0, true);
-            }
-            return 52;
-        };
-
-        // GetFileVersionInfoA(lptstrFilename, dwHandle, dwLen, lpData)
-        // Returns: TRUE on success, FALSE on failure
-        // lpData receives VS_FIXEDFILEINFO structure
-        this.exports["GetFileVersionInfoA"] = (ctx, mem, args) => {
-            const lptstrFilename = args[0];
-            const dwHandle = args[1]; // Ignored (from GetFileVersionInfoSizeA)
-            const dwLen = args[2];
-            const lpData = args[3];
-
-            if (lptstrFilename === 0 || lpData === 0) {
-                Logger.verbose(LogCategory.SYSTEM,
-                    `GetFileVersionInfoA: NULL pointer (filename=0x${lptstrFilename.toString(16)} lpData=0x${lpData.toString(16)})`
-                );
-                return FALSE;
-            }
-
-            // Read filename (for logging)
-            let filename = "<invalid>";
-            try {
-                const bytes: number[] = [];
-                let addr = lptstrFilename;
-                while (addr < mem.length && mem[addr] !== 0) {
-                    bytes.push(mem[addr]);
-                    addr++;
-                    if (bytes.length > 260) break;
-                }
-                filename = String.fromCharCode(...bytes);
-            } catch {}
-
-            // Create fake version info
-            createFakeVersionInfo(mem, lpData, dwLen);
-
-            Logger.verbose(LogCategory.SYSTEM,
-                `GetFileVersionInfoA: file="${filename}" handle=0x${dwHandle.toString(16)} ` +
-                `len=${dwLen} lpData=0x${lpData.toString(16)} -> TRUE`
-            );
-
-            return TRUE;
-        };
-
-        // GetFileVersionInfoW(lptstrFilename, dwHandle, dwLen, lpData)
-        this.exports["GetFileVersionInfoW"] = (ctx, mem, args) => {
-            const lptstrFilename = args[0];
-            const dwLen = args[2];
-            const lpData = args[3];
-
-            if (lptstrFilename === 0 || lpData === 0) {
-                return FALSE;
-            }
-
-            createFakeVersionInfo(mem, lpData, dwLen);
-            return TRUE;
-        };
-
-        // GetFileVersionInfoExW(dwFlags, lptstrFilename, dwHandle, dwLen, lpData)
-        this.exports["GetFileVersionInfoExW"] = (ctx, mem, args) => {
-            const lptstrFilename = args[1];
-            const dwLen = args[3];
-            const lpData = args[4];
-
-            if (lptstrFilename === 0 || lpData === 0) {
-                return FALSE;
-            }
-
-            createFakeVersionInfo(mem, lpData, dwLen);
-            return TRUE;
-        };
-
-        // VerQueryValueA(pBlock, lpSubBlock, lplpBuffer, puLen)
-        // Returns: TRUE on success, FALSE on failure
-        // lplpBuffer receives pointer to requested value
-        // puLen receives length of value
-        this.exports["VerQueryValueA"] = (ctx, mem, args) => {
-            const pBlock = args[0];
-            const lpSubBlock = args[1];
-            const lplpBuffer = args[2];
-            const puLen = args[3];
-
-            if (pBlock === 0 || lpSubBlock === 0 || lplpBuffer === 0 || puLen === 0) {
-                Logger.verbose(LogCategory.SYSTEM,
-                    `VerQueryValueA: NULL pointer (pBlock=0x${pBlock.toString(16)} ` +
-                    `lpSubBlock=0x${lpSubBlock.toString(16)} lplpBuffer=0x${lplpBuffer.toString(16)} ` +
-                    `puLen=0x${puLen.toString(16)})`
-                );
-                return FALSE;
-            }
-
-            const subBlock = readAsciiZ(mem, lpSubBlock, 512);
-            const normalized = subBlock.toLowerCase();
-
-            // Most common query is "\\" for VS_FIXEDFILEINFO root
-            if (subBlock === "\\" || subBlock === "") {
-                // Return pointer to VS_FIXEDFILEINFO at pBlock
-                Mem.writeUint32(lplpBuffer, pBlock);
-                Mem.writeUint32(puLen, 52); // sizeof(VS_FIXEDFILEINFO)
-
-                Logger.verbose(LogCategory.SYSTEM,
-                    `VerQueryValueA: subBlock="${subBlock}" -> pBlock=0x${pBlock.toString(16)} len=52`
-                );
-                return TRUE;
-            }
-
-            if (normalized.includes("\\varfileinfo\\translation")) {
-                // LANGID=0x0409 (en-US), CodePage=0x04B0 (Unicode)
-                const translation = new Uint8Array([0x09, 0x04, 0xB0, 0x04]);
-                Mem.writeBytes(this.versionTranslationBuf, translation);
-                Mem.writeUint32(lplpBuffer, this.versionTranslationBuf);
-                Mem.writeUint32(puLen, 4);
-                Logger.verbose(LogCategory.SYSTEM,
-                    `VerQueryValueA: subBlock="${subBlock}" -> Translation 0x0409/0x04B0`);
-                return TRUE;
-            }
-
-            if (normalized.includes("\\stringfileinfo\\")) {
-                const value = resolveStringValue(normalized);
-                const bytes = writeAsciiZ(this.versionStrBufA, value);
-                Mem.writeUint32(lplpBuffer, this.versionStrBufA);
-                Mem.writeUint32(puLen, bytes);
-                Logger.verbose(LogCategory.SYSTEM,
-                    `VerQueryValueA: subBlock="${subBlock}" -> "${value}"`);
-                return TRUE;
-            }
-
-            Logger.verbose(LogCategory.SYSTEM,
-                `VerQueryValueA: subBlock="${subBlock}" -> FALSE (not implemented for strings)`
-            );
-            return FALSE;
-        };
-
-        // VerQueryValueW(pBlock, lpSubBlock, lplpBuffer, puLen)
-        this.exports["VerQueryValueW"] = (ctx, mem, args) => {
-            const pBlock = args[0];
-            const lpSubBlock = args[1];
-            const lplpBuffer = args[2];
-            const puLen = args[3];
-
-            if (pBlock === 0 || lpSubBlock === 0 || lplpBuffer === 0 || puLen === 0) {
-                return FALSE;
-            }
-
-            const subBlock = readWideZ(mem, lpSubBlock, 512);
-            const normalized = subBlock.toLowerCase();
-
-            if (subBlock === "\\" || subBlock === "") {
-                Mem.writeUint32(lplpBuffer, pBlock);
-                Mem.writeUint32(puLen, 52);
-                return TRUE;
-            }
-
-            if (normalized.includes("\\varfileinfo\\translation")) {
-                const translation = new Uint8Array([0x09, 0x04, 0xB0, 0x04]);
-                Mem.writeBytes(this.versionTranslationBuf, translation);
-                Mem.writeUint32(lplpBuffer, this.versionTranslationBuf);
-                Mem.writeUint32(puLen, 4);
-                return TRUE;
-            }
-
-            if (normalized.includes("\\stringfileinfo\\")) {
-                const value = resolveStringValue(normalized);
-                const bytes = writeWideZ(this.versionStrBufW, value);
-                Mem.writeUint32(lplpBuffer, this.versionStrBufW);
-                Mem.writeUint32(puLen, bytes / 2);
-                return TRUE;
-            }
-
-            return FALSE;
-        };
-
-        // ExA variants are aliases for compatibility.
+        // ExA is an alias for compatibility (flags ignored, like Windows' non-Ex path).
         this.exports["GetFileVersionInfoExA"] = (ctx, mem, args) =>
             this.exports["GetFileVersionInfoA"]!(ctx, mem, [args[1], args[2], args[3], args[4]]);
-        this.exports["GetFileVersionInfoSizeExA"] = (ctx, mem, args) =>
-            this.exports["GetFileVersionInfoSizeA"]!(ctx, mem, [args[1], args[2]]);
     }
 
-    reset(): void {}
+    reset(): void {
+        this.blobCache.clear();
+    }
+
+    private setError(code: number): void {
+        try {
+            System.getInstance().scheduler.setLastError(code);
+        } catch {
+            /* scheduler unavailable in unit tests */
+        }
+    }
+
+    /**
+     * System DLLs the emulator itself implements (ddraw, d3d9, dinput, ...) have no on-disk image, but
+     * a real OS ships them, and installers/compat checks read their file version to detect DirectX etc.
+     * Report them at the emulated OS version, as the OS-provided components of that release carry it.
+     */
+    private emulatedSystemDllBlob(filename: string): Uint8Array | null {
+        const norm = filename.replace(/\//g, "\\").toLowerCase();
+        const m = /^[a-z]:\\windows\\(?:system32|system|syswow64)\\([^\\]+)\.dll$/.exec(norm);
+        if (!m || !APIRegistry.getInstance().hasModule(m[1]!)) return null;
+        const { major, minor, build } = EmulatorConfig.getInstance().osVersion;
+        const revision = build === 6002 ? 18005 : 0; // Vista SP2 servicing revision
+        return buildFixedVersionBlob([major, minor, build, revision]);
+    }
+
+    /** Match a version-query filename to a loaded PE image base, if any. */
+    private moduleBaseForFilename(filename: string): number | null {
+        if (!filename) return null;
+        const norm = filename.replace(/\//g, "\\").toLowerCase();
+        const baseName = norm.split("\\").pop() ?? norm;
+        const registry = System.getInstance().process?.moduleRegistry;
+        if (registry) {
+            for (const mod of registry.getAllModules()) {
+                const modPath = mod.path.replace(/\//g, "\\").toLowerCase();
+                const modBase = mod.name.toLowerCase();
+                if (
+                    modPath === norm ||
+                    modPath.endsWith(`\\${baseName}`) ||
+                    baseName === `${modBase}.exe` ||
+                    baseName === `${modBase}.dll`
+                ) {
+                    return mod.baseAddress;
+                }
+            }
+        }
+        const sys = System.getInstance();
+        const exePath = sys.executablePath?.replace(/\//g, "\\").toLowerCase();
+        if (exePath && (exePath === norm || baseName === sys.executableName?.toLowerCase())) {
+            return registry?.getMainExecutableBase() ?? 0x00400000;
+        }
+        return null;
+    }
+
+    /** Synchronously buffer a whole file from VFS (ROM range reads or cached overlay). */
+    private readFileBytesSync(filename: string): { data: Uint8Array } | { error: number } {
+        const vfs = System.getInstance().fileSystem;
+        if (!vfs) return { error: ERROR_FILE_NOT_FOUND };
+        let handle: ReturnType<typeof vfs.openSync> = null;
+        try {
+            handle = vfs.openSync(filename, GENERIC_READ, OPEN_EXISTING);
+        } catch {
+            return { error: ERROR_FILE_NOT_FOUND };
+        }
+        if (!handle) {
+            return { error: vfs.parentDirectoryExists?.(vfs.resolvePath(filename)) ? ERROR_FILE_NOT_FOUND : ERROR_PATH_NOT_FOUND };
+        }
+        const size = vfs.getFileSize(handle.path);
+        if (size <= 0) return { error: ERROR_RESOURCE_DATA_NOT_FOUND };
+        if (size > MAX_VERSION_FILE_BYTES || size > MAX_VERSION_BLOB_BYTES * 512) {
+            return { error: ERROR_RESOURCE_DATA_NOT_FOUND };
+        }
+        const out = new Uint8Array(size);
+        let offset = 0;
+        while (offset < size) {
+            const chunk = handle ? vfs.readSync(handle, size - offset) : null;
+            if (!chunk || chunk.length === 0) return { error: ERROR_RESOURCE_DATA_NOT_FOUND };
+            out.set(chunk.subarray(0, Math.min(chunk.length, size - offset)), offset);
+            offset += chunk.length;
+        }
+        return { data: out };
+    }
+
+    /**
+     * Resolve the version blob for a guest filename. Prefers the loaded PE
+     * image (exact bytes the guest executes), falls back to the on-disk file.
+     */
+    private resolveBlob(
+        mem: Uint8Array,
+        filename: string,
+    ): { blob: Uint8Array } | { error: number } {
+        const key = filename.replace(/\//g, "\\").toLowerCase();
+        const cached = this.blobCache.get(key);
+        if (cached) return { blob: cached };
+
+        const moduleBase = this.moduleBaseForFilename(filename);
+        if (moduleBase !== null) {
+            const fromImage = findVersionInImage(mem, moduleBase);
+            if (fromImage) {
+                this.blobCache.set(key, fromImage);
+                return { blob: fromImage };
+            }
+        }
+
+        const file = this.readFileBytesSync(filename);
+        if ("error" in file) {
+            const emulated = this.emulatedSystemDllBlob(filename);
+            if (emulated) {
+                this.blobCache.set(key, emulated);
+                return { blob: emulated };
+            }
+            return { error: file.error };
+        }
+        const blob = findVersionInFile(file.data);
+        if (!blob) return { error: ERROR_RESOURCE_DATA_NOT_FOUND };
+        this.blobCache.set(key, blob);
+        return { blob };
+    }
+
+    private readFilename(mem: Uint8Array, ptr: number, wide: boolean): string {
+        if (!ptr) return "";
+        return wide
+            ? Marshaler.readWideString(mem, ptr)
+            : Marshaler.readString(mem, ptr);
+    }
+
+    private getSizeImpl(mem: Uint8Array, filenamePtr: number, handlePtr: number, wide: boolean): number {
+        const tag = wide ? "GetFileVersionInfoSizeW" : "GetFileVersionInfoSizeA";
+        if (!filenamePtr) {
+            this.setError(ERROR_INVALID_PARAMETER);
+            return 0;
+        }
+        const filename = this.readFilename(mem, filenamePtr, wide);
+        if (!filename) {
+            this.setError(ERROR_INVALID_PARAMETER);
+            return 0;
+        }
+        const result = this.resolveBlob(mem, filename);
+        if ("error" in result) {
+            this.setError(result.error);
+            Logger.log(LogCategory.SYSTEM, `${tag}: file="${filename}" -> no version resource (err=${result.error})`);
+            return 0;
+        }
+        if (handlePtr !== 0) Mem.writeUint32(handlePtr, 0);
+        this.setError(0);
+        Logger.log(LogCategory.SYSTEM, `${tag}: file="${filename}" -> size=${result.blob.length}`);
+        return result.blob.length;
+    }
+
+    private getInfoImpl(
+        mem: Uint8Array,
+        filenamePtr: number,
+        len: number,
+        dataPtr: number,
+        wide: boolean,
+    ): number {
+        const tag = wide ? "GetFileVersionInfoW" : "GetFileVersionInfoA";
+        if (!filenamePtr || !dataPtr) {
+            this.setError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        const filename = this.readFilename(mem, filenamePtr, wide);
+        if (!filename) {
+            this.setError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        const result = this.resolveBlob(mem, filename);
+        if ("error" in result) {
+            this.setError(result.error);
+            Logger.verbose(LogCategory.SYSTEM, `${tag}: file="${filename}" -> no version resource`);
+            return FALSE;
+        }
+        if ((len >>> 0) < result.blob.length) {
+            this.setError(ERROR_INSUFFICIENT_BUFFER);
+            Logger.verbose(LogCategory.SYSTEM,
+                `${tag}: file="${filename}" buffer too small (len=${len} need=${result.blob.length})`);
+            return FALSE;
+        }
+        const written = Mem.writeBytes(dataPtr, result.blob);
+        if (written < result.blob.length) {
+            this.setError(ERROR_INSUFFICIENT_BUFFER);
+            return FALSE;
+        }
+        this.setError(0);
+        Logger.verbose(LogCategory.SYSTEM, `${tag}: file="${filename}" -> ${result.blob.length} bytes`);
+        return TRUE;
+    }
+
+    private queryImpl(
+        mem: Uint8Array,
+        pBlock: number,
+        subBlockPtr: number,
+        bufferPtr: number,
+        lenPtr: number,
+        wide: boolean,
+    ): number {
+        const tag = wide ? "VerQueryValueW" : "VerQueryValueA";
+        if (!pBlock || !subBlockPtr || !bufferPtr || !lenPtr) {
+            Logger.verbose(LogCategory.SYSTEM, `${tag}: NULL pointer`);
+            return FALSE;
+        }
+        const subBlock = wide ? readWideZ(mem, subBlockPtr, 512) : readAsciiZ(mem, subBlockPtr, 512);
+        if (pBlock < 0 || pBlock + 6 > mem.length) return FALSE;
+        const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
+        const wLength = view.getUint16(pBlock, true);
+        if (wLength < 6 || wLength > MAX_VERSION_BLOB_BYTES) {
+            Logger.verbose(LogCategory.SYSTEM, `${tag}: bad block length ${wLength}`);
+            return FALSE;
+        }
+        if (pBlock + wLength > mem.length) {
+            Logger.verbose(LogCategory.SYSTEM, `${tag}: block extends past guest memory`);
+            return FALSE;
+        }
+        const blob = mem.subarray(pBlock, pBlock + wLength);
+        const parsed = parseVersionInfo(blob);
+        if (!parsed) {
+            Logger.verbose(LogCategory.SYSTEM, `${tag}: unparseable version blob`);
+            return FALSE;
+        }
+        if (
+            parsed.fixedValueSize < VS_FIXEDFILEINFO_SIZE ||
+            view.getUint32(pBlock + parsed.fixedValueOffset, true) !== VS_FIXEDFILEINFO_SIGNATURE
+        ) {
+            Logger.verbose(LogCategory.SYSTEM, `${tag}: bad VS_FIXEDFILEINFO signature`);
+            return FALSE;
+        }
+        const query = queryVersionInfo(parsed, subBlock);
+        if (!query) {
+            Logger.verbose(LogCategory.SYSTEM, `${tag}: subBlock="${subBlock}" not found`);
+            return FALSE;
+        }
+
+        if (query.kind === "fixed" || query.kind === "translation") {
+            Mem.writeUint32(bufferPtr, (pBlock + query.valueOffset) >>> 0);
+            Mem.writeUint32(lenPtr, query.valueSize);
+            Logger.verbose(LogCategory.SYSTEM, `${tag}: subBlock="${subBlock}" -> ${query.kind} len=${query.valueSize}`);
+            return TRUE;
+        }
+
+        if (!wide) {
+            const bytes = writeAsciiZ(this.versionStrBufA, query.value);
+            void bytes;
+            Mem.writeUint32(bufferPtr, this.versionStrBufA);
+            // puLen counts characters; ANSI keeps the 1:1 mapping. Empty
+            // values report 0 to match the W behavior (wValueLength 0).
+            const chars = query.charLen === 0 ? 0 : encodeAnsi(query.value).length + 1;
+            Mem.writeUint32(lenPtr, chars);
+            Logger.verbose(LogCategory.SYSTEM, `${tag}: subBlock="${subBlock}" -> "${query.value}"`);
+            return TRUE;
+        }
+
+        Mem.writeUint32(bufferPtr, (pBlock + query.valueOffset) >>> 0);
+        Mem.writeUint32(lenPtr, query.charLen);
+        Logger.verbose(LogCategory.SYSTEM, `${tag}: subBlock="${subBlock}" -> len=${query.charLen}`);
+        return TRUE;
+    }
 }

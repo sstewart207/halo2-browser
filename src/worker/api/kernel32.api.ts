@@ -30,6 +30,7 @@ export const kernel32Module: ModuleDescriptor = {
         makeFunc("ActivateActCtx", 2),
         makeFunc("DeactivateActCtx", 2),
         makeFunc("ReleaseActCtx", 1),
+        makeFunc("QueryActCtxW", 7),
         makeFunc("IsTNT", 0),
         makeFunc("ExitProcess", 1),
         makeFunc("FatalAppExitA", 2),

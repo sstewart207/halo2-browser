@@ -8,6 +8,14 @@ export class Crypt32 implements IModule {
     exports: Record<string, ThunkImplementation> = {};
 
     initialize(process: Process): void {
+        // Host Windows DPAPI keys are unavailable in the browser. Never report
+        // success without returning a protected/decrypted DATA_BLOB.
+        for (const name of ["CryptProtectData", "CryptUnprotectData"]) {
+            this.exports[name] = () => {
+                process.lastError = 50; // ERROR_NOT_SUPPORTED
+                return { value: 0, stackCleanup: 28 };
+            };
+        }
         // BOOL CertFreeCertificateContext(PCCERT_CONTEXT pCertContext)
         this.exports["CertFreeCertificateContext"] = (ctx, mem, args) => {
             return { value: 1, stackCleanup: 4 }; // TRUE

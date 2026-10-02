@@ -1,6 +1,8 @@
+import {enlargeHalo2FontCache} from "./halo2-font-cache";
 // pe-loader.ts
 // Portably parses Win32 PE files and loads them into emulator memory
 
+import { EmulatorConfig } from './emulator-config-manager';
 import { ThunkGenerator } from './thunking/thunk-generator';
 import { APIRegistry } from './api-registry';
 import { System } from './system';
@@ -299,6 +301,10 @@ export class PELoader {
         // Load Sections
         const sections = this.loadSections(peData, peView, optHeaderPtr, sizeOfOptionalHeader, numberOfSections, baseAddress);
 
+        if (enlargeHalo2FontCache(this.memory, baseAddress, system.executableName)) {
+            Logger.log(LogCategory.SYSTEM, "[PE] Halo 2 glyph pixel cache enlarged to 1 MiB, original 512 entries");
+        }
+
         // Apply base relocations if loaded at different address than PE ImageBase
         if (baseAddress !== imageBase) {
             this.applyRelocations(peData, baseAddress);
@@ -456,7 +462,7 @@ export class PELoader {
         }
 
         // D3DX9 versioned redist DLLs (d3dx9_24 … d3dx9_43) — always HLE via canonical d3dx9 module.
-        if (isD3dx9VersionedDll(dllNameLower)) {
+        if (isD3dx9VersionedDll(dllNameLower) && !EmulatorConfig.getInstance().prefersNativeDll(dllName)) {
             Logger.log(LogCategory.SYSTEM, `[PE] Skipping native load of "${dllName}" — d3dx9 HLE active`);
             return null;
         }
@@ -1072,7 +1078,8 @@ export class PELoader {
 
             const dllNameRaw = this.readString(baseAddress + nameRVA);
             const dllNameBeforeAlias = dllNameRaw.toLowerCase().replace(/\.dll$/i, '');
-            const dllName = resolveThunkedDllAlias(dllNameBeforeAlias);
+            const preferNative = EmulatorConfig.getInstance().prefersNativeDll(dllNameRaw);
+            const dllName = preferNative ? dllNameBeforeAlias : resolveThunkedDllAlias(dllNameBeforeAlias);
             const aliasTarget = dllName !== dllNameBeforeAlias ? dllName : null;
             if (aliasTarget) {
                 Logger.log(LogCategory.SYSTEM, `[PE] DLL alias: ${dllNameRaw} → ${aliasTarget} (using thunked implementation)`);
@@ -1085,7 +1092,7 @@ export class PELoader {
 
             // Check if this DLL is thunked (has API registry entries).
             // Video DLLs are excluded when native loading is enabled — they fall through to VFS.
-            const isThunked = this.apiRegistry.hasModule(dllName) &&
+            const isThunked = !preferNative && this.apiRegistry.hasModule(dllName) &&
                 !(EMU_NATIVE_VIDEO_DLLS && VIDEO_DLL_NAMES.has(dllName));
 
             // Log ALL DLLs and their functions

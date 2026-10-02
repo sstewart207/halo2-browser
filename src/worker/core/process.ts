@@ -4,7 +4,7 @@ import { PELoader } from './pe-loader';
 import { SystemResourceProvider } from './resources/system-resource-provider';
 import { APIRegistry } from './api-registry';
 import { ThunkMemoryManager } from './thunking/thunk-memory-manager';
-import { AddressSpace, RegionKind, RegionPerms } from './memory/address-space';
+import { AddressSpace, isHeapBucketKind, RegionKind, RegionPerms } from './memory/address-space';
 import { Mem } from './memory/mem-accessor';
 import { EMU_MEMORY_SIZE, MAX_ALLOC_BYTES } from './cpu/emulator-config';
 import { Logger, LogCategory } from './logger';
@@ -31,7 +31,12 @@ interface BucketState {
                       // anything below it that a bump re-hands-out was previously written.
 }
 
-const BUCKET_KINDS: RegionKind[] = ['HEAP', 'SURFACE', 'THUNK_CODE', 'THUNK_DATA'];
+const BUCKET_KINDS: RegionKind[] = ['HEAP', 'HEAP_HI', 'SURFACE', 'THUNK_CODE', 'THUNK_DATA'];
+
+/** Thrown by allocateInBucket when a bucket simply has no room left. Distinguishing
+ *  this from a programming error is what makes the HEAP_HI overflow retry safe: we
+ *  only spill to the overflow arena on genuine exhaustion, never on a bad size. */
+class BucketExhaustedError extends Error {}
 
 export class MemoryManager {
     constructor(private addressSpace: AddressSpace) {
@@ -48,6 +53,12 @@ export class MemoryManager {
     private freeBlocks: Map<RegionKind, Array<{ addr: number; size: number }>> = new Map();
     // Track which bucket kind each allocation belongs to
     private allocBucket: Map<number, RegionKind> = new Map();
+    // HeapAlloc(0) records requested size 0 for HeapSize, but occupies a real
+    // aligned block. Native process-heap HeapAlloc(0) returns a unique freeable
+    // pointer; HeapSize reports 0. The free-list path ignores size <= 0, so the
+    // physical footprint is kept here for reclaim.
+    private zeroSizePhysical: Map<number, number> = new Map();
+    private static readonly ZERO_SIZE_HEAP_BLOCK = 16;
 
     private bucketState: Map<RegionKind, BucketState> = new Map();
     private reservedAddresses: Set<number> = new Set();
@@ -61,25 +72,79 @@ export class MemoryManager {
     // tell UAF-reuse (alloc→free→alloc) from double-hand-out (alloc→alloc, no free)
     // from corruption (address only ever allocated by one subsystem).
     private static readonly LARGE_ALLOC_THRESHOLD = 0x10000; // 64KB = VirtualAlloc granularity
-    private static readonly LARGE_ALLOC_LOG_SIZE = 4096;
-    private largeAllocLog: Array<{ op: 'alloc' | 'free' | 'alias'; addr: number; size: number; time: number; bt: string }> = [];
+    // Ring capacity for large-alloc history. Sized to cover a FULL Halo 2 boot: that
+    // run holds ~17k live allocations, and alloc+free pairs mean the ring turns over
+    // twice over. At 4096 it wrapped long before the interesting blocks were still
+    // live, so heapReport's per-tag attribution came back EMPTY at exactly the moment
+    // it was needed most -- an empty answer that reads like "nothing is allocated".
+    // Diagnostic-only; each entry carries a backtrace string, so this is bounded and
+    // not on any hot path.
+    private static readonly LARGE_ALLOC_LOG_SIZE = 65536;
+    private largeAllocLog: Array<{ op: 'alloc' | 'free' | 'alias'; addr: number; size: number; time: number; bt: string; js: string; tag: string }> = [];
     private largeAllocLogIdx = 0;
+    /** Allocation-site tag for the NEXT logLargeEvent (see alloc's `tag`). */
+    private pendingAllocTag = '';
 
     private alignUp(value: number, align: number): number {
         return (value + (align - 1)) & ~(align - 1);
     }
 
-    /** Record a ≥64KB block lifecycle event with a lightweight caller backtrace. */
+    /** Record a ≥64KB block lifecycle event with a lightweight caller backtrace.
+     *
+     *  `bt` = the GUEST call stack (__guestBtLite) — who in the game asked for this.
+     *  `js` = the EMULATOR call stack, captured at Error.stackTraceLimit depth — which
+     *  emulator subsystem actually called into the allocator. Without `js` a block is
+     *  attributable only to guest code, which cannot distinguish "the guest asked for
+     *  128MB via VirtualAlloc" from "an HLE module allocated 128MB on the guest's
+     *  behalf" — the exact ambiguity that makes a guest-heap-exhaustion hunt guess.
+     *  Only captured for large blocks, so the cost is bounded and off the hot path.
+     */
     private logLargeEvent(op: 'alloc' | 'free' | 'alias', addr: number, size: number): void {
         if (size < MemoryManager.LARGE_ALLOC_THRESHOLD) return;
         let bt = '';
         try { bt = (globalThis as any).__guestBtLite?.() ?? ''; } catch { /* best-effort */ }
-        const entry = { op, addr: addr >>> 0, size, time: performance.now(), bt };
+        const js = MemoryManager.captureHostCaller();
+        const tag = this.pendingAllocTag;
+        this.pendingAllocTag = '';
+        const entry = { op, addr: addr >>> 0, size, time: performance.now(), bt, js, tag };
         if (this.largeAllocLog.length < MemoryManager.LARGE_ALLOC_LOG_SIZE) {
             this.largeAllocLog.push(entry);
         } else {
             this.largeAllocLog[this.largeAllocLogIdx] = entry;
             this.largeAllocLogIdx = (this.largeAllocLogIdx + 1) % MemoryManager.LARGE_ALLOC_LOG_SIZE;
+        }
+    }
+
+    /**
+     * Compact string of the first few HOST (emulator) frames above this call, i.e. the
+     * subsystem that reached MemoryManager — `kernel32/memory.ts:alloc`, `d3d9-device.ts`
+     * and so on. Deliberately not a full Error: allocating Errors on every ≥64KB guest
+     * allocation is itself a measurable cost, and the head frames are all that's read.
+     */
+    private static captureHostCaller(): string {
+        // The authoritative part: the WinAPI thunk currently being serviced, published by
+        // ThunkDispatcher around the impl() call. Exact string — no stack inference.
+        const thunk = (globalThis as any).__currentThunkName as string | undefined;
+        const head = thunk ? `api=${thunk}` : 'api=<not-a-thunk>';
+        // V8-only knob; the repo's lib set doesn't declare ErrorConstructor.stackTraceLimit.
+        const Err = Error as unknown as { stackTraceLimit?: number };
+        const prevLimit = Err.stackTraceLimit;
+        try {
+            Err.stackTraceLimit = 12;
+            const raw = new Error().stack ?? '';
+            const lines = raw.split('\n').slice(2); // drop "Error" + captureHostCaller itself
+            const frames = lines
+                .map(l => l.trim())
+                // Drop the MemoryManager/Process frames so the first entry is the subsystem.
+                .filter(l => !/at (MemoryManager|Process)\./.test(l))
+                .slice(0, 3)
+                .join(' <- ')
+                .slice(0, 320);
+            return frames ? `${head} | ${frames}` : head;
+        } catch {
+            return head;
+        } finally {
+            Err.stackTraceLimit = prevLimit;
         }
     }
 
@@ -91,7 +156,17 @@ export class MemoryManager {
      * caller backtrace shows whether the address was freed before reuse (UAF) or
      * handed out while live (double-hand-out / corruption).
      */
-    getLargeAllocHistory(addr: number, radius: number = 0x20000): Array<{ op: string; addr: string; size: string; t: string; overlaps: boolean; bt: string }> {
+    /**
+     * Ring capacity, so callers can tell "no large allocations" apart from "the ring
+     * wrapped and evicted the ones you wanted". A full ring means the history is
+     * incomplete: later entries are present, earlier ones are gone. Entries evicted
+     * are NOT necessarily freed.
+     */
+    getLargeAllocRingCapacity(): number {
+        return MemoryManager.LARGE_ALLOC_LOG_SIZE;
+    }
+
+    getLargeAllocHistory(addr: number, radius: number = 0x20000): Array<{ op: string; addr: string; size: string; t: string; overlaps: boolean; bt: string; js: string; tag: string }> {
         const target = addr >>> 0;
         const lo = Math.max(0, target - radius);
         const hi = target + radius;
@@ -105,6 +180,8 @@ export class MemoryManager {
                 t: (e.time / 1000).toFixed(3) + 's',
                 overlaps: e.addr <= target && (e.addr + e.size) > target,
                 bt: e.bt,
+                js: e.js,
+                tag: e.tag,
             }));
     }
 
@@ -127,7 +204,14 @@ export class MemoryManager {
         }
     }
 
-    alloc(size: number, kind?: RegionKind, perms?: RegionPerms, alignment?: number): number {
+    /**
+     * `tag` is an optional free-text marker recorded on the large-alloc log entry this
+     * call produces, e.g. VirtualAlloc passes its MEM_RESERVE/MEM_COMMIT type. The log
+     * stream is lossy under load, so anything needed to decide a fix must be captured
+     * HERE rather than scraped from log text afterwards.
+     */
+    alloc(size: number, kind?: RegionKind, perms?: RegionPerms, alignment?: number, tag?: string): number {
+        this.pendingAllocTag = tag ?? '';
         // Sanity guard against corrupted/garbage sizes only. The real ceiling is the
         // bucket's free space (a too-large request fails there → caller gets NULL). A 256MB
         // cap here under-served guests with >256MB RAM: a legit 300MB GlobalAlloc threw,
@@ -146,7 +230,28 @@ export class MemoryManager {
             throw new Error(`MemoryManager: bucket ${bucketKind} is not available`);
         }
 
-        const addr = this.allocateInBucket(bucket, aligned, minAlign, bucketKind);
+        let addr: number;
+        let effectiveBucketKind = bucketKind;
+        try {
+            addr = this.allocateInBucket(bucket, aligned, minAlign, bucketKind);
+        } catch (e) {
+            // The primary HEAP bucket is a fixed 512MB arena bounded by THUNK_CODE above
+            // and the JIT slow-memory gap below, so a guest that commits more than that
+            // (Halo 2 PC reaches ~460MB in 50s and dies at ~72s) has nowhere to go. Spill
+            // to the HEAP_HI overflow arena, which sits above the JIT guard band — so the
+            // extra memory is still served on the fast path, no THUNK base moves, and
+            // addresses below 0x21000000 stay byte-identical.
+            //
+            // Only genuine exhaustion spills; a bad size or missing bucket still throws.
+            const hi = bucketKind === 'HEAP' ? this.bucketState.get('HEAP_HI') : undefined;
+            if (!(e instanceof BucketExhaustedError) || !hi) throw e;
+            Logger.log(LogCategory.SYSTEM,
+                `[MemoryManager] HEAP bucket full (limit 0x${bucket.limit.toString(16)}); ` +
+                `spilling 0x${aligned.toString(16)} to HEAP_HI overflow arena ` +
+                `[0x${hi.base.toString(16)}..0x${hi.limit.toString(16)})`);
+            addr = this.allocateInBucket(hi, aligned, minAlign, 'HEAP_HI');
+            effectiveBucketKind = 'HEAP_HI';
+        }
 
         // [DIAG/SAFETY] Double-hand-out detector: the allocator must never return an
         // address that is still recorded live. A real heap never hands out a busy block;
@@ -165,7 +270,8 @@ export class MemoryManager {
         // Individual HEAP sub-allocations (HeapAlloc etc.) are already covered by the
         // HEAP layout bucket — registering each one bloats regions[] to 200K+ entries,
         // making findBlockingRegion and releaseRegion O(n) and killing performance.
-        if (finalKind !== 'HEAP') {
+        // HEAP_HI counts as HEAP here for the same reason.
+        if (!isHeapBucketKind(effectiveBucketKind)) {
             this.addressSpace.registerRegion({
                 base: addr,
                 size: aligned,
@@ -177,13 +283,26 @@ export class MemoryManager {
         }
 
         this.recordAllocation(addr, aligned);
-        this.allocBucket.set(addr, bucketKind);
+        this.allocBucket.set(addr, effectiveBucketKind);
         this.logLargeEvent('alloc', addr, aligned);
 
-        if (bucketKind === 'HEAP' || bucketKind === 'SURFACE') {
+        if (isHeapBucketKind(effectiveBucketKind) || effectiveBucketKind === 'SURFACE') {
             ensureGuestPagesCommitted(addr, aligned);
         }
 
+        return addr;
+    }
+
+    /**
+     * Win32 HeapAlloc(dwBytes=0) semantics: a unique, aligned, freeable non-NULL
+     * block whose HeapSize is 0. Physical capacity is ZERO_SIZE_HEAP_BLOCK so the
+     * pointer is a real heap address rather than a sentinel.
+     */
+    allocZeroSize(kind?: RegionKind, perms?: RegionPerms): number {
+        const physical = MemoryManager.ZERO_SIZE_HEAP_BLOCK;
+        const addr = this.alloc(physical, kind, perms);
+        this.zeroSizePhysical.set(addr, physical);
+        this.allocations.set(addr, 0);
         return addr;
     }
 
@@ -267,22 +386,24 @@ export class MemoryManager {
     free(ptr: number): void {
         const size = this.allocations.get(ptr);
         if (size === undefined) return;
+        const physical = this.zeroSizePhysical.get(ptr) ?? size;
 
         // HEAP allocs are not registered in addressSpace.regions (skipped in alloc),
         // so skip releaseRegion for them to avoid O(n) scan of a non-existent entry.
         const bucketKind = this.allocBucket.get(ptr);
-        if (bucketKind !== 'HEAP') {
+        if (!isHeapBucketKind(bucketKind)) {
             this.addressSpace.releaseRegion(ptr);
         }
-        this.currentBytes -= size;
+        this.currentBytes -= physical;
         this.allocations.delete(ptr);
+        this.zeroSizePhysical.delete(ptr);
         this.reservedAddresses.delete(ptr);
 
         if (bucketKind) {
             this.allocBucket.delete(ptr);
-            this.releaseToFreeList(bucketKind, ptr, size);
+            this.releaseToFreeList(bucketKind, ptr, physical);
         }
-        this.logLargeEvent('free', ptr, size);
+        this.logLargeEvent('free', ptr, physical);
 
         memoryEventBuffer.record({
             timestamp: performance.now(),
@@ -394,6 +515,11 @@ export class MemoryManager {
         return this.allocations.get(ptr);
     }
 
+    /** Physical capacity of a live block, including zero-size HeapAlloc footprints. */
+    getPhysicalSize(ptr: number): number | undefined {
+        return this.zeroSizePhysical.get(ptr) ?? this.allocations.get(ptr);
+    }
+
     /**
      * Snapshot of live HEAP-bucket allocations for a faithful HeapWalk.
      *
@@ -412,7 +538,7 @@ export class MemoryManager {
     snapshotHeapAllocations(): Array<{ addr: number; size: number }> {
         const out: Array<{ addr: number; size: number }> = [];
         for (const [addr, size] of this.allocations) {
-            if (this.allocBucket.get(addr) === 'HEAP') {
+            if (isHeapBucketKind(this.allocBucket.get(addr))) {
                 out.push({ addr, size });
             }
         }
@@ -430,8 +556,8 @@ export class MemoryManager {
      *              allocs live past large allocs that were freed but can't be
      *              retreated into the bump.
      */
-    getBucketStats(): Array<{ kind: string; base: number; limit: number; next: number; used: number; liveUsed: number; free: number; freeBlocks: number; freeBytes: number }> {
-        const rows: Array<{ kind: string; base: number; limit: number; next: number; used: number; liveUsed: number; free: number; freeBlocks: number; freeBytes: number }> = [];
+    getBucketStats(): Array<{ kind: string; base: number; limit: number; next: number; slabTop?: number; used: number; liveUsed: number; free: number; freeBlocks: number; freeBytes: number }> {
+        const rows: Array<{ kind: string; base: number; limit: number; next: number; slabTop?: number; used: number; liveUsed: number; free: number; freeBlocks: number; freeBytes: number }> = [];
         for (const [kind, state] of this.bucketState.entries()) {
             const total = state.limit - state.base;
             const used = state.next - state.base;
@@ -445,6 +571,7 @@ export class MemoryManager {
                 base: state.base,
                 limit: state.limit,
                 next: state.next,
+                slabTop: state.slabTop,
                 used,
                 liveUsed: used - freeBytes,
                 free: total - used,
@@ -465,6 +592,7 @@ export class MemoryManager {
         this.allocations.clear();
         this.freeBlocks.clear();
         this.allocBucket.clear();
+        this.zeroSizePhysical.clear();
         this.reservedAddresses.clear();
         this.totalAllocated = 0;
         this.currentBytes = 0;
@@ -548,7 +676,7 @@ export class MemoryManager {
         const guestCeiling = bucket.slabTop ?? bucket.limit;
         if (bucket.slabTop !== undefined && bucket.slabTop < bucket.limit &&
             alignedStart + size > guestCeiling) {
-            throw new Error(
+            throw new BucketExhaustedError(
                 `MemoryManager: HEAP exhausted at slab boundary (need 0x${size.toString(16)} ` +
                 `at 0x${alignedStart.toString(16)}, slabTop=0x${bucket.slabTop.toString(16)})`);
         }
@@ -565,7 +693,7 @@ export class MemoryManager {
 
             const expandedSize = this.addressSpace.expandLayoutBucket(bucketKind, newSize);
             if (expandedSize === 0) {
-                throw new Error(
+                throw new BucketExhaustedError(
                     `MemoryManager: bucket overflow (requested 0x${size.toString(16)} ` +
                     `in 0x${bucket.base.toString(16)}..0x${bucket.limit.toString(16)})`
                 );
@@ -644,6 +772,23 @@ export class Process {
     // Environment variables
     environment: Map<string, string> = new Map();
 
+    // Profile folders match the paths shell32 reports for the same CSIDLs.
+    private setDefaultEnvironment(): void {
+        const env = this.environment;
+        env.set("PATH", "C:\\WINDOWS\\SYSTEM32;C:\\WINDOWS;C:\\");
+        env.set("SYSTEMROOT", "C:\\WINDOWS");
+        env.set("WINDIR", "C:\\WINDOWS");
+        env.set("TEMP", "C:\\TEMP");
+        env.set("TMP", "C:\\TEMP");
+        env.set("USERNAME", "BottleShip");
+        env.set("COMPUTERNAME", "BS-EMULATOR");
+        env.set("USERPROFILE", "C:\\Windows");
+        env.set("APPDATA", "C:\\Windows\\Application Data");
+        env.set("LOCALAPPDATA", "C:\\Windows\\Local Settings\\Application Data");
+        env.set("HOMEDRIVE", "C:");
+        env.set("HOMEPATH", "\\Windows");
+    }
+
     // Last error code (set by SetLastError, read by GetLastError)
     lastError: number = 0;
 
@@ -681,14 +826,7 @@ export class Process {
             Logger.error(LogCategory.SYSTEM, `Failed to initialize thunk memory: ${err}`);
         });
 
-        // Default environment
-        this.environment.set("PATH", "C:\\WINDOWS\\SYSTEM32;C:\\WINDOWS;C:\\");
-        this.environment.set("SYSTEMROOT", "C:\\WINDOWS");
-        this.environment.set("WINDIR", "C:\\WINDOWS");
-        this.environment.set("TEMP", "C:\\TEMP");
-        this.environment.set("TMP", "C:\\TEMP");
-        this.environment.set("USERNAME", "BottleShip");
-        this.environment.set("COMPUTERNAME", "BS-EMULATOR");
+        this.setDefaultEnvironment();
 
         // Initialize callback manager for x86 callback invocation (WndProc, etc.)
         // Pass thunk memory manager to dispatcher so it can use dynamic addresses
@@ -754,8 +892,14 @@ export class Process {
     }
 
     private initializeMemoryLayout(): void {
-        const limit = Math.min(EMU_MEMORY_SIZE, this.getMemory().length);
-        this.addressSpace.initializeLayout(limit);
+        // Govern the layout by the address space that ACTUALLY exists (v86's linear
+        // memory), not by the EMU_MEMORY_SIZE default. EMU_MEMORY_SIZE is only the
+        // default a title falls back to; a manifest that raises emulator.memory.ram
+        // gets a bigger linear memory from v86, and clamping here would silently cap
+        // the layout back at 1GB — which is exactly what makes the HEAP_HI overflow
+        // arena (0x40000000+, only present above 1GB of RAM) zero-sized.
+        const limit = Math.max(EMU_MEMORY_SIZE, this.getMemory().length);
+        this.addressSpace.initializeLayout(Math.min(limit, this.getMemory().length));
         Mem.sync();
     }
 
@@ -770,9 +914,9 @@ export class Process {
         // --- Zero out memory regions ---
         const mem = this.getMemory();
         if (mem) {
-            const totalMemory = Math.min(EMU_MEMORY_SIZE, mem.length);
+            const totalMemory = mem.length;
             // Clear HEAP, THUNK regions, and also LOW_MEM to remove any stale spin loops
-            const clearKinds = new Set<RegionKind>(["LOW_MEM", "HEAP", "THUNK_CODE", "CALLBACK_STUB", "SPIN_LOOP", "THUNK_DATA"]);
+            const clearKinds = new Set<RegionKind>(["LOW_MEM", "HEAP", "HEAP_HI", "THUNK_CODE", "CALLBACK_STUB", "SPIN_LOOP", "THUNK_DATA"]);
             const regions = this.addressSpace.getRegions();
             for (const region of regions) {
                 if (!clearKinds.has(region.kind)) continue;
@@ -822,13 +966,7 @@ export class Process {
 
         // Restore default environment
         this.environment.clear();
-        this.environment.set("PATH", "C:\\WINDOWS\\SYSTEM32;C:\\WINDOWS;C:\\");
-        this.environment.set("SYSTEMROOT", "C:\\WINDOWS");
-        this.environment.set("WINDIR", "C:\\WINDOWS");
-        this.environment.set("TEMP", "C:\\TEMP");
-        this.environment.set("TMP", "C:\\TEMP");
-        this.environment.set("USERNAME", "BottleShip");
-        this.environment.set("COMPUTERNAME", "BS-EMULATOR");
+        this.setDefaultEnvironment();
 
         this.lastError = 0;
 

@@ -8,7 +8,7 @@ import { FastPathImplementation, ThunkImplementation } from '../../core/thunking
 import type { ThunkMemoryRegions } from '../../core/thunking/thunk-memory-manager';
 import { Logger, LogCategory } from '../../core/logger';
 import { System } from '../../core/system';
-import { bumpFastmemGeneration, type RegionPerms } from '../../core/memory/address-space';
+import { bumpFastmemGeneration, isHeapBucketKind, type RegionPerms } from '../../core/memory/address-space';
 import { Mem } from '../../core/memory/mem-accessor';
 import { registerGuestCommitNotifier } from '../../core/memory/guest-page-commit';
 import { hypercallDataManager } from '../../core/cpu/hypercall-data';
@@ -605,6 +605,20 @@ export const exports: Record<string, ThunkImplementation> = (() => {
 
     // Track reserved pages (address -> size in bytes)
     const reservedPages: Map<number, number> = new Map();
+    let virtualAllocFailures = 0;
+
+    const LOW_GAP_BASE = 0x00100000; // above the registered low-memory region
+    const LOW_GAP_END = 0x00400000;  // default main image base
+    // Current protection of each low-gap allocation (root base -> flProtect). Those allocations have
+    // no addressSpace region, so VirtualProtect resolves them through virtualAllocRegions instead.
+    const lowGapProtect: Map<number, number> = new Map();
+    const isFreeLowGap = (addr: number, size: number): boolean => {
+        if (addr < LOW_GAP_BASE || addr + size > LOW_GAP_END) return false;
+        for (const [base, len] of virtualAllocRegions) {
+            if (addr < base + len && base < addr + size) return false;
+        }
+        return true;
+    };
 
     // Track VirtualAlloc root regions (base -> size), regardless of RESERVE/COMMIT mix.
     // VirtualFree validation must use this map (exact base for MEM_RELEASE, range containment for MEM_DECOMMIT).
@@ -1289,9 +1303,21 @@ export const exports: Record<string, ThunkImplementation> = (() => {
         const process = system.process;
         if (process) {
             if (dwBytes === 0) {
-                system.scheduler.setLastError(HEAP_OOM_ERROR);
-                Logger.warn(LogCategory.KERNEL32, `HeapAlloc refused size 0 ${formatCallSite(ctx, mem, 4, [0x38, 0x44], [0])}`);
-                return 0;
+                try {
+                    const address = process.memory.allocZeroSize();
+                    const physical = process.memory.getPhysicalSize(address) ?? HEAP_ALLOC_GRANULARITY;
+                    const zeroMemory = (dwFlags & HEAP_ZERO_MEMORY_FLAG) !== 0 || DEBUG_FORCE_ZERO_HEAP;
+                    if (zeroMemory) {
+                        mem.fill(0, address, address + physical);
+                    }
+                    heapWatch('alloc', ctx, mem, [address], `size=0`);
+                    Logger.verboseLazy(LogCategory.KERNEL32, () => `HeapAlloc(0) -> 0x${address.toString(16)}`);
+                    return address;
+                } catch (error) {
+                    system.scheduler.setLastError(HEAP_OOM_ERROR);
+                    Logger.warn(LogCategory.KERNEL32, `HeapAlloc failed: ${error}`);
+                    return 0;
+                }
             }
 
             // If the slab arena is exhausted, grow it. Reaching JS for a sub-4KB
@@ -1719,6 +1745,14 @@ export const exports: Record<string, ThunkImplementation> = (() => {
         const PAGE_SIZE = 0x1000; // 4KB page size
         const ALLOC_GRANULARITY = 0x10000; // 64KB — Windows allocation granularity
 
+        // Recorded on the large-alloc log entry so a guest-heap-exhaustion hunt can tell
+        // "the game committed 128MB" from "the game only RESERVED 128MB of address space"
+        // without scraping the (lossy, rate-limited) log stream.
+        const vaTag = (t: number) =>
+            `VirtualAlloc type=0x${(t >>> 0).toString(16)}` +
+            ((t & MEM_RESERVE) && !(t & MEM_COMMIT) ? ' RESERVE-only' : '') +
+            ((t & MEM_COMMIT) ? ' COMMIT' : '');
+
         if (!(flAllocationType & MEM_COMMIT) && !(flAllocationType & MEM_RESERVE)) {
             Logger.warn(LogCategory.KERNEL32, 'VirtualAlloc: Invalid allocation type');
             return 0;
@@ -1763,7 +1797,7 @@ export const exports: Record<string, ThunkImplementation> = (() => {
             }
             // Fallback: region may already be mapped by a prior RESERVE|COMMIT (reservedPages can be out of sync).
             const region = process.addressSpace.getRegion(effectiveAddress);
-            if (region && region.kind === 'HEAP' && effectiveAddress + alignedSize <= region.base + region.size) {
+            if (region && isHeapBucketKind(region.kind) && effectiveAddress + alignedSize <= region.base + region.size) {
                 const ptm = process.pageTableManager;
                 if (ptm?.isPagingEnabled()) {
                     ptm.commitPages(effectiveAddress, alignedSize);
@@ -1788,13 +1822,23 @@ export const exports: Record<string, ThunkImplementation> = (() => {
                 // If two pools share the same >> 16 index (within same 64KB chunk),
                 // Free() decrements the WRONG pool's Taken counter → premature VirtualFree
                 // → use-after-free of GNames/other critical data.
-                address = process.memory.alloc(alignedSize, 'HEAP', perms, ALLOC_GRANULARITY);
+                address = process.memory.alloc(alignedSize, 'HEAP', perms, ALLOC_GRANULARITY, vaTag(flAllocationType));
+            } else if (isFreeLowGap(address, alignedSize)) {
+                // RAM-backed user VA between low memory and the main image sits outside every
+                // allocator bucket, but VirtualQuery reports it MEM_FREE, so hinted allocations
+                // (e.g. Detours trampoline regions below the target module) must succeed there.
+                lowGapProtect.set(address, flProtect);
             } else {
                 process.memory.allocAt(address, alignedSize, 'HEAP', perms);
             }
         } catch (error) {
             System.getInstance().scheduler.setLastError(ERROR_INVALID_ADDRESS);
-            Logger.warn(LogCategory.KERNEL32, `VirtualAlloc: Allocation failed: ${error}`);
+            // A hint-probing guest can fail tens of thousands of times; keep the first and a periodic sample.
+            const failures = ++virtualAllocFailures;
+            if (failures <= 16 || failures % 4096 === 0) {
+                Logger.warn(LogCategory.KERNEL32,
+                    `VirtualAlloc: Allocation failed (#${failures}, type=0x${flAllocationType.toString(16)}, size=0x${alignedSize.toString(16)}): ${error}`);
+            }
             return 0;
         }
 
@@ -1964,6 +2008,21 @@ export const exports: Record<string, ThunkImplementation> = (() => {
         // Get current region for old perms
         const region = process.addressSpace.getRegion(alignedAddr);
         if (!region) {
+            const root = findTrackedAllocRange(alignedAddr, alignedSize);
+            if (root && lowGapProtect.has(root[0])) {
+                const oldProtect = lowGapProtect.get(root[0])!;
+                if (lpflOldProtect && lpflOldProtect + 4 <= mem.length) {
+                    new DataView(mem.buffer, mem.byteOffset, mem.byteLength).setUint32(lpflOldProtect, oldProtect, true);
+                }
+                lowGapProtect.set(root[0], flNewProtect);
+                const ptm = process.pageTableManager;
+                if (ptm?.isPagingEnabled()) {
+                    ptm.setProtection(alignedAddr, alignedSize, flNewProtect);
+                } else {
+                    bumpFastmemGeneration(FASTMEM_BUMP_ADDRESS_SPACE_PROTECT);
+                }
+                return 1;
+            }
             System.getInstance().scheduler.setLastError(ERROR_INVALID_ADDRESS);
             Logger.warn(LogCategory.KERNEL32,
                 `VirtualProtect: Invalid address 0x${alignedAddr.toString(16)}`);
@@ -2629,8 +2688,18 @@ export function registerFastPathHeapFunctions(dispatcher: any): void {
         if (!process) return null;
 
         if (dwBytes === 0) {
-            system.scheduler.setLastError(HEAP_OOM_ERROR);
-            return 0;
+            try {
+                const address = process.memory.allocZeroSize() >>> 0;
+                const zeroMemory = (dwFlags & HEAP_ZERO_MEMORY_FLAG) !== 0 || DEBUG_FORCE_ZERO_HEAP_FAST_PATH;
+                if (zeroMemory) {
+                    const physical = process.memory.getPhysicalSize(address) ?? HEAP_ALLOC_GRANULARITY;
+                    mem8.fill(0, address, address + physical);
+                }
+                return address;
+            } catch {
+                system.scheduler.setLastError(HEAP_OOM_ERROR);
+                return 0;
+            }
         }
 
         const zeroMemory = (dwFlags & HEAP_ZERO_MEMORY_FLAG) !== 0 || DEBUG_FORCE_ZERO_HEAP_FAST_PATH;
@@ -2642,7 +2711,20 @@ export function registerFastPathHeapFunctions(dispatcher: any): void {
 
         try {
             const allocBytes = dwBytes <= HEAP_SMALL_ALLOC_MAX ? alignSmallAlloc(dwBytes) : dwBytes;
-            const address = process.memory.alloc(allocBytes) >>> 0;
+            // Fast paths bypass the dispatcher wrapper that publishes the thunk name, so
+            // without this every block allocated through HeapAlloc stamps
+            // `api=<not-a-thunk>` and heapReport's per-API rollup comes back useless.
+            // Halo 2 allocates nearly all of its ~1.7GB this way, so this is the one
+            // attribution that matters. Restore in finally so a throw cannot leave a
+            // stale name attached to the NEXT unrelated allocation.
+            const prevThunk = (globalThis as any).__currentThunkName;
+            (globalThis as any).__currentThunkName = 'kernel32:HeapAlloc';
+            let address: number;
+            try {
+                address = process.memory.alloc(allocBytes) >>> 0;
+            } finally {
+                (globalThis as any).__currentThunkName = prevThunk;
+            }
             if (zeroMemory) {
                 mem8.fill(0, address, address + allocBytes);
             }

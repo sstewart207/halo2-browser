@@ -93,7 +93,7 @@ export class HarnessChain {
     /** One-shot incident report: cpu + backtrace + last thunks + stubs + faults + threads. The go-to for ANY anomaly (freeze/crash/exit/black frame). */
     report(esp?: number): this { return this.push("report", [esp]); }
     /** Recent guest page faults (EIP / fault addr / thread / last thunk / regs). */
-    faults(n?: number): this { return this.push("faults", [n]); }
+    faults(n?: number, opts?: { first?: boolean }): this { return this.push("faults", [n, opts]); }
     shot(opts?: { save?: string }): this { return this.push("shot", [opts]); }
     captureFrame(opts?: { dumpTargets?: boolean }): this { return this.push("captureFrame", [opts]); }
     textures(): this { return this.push("textures", []); }
@@ -116,9 +116,9 @@ export class HarnessChain {
     // ── breakpoints / exec control ──
     // Breakpoints block until hit — unbounded RPC envelope (the CLI's CDP budget /
     // an explicit clearBreaks bounds them). Pass {continuous:true} to return at once.
-    breakOn(eip: number | string, opts?: { continuous?: boolean; pause?: boolean }): this { return this.pushTimed("breakOn", [eip, opts], 0); }
-    breakOnExport(name: string, opts?: { continuous?: boolean; pause?: boolean }): this { return this.pushTimed("breakOnExport", [name, opts], 0); }
-    breakOnSymbol(name: string, opts?: { continuous?: boolean; pause?: boolean }): this { return this.pushTimed("breakOnSymbol", [name, opts], 0); }
+    breakOn(eip: number | string, opts?: { continuous?: boolean; pause?: boolean; fast?: boolean }): this { return this.pushTimed("breakOn", [eip, opts], 0); }
+    breakOnExport(name: string, opts?: { continuous?: boolean; pause?: boolean; fast?: boolean }): this { return this.pushTimed("breakOnExport", [name, opts], 0); }
+    breakOnSymbol(name: string, opts?: { continuous?: boolean; pause?: boolean; fast?: boolean }): this { return this.pushTimed("breakOnSymbol", [name, opts], 0); }
     breakOnApi(pattern: string, opts?: { continuous?: boolean }): this { return this.pushTimed("breakOnApi", [pattern, opts], 0); }
     watchMem(addr: number | string, opts?: { onWrite?: boolean }): this { return this.push("watchMem", [addr, opts]); }
     pause(): this { return this.push("pause", []); }

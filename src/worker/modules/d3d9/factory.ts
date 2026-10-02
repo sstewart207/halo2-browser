@@ -265,6 +265,52 @@ export function createFactoryExports(): Record<string, ThunkImplementation> {
         }
     };
 
+    exports['Direct3DCreate9Ex'] = (_ctx, _mem, args) => {
+        const [sdkVersion, ppObject] = args;
+        if (!ppObject || !Mem.writeUint32(ppObject, 0)) return D3DERR_INVALIDCALL;
+        if (sdkVersion !== 32) return 0x8876086a; // D3DERR_NOTAVAILABLE
+        try {
+            const vtable = getVTables()['IDirect3D9Ex']?.address;
+            if (!vtable) return 0x8876086a;
+            const object = createObject('IDirect3D9Ex', vtable);
+            Mem.writeUint32(ppObject, object);
+            Logger.log(LogCategory.D3D9, `Direct3DCreate9Ex -> 0x${object.toString(16)}`);
+            return D3D_OK;
+        } catch (error) {
+            Logger.error(LogCategory.D3D9, `Direct3DCreate9Ex failed: ${error}`);
+            return 0x8007000e; // E_OUTOFMEMORY
+        }
+    };
+
+    function filteredModes(adapter: number, filter: number): D3D9Mode[] {
+        if (adapter !== 0 || !filter || Mem.readUint32(filter) !== 12) return [];
+        const scanline = Mem.readUint32(filter + 8);
+        // This virtual display exposes progressive scanout only.
+        if (scanline !== 0 && scanline !== 1) return [];
+        return buildModeList(Mem.readUint32(filter + 4) ?? 0);
+    }
+    function writeModeEx(ptr: number, mode: D3D9Mode): boolean {
+        return !!ptr && Mem.readUint32(ptr) === 24 &&
+            writeDisplayMode(ptr + 4, mode) && Mem.writeUint32(ptr + 20, 1);
+    }
+    exports['IDirect3D9Ex_GetAdapterModeCountEx'] = (_ctx, _mem, args) =>
+        filteredModes(args[1], args[2]).length;
+    exports['IDirect3D9Ex_EnumAdapterModesEx'] = (_ctx, _mem, args) => {
+        const mode = filteredModes(args[1], args[2])[args[3]];
+        return mode && writeModeEx(args[4], mode) ? D3D_OK : D3DERR_INVALIDCALL;
+    };
+    exports['IDirect3D9Ex_GetAdapterDisplayModeEx'] = (_ctx, _mem, args) => {
+        if (args[1] !== 0) return D3DERR_INVALIDCALL;
+        const config = EmulatorConfig.getInstance().screenResolution;
+        if (args[2] && !writeModeEx(args[2], {
+            width: config.width, height: config.height,
+            refreshRate: config.refreshRate || 60, format: getFormatForBpp(config.bpp),
+        })) return D3DERR_INVALIDCALL;
+        return !args[3] || Mem.writeUint32(args[3], 1) ? D3D_OK : D3DERR_INVALIDCALL;
+    };
+    // Cross-API LUID identity is not modeled yet. Return explicit unsupported.
+    exports['IDirect3D9Ex_GetAdapterLUID'] = () => 0x8876086a;
+
     // Helper functions for other modules (not exported)
 
     return exports;

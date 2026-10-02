@@ -210,6 +210,8 @@ export interface WgbManifest {
          * writes its autosave state under data\database\levels\autosave.
          */
         createDirs?: string[];
+        /** Exact DLL filenames to execute from this private bundle instead of HLE. */
+        nativeDlls?: string[];
         /**
          * Persist/ephemeral policy (the ".gitignore" analog). Default is PERSIST: every guest
          * write survives unless its (overlay-relative, case-insensitive) path matches a global default

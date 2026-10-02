@@ -18,6 +18,13 @@ const makeFunc = (name: string, argCount: number, overrides: Partial<FunctionDes
 export const gdi32Module: ModuleDescriptor = {
     name: "gdi32",
     functions: [
+        makeFunc("TranslateCharsetInfo", 3),
+        makeFunc("GetOutlineTextMetricsA", 3),
+        makeFunc("GetGlyphOutlineW", 7),
+        makeFunc("GetGlyphOutlineA", 7),
+        makeFunc("GetFontLanguageInfo", 1),
+        makeFunc("GetCharacterPlacementW", 6),
+        makeFunc("GetCharacterPlacementA", 6),
         makeFunc("GetStockObject", 1),
         makeFunc("TextOut", 5),
         makeFunc("SetBkMode", 2),

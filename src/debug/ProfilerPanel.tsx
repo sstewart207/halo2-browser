@@ -1,3 +1,4 @@
+import diagnostics from "./Diagnostics.module.css";
 import React, { useEffect, useState, useRef, useCallback } from "react";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -776,12 +777,13 @@ export default function ProfilerPanel({ isOpen, onClose, worker }: ProfilerPanel
     const formatMs = (value: number) => value.toFixed(2);
 
     return (
-        <div style={{
+        <div className={diagnostics.toolPanel} style={{
             position: "fixed",
             top: 10,
             right: 10,
-            width: 600,
-            maxHeight: "95vh",
+            width: "min(600px, calc(100vw - 20px))",
+            height: "min(800px, calc(100dvh - 20px))",
+            maxHeight: "calc(100dvh - 20px)",
             backgroundColor: "#1a1a2e",
             border: "1px solid #4a4a6a",
             borderRadius: 8,
@@ -927,7 +929,7 @@ export default function ProfilerPanel({ isOpen, onClose, worker }: ProfilerPanel
             )}
 
             {/* Content Area */}
-            <div style={{ flex: 1, overflowY: "auto" }}>
+            <div style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: "auto" }}>
                 {activeTab === "timeline" && (
                     <div>
                         {/* Category Legend */}

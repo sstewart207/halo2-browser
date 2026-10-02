@@ -487,6 +487,11 @@ export const exports: Record<string, ThunkImplementation> = (() => {
         const hTemplateFile = args[6]; // unused
 
         const filename = lpFileName ? readStringA(mem, lpFileName) : '';
+        if (!filename || filename.length === 0) {
+            Logger.log(LogCategory.KERNEL32, `CreateFileA: empty filename, failing with ERROR_PATH_NOT_FOUND`);
+            System.getInstance().scheduler.setLastError(ERROR_PATH_NOT_FOUND);
+            return INVALID_HANDLE_VALUE;
+        }
         Logger.log(LogCategory.KERNEL32, `CreateFileA("${filename}", access=0x${dwDesiredAccess.toString(16)}, disposition=${dwCreationDisposition})`);
 
         // Check for Windows special devices before VFS
@@ -677,6 +682,11 @@ export const exports: Record<string, ThunkImplementation> = (() => {
 
         // For simplicity, convert wide string to ASCII
         const filename = lpFileName ? readStringW(mem, lpFileName) : '';
+        if (!filename || filename.length === 0) {
+            Logger.log(LogCategory.KERNEL32, `CreateFileW: empty filename, failing with ERROR_PATH_NOT_FOUND`);
+            System.getInstance().scheduler.setLastError(ERROR_PATH_NOT_FOUND);
+            return INVALID_HANDLE_VALUE;
+        }
         if (filename.toLowerCase().endsWith('.bmp')) {
             Logger.log(LogCategory.KERNEL32, `CreateFileW BMP: "${filename}", 0x${dwDesiredAccess.toString(16)}, 0x${dwCreationDisposition.toString(16)}`);
         } else {
@@ -706,7 +716,8 @@ export const exports: Record<string, ThunkImplementation> = (() => {
 
             if (!vfsHandle) {
                 Logger.verbose(LogCategory.KERNEL32, `CreateFileW: file not found or cannot be opened`);
-                System.getInstance().scheduler.setLastError(ERROR_FILE_NOT_FOUND);
+                const err = vfs.classifyOpenFailure(filename, dwCreationDisposition);
+                System.getInstance().scheduler.setLastError(err);
                 return INVALID_HANDLE_VALUE;
             }
 
@@ -1746,6 +1757,36 @@ export const exports: Record<string, ThunkImplementation> = (() => {
         }
     };
 
+    // DWORD GetFinalPathNameByHandleW(HANDLE hFile, LPWSTR lpszFilePath, DWORD cchFilePath, DWORD dwFlags)
+    // Default (VOLUME_NAME_DOS) form is "\\?\C:\dir\file". Returns the length without the NUL, or the
+    // required length including the NUL when the buffer is too small; 0 on failure.
+    exports['GetFinalPathNameByHandleW'] = (ctx, mem, args) => {
+        const hFile = args[0];
+        const lpszFilePath = args[1];
+        const cchFilePath = args[2];
+        const dwFlags = args[3];
+        const VOLUME_NAME_NONE = 0x4;
+        const scheduler = System.getInstance().scheduler;
+
+        const fileHandle = System.getInstance().resourceProvider.getFileHandle(hFile);
+        const vfsPath = fileHandle ? (fileHandle as FileHandleWrapper).vfsHandle?.path : undefined;
+        if (!vfsPath) {
+            scheduler.setLastError(6); // ERROR_INVALID_HANDLE
+            return 0;
+        }
+
+        const resolved = System.getInstance().fileSystem.resolvePath(vfsPath).replace(/\//g, '\\');
+        const text = (dwFlags & VOLUME_NAME_NONE) ? resolved.replace(/^[A-Za-z]:/, '') : `\\\\?\\${resolved}`;
+        if (cchFilePath < text.length + 1 || !lpszFilePath) {
+            return text.length + 1;
+        }
+        const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
+        for (let i = 0; i < text.length; i++) view.setUint16(lpszFilePath + i * 2, text.charCodeAt(i), true);
+        view.setUint16(lpszFilePath + text.length * 2, 0, true);
+        scheduler.setLastError(0);
+        return text.length;
+    };
+
     // All ANSI functions (ending with 'A') use UTF-8 encoding instead of system codepage (Windows-1251, Latin1, etc.)
     // This is a simplification for the emulator. Real Windows uses the current system ANSI codepage,
     // which may affect legacy applications with non-ASCII filenames.
@@ -1816,6 +1857,36 @@ export const exports: Record<string, ThunkImplementation> = (() => {
         System.getInstance().scheduler.setLastError(ERROR_FILE_NOT_FOUND);
         return INVALID_FILE_ATTRIBUTES;
     };
+
+    // BOOL GetFileAttributesEx(path, GET_FILEEX_INFO_LEVELS, WIN32_FILE_ATTRIBUTE_DATA*)
+    // The VFS keeps no timestamps, so the three FILETIMEs are reported as zero.
+    const getFileAttributesEx = (mem: Uint8Array, filename: string, level: number, lpInfo: number): number => {
+        const scheduler = System.getInstance().scheduler;
+        if (level !== 0 || !lpInfo || lpInfo + 36 > mem.length) {
+            scheduler.setLastError(ERROR_INVALID_PARAMETER);
+            return 0;
+        }
+        const vfs = System.getInstance().fileSystem;
+        const resolved = vfs.resolvePath(filename);
+        const isDir = vfs.directoryExists(resolved);
+        if (!isDir && !vfs.fileExists(resolved)) {
+            scheduler.setLastError(ERROR_FILE_NOT_FOUND);
+            return 0;
+        }
+        const size = isDir ? 0 : vfs.getFileSize(filename);
+        const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
+        mem.fill(0, lpInfo, lpInfo + 36);
+        view.setUint32(lpInfo, isDir ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_ARCHIVE, true);
+        view.setUint32(lpInfo + 28, Math.floor(size / 0x100000000), true);
+        view.setUint32(lpInfo + 32, size >>> 0, true);
+        return 1;
+    };
+
+    exports['GetFileAttributesExA'] = (ctx, mem, args) =>
+        getFileAttributesEx(mem, args[0] ? readStringA(mem, args[0]) : '', args[1], args[2]);
+
+    exports['GetFileAttributesExW'] = (ctx, mem, args) =>
+        getFileAttributesEx(mem, args[0] ? readStringW(mem, args[0]) : '', args[1], args[2]);
 
     exports['SetFileAttributesA'] = (ctx, mem, args) => {
         const lpFileName = args[0];

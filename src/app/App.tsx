@@ -2541,6 +2541,7 @@ export default function App() {
       {/* Dev panel */}
       {devPanelOpen && (
         <DevPanel
+          worker={globalWorker}
           onLoadFile={handleDevLoadFile}
           onOpenSettings={() => setMainSettingsOpen(true)}
           onCaptureFrame={() => (window as any).captureFrame?.()}

@@ -69,7 +69,8 @@ export function findResourceInPE(
     mem: Uint8Array,
     moduleBase: number,
     resourceType: number | string,
-    resourceName: number | string
+    resourceName: number | string,
+    language?: number
 ): ResourceEntry | null {
     moduleBase = System.getInstance().process?.moduleRegistry?.resolvePeModuleBase(moduleBase)
         ?? (moduleBase === 0 ? DEFAULT_EXE_BASE : moduleBase);
@@ -149,9 +150,12 @@ export function findResourceInPE(
         return null;
     }
 
-    // Read first language entry
-    const langEntryPtr = langDir + 16; // After directory header
-    const langEntryData = view.getUint32(langEntryPtr + 4, true);
+    // An explicit language must match its resource entry. Language-neutral
+    // callers retain the existing default-language selection.
+    const langEntryData = language
+        ? findDirectoryEntry(view, resourceDirBase, langDir, language & 0xffff)
+        : view.getUint32(langDir + 20, true);
+    if (langEntryData === null) return null;
 
     // This should NOT have high bit set (it's a data entry, not another directory)
     if (langEntryData & 0x80000000) {
@@ -543,7 +547,7 @@ export const exports: Record<string, ThunkImplementation> = {
 
         if (!entry) {
             Logger.log(LogCategory.KERNEL32,
-                `FindResourceW: Resource ${typeDesc}/${nameDesc} not found`);
+                `FindResourceW: Resource ${typeDesc}/${nameDesc} not found in module 0x${hModule.toString(16)}`);
             return 0;
         }
 
@@ -576,8 +580,7 @@ export const exports: Record<string, ThunkImplementation> = {
         Logger.verbose(LogCategory.KERNEL32,
             `FindResourceExA(hModule=0x${hModule.toString(16)}, type=${resourceType}, name=${resourceName}, lang=${wLanguage})`);
 
-        // For now, ignore language and use same logic as FindResourceA
-        const entry = findResourceInPE(mem, hModule, resourceType, resourceName);
+        const entry = findResourceInPE(mem, hModule, resourceType, resourceName, wLanguage);
 
         if (!entry) {
             return 0;
@@ -586,6 +589,25 @@ export const exports: Record<string, ThunkImplementation> = {
         const hrsrc = nextResourceHandle++;
         resourceCache.set(hrsrc, entry);
         return hrsrc;
+    },
+
+    'FindResourceExW': (_ctx, mem, args) => {
+        // Ex APIs take type before name, unlike FindResourceW.
+        const [hModule, lpType, lpName, language] = args;
+        const resourceType = interpretResourceIdW(mem, lpType);
+        const resourceName = interpretResourceIdW(mem, lpName);
+        const entry = findResourceInPE(mem, hModule, resourceType, resourceName, language);
+        if (!entry) {
+            System.getInstance().scheduler.setLastError(language ? 1815 : 1814);
+            Logger.log(LogCategory.KERNEL32,
+                `FindResourceExW: Resource ${resourceType}/${resourceName}, language=${language} not found`);
+            return 0;
+        }
+        const handle = nextResourceHandle++;
+        resourceCache.set(handle, entry);
+        Logger.log(LogCategory.KERNEL32,
+            `FindResourceExW: Found ${resourceType}/${resourceName}, language=${language} -> HRSRC=0x${handle.toString(16)}`);
+        return handle;
     },
 
     /**
@@ -669,13 +691,14 @@ export const exports: Record<string, ThunkImplementation> = {
             return 0;
         }
 
-        // LoadResource returns a handle that can be passed to LockResource
-        // In Win32, this is essentially the same as the HRSRC for memory-mapped resources
-        // We return the HRSRC itself since LockResource will look it up
+        // Win32's resource HGLOBAL points into the mapped image. Native system
+        // DLLs also read that value directly; an invented HRSRC cache ID is unsafe.
+        const dataAddress = entry.moduleBase + entry.dataRVA;
+        resourceCache.set(dataAddress, entry);
         Logger.verbose(LogCategory.KERNEL32,
-            `LoadResource: Returning handle 0x${hResInfo.toString(16)} for resource at RVA 0x${entry.dataRVA.toString(16)}`);
+            `LoadResource: Returning mapped data 0x${dataAddress.toString(16)}`);
 
-        return hResInfo;
+        return dataAddress;
     },
 
     /**

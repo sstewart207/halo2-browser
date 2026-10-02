@@ -1,0 +1,78 @@
+/* Collapsible live-stats strip inside the developer tools panel. */
+.panel {
+  margin-top: 8px;
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  background: var(--ink-900);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: 0;
+  color: var(--fg-1);
+  font-family: var(--font-body);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.header:hover {
+  background: var(--ink-800);
+}
+
+.header:focus-visible {
+  outline: 2px solid var(--line-3);
+  outline-offset: -2px;
+}
+
+.chevron {
+  display: inline-block;
+  width: 1em;
+  color: var(--fg-2);
+}
+
+.summary {
+  margin-left: auto;
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+}
+
+.body {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 16px;
+  row-gap: 4px;
+  padding: 6px 10px 10px;
+  border-top: 1px solid var(--line-1);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.row {
+  display: contents;
+}
+
+.label {
+  color: var(--fg-2);
+}
+
+.value {
+  color: var(--fg-1);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .body {
+    grid-template-columns: 1fr;
+    row-gap: 0;
+  }
+
+  .label {
+    margin-top: 6px;
+  }
+}

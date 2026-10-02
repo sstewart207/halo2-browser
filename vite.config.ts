@@ -180,7 +180,10 @@ export default defineConfig({
     strictPort: true,
     ...useSsl ? { https: true } : {},
     hmr: false,
-    headers: coopCoepHeaders
+    headers: coopCoepHeaders,
+    watch: {
+      ignored: ["**/tmp/**", "**/logs/**", "**/scratch/**", "**/.git/**"]
+    }
   },
   preview: {
     host: true,

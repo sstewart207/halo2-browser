@@ -59,6 +59,10 @@ export function registerCrtMathExports(exports: Record<string, ThunkImplementati
     exports["_CIcos"] = () => ci1("_CIcos", Math.cos, 0);
     exports["_CIsin"] = () => ci1("_CIsin", Math.sin, 0);
     exports["_CIexp"] = () => ci1("_CIexp", Math.exp, 0);
+    exports["_CIcosh"] = () => ci1("_CIcosh", Math.cosh, 1);
+    exports["_CIsinh"] = () => ci1("_CIsinh", Math.sinh, 0);
+    exports["_CItanh"] = () => ci1("_CItanh", Math.tanh, 0);
+    exports["_fpclass"] = (_c, _m, a) => classifyCrtDouble(a[0], a[1]);
     exports["_CIacos"] = () => ci1("_CIacos", Math.acos, 0);
     exports["_CIasin"] = () => ci1("_CIasin", Math.asin, 0);
     exports["_CIlog10"] = () => ci1("_CIlog10", Math.log10, 0);
@@ -142,4 +146,17 @@ export function registerCrtMathExports(exports: Record<string, ThunkImplementati
         fpuPush(host.process.v86, fracPart);
         return 0;
     };
+}
+
+/** MSVCRT _FPCLASS_* flags, preserving signed zero and signaling-NaN bits. */
+export function classifyCrtDouble(lo: number, hi: number): number {
+    const negative = (hi >>> 31) !== 0;
+    const exponent = (hi >>> 20) & 0x7ff;
+    const fraction = (hi & 0xfffff) !== 0 || (lo >>> 0) !== 0;
+    if (exponent === 0x7ff) {
+        if (fraction) return hi & 0x80000 ? 2 : 1;
+        return negative ? 4 : 512;
+    }
+    if (exponent === 0) return fraction ? (negative ? 16 : 128) : (negative ? 32 : 64);
+    return negative ? 8 : 256;
 }

@@ -608,6 +608,7 @@ export class TextureStore {
     isDirty(index: number): boolean { return this.dirtyFlags[index] !== 0; }
     isLocked(index: number): boolean { return this.lockedPtrs[index] !== -1; }
     getLockedPtr(index: number): number { return this.lockedPtrs[index]; }
+    getGuestPtr(index: number): number { return this.guestPtrs[index]; }
 
     setGpuTexture(index: number, texture: GPUTexture, view: GPUTextureView): void {
         this.gpuTextures[index] = texture;

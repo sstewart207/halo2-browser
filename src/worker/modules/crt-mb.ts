@@ -4,16 +4,52 @@
  */
 import { ThunkImplementation } from "../core/thunking/thunk-dispatcher";
 import { Mem } from "../core/memory/mem-accessor";
+import { getCodePageDecoder } from "./codepage-utils";
+import { asBufferSource } from "../../dom-buffer";
+
+/** Returns SIZE_MAX for an invalid sequence; CP 0 denotes the CRT C locale. */
+export function multibyteCharacterLength(bytes: Uint8Array, codePage: number): number {
+    if (codePage === 0) return bytes.length;
+    try {
+        const dbcsLabels: Record<number, string> = { 932: "shift_jis", 936: "gbk", 949: "euc-kr", 950: "big5" };
+        // The shared ANSI decoder's unknown-page fallback is SBCS; don't apply that
+        // fallback to a DBCS locale when validating a character sequence.
+        if (codePage === 1361) return 0xffffffff; // Johab is not provided by TextDecoder.
+        const decoder = dbcsLabels[codePage] ? new TextDecoder(dbcsLabels[codePage]) : getCodePageDecoder(codePage);
+        const text = decoder instanceof TextDecoder
+            ? new TextDecoder(decoder.encoding, { fatal: true, ignoreBOM: true }).decode(asBufferSource(bytes))
+            : decoder.decode(asBufferSource(bytes));
+        return Array.from(text).length;
+    } catch { return 0xffffffff; }
+}
 
 export interface CrtMbHost {
     readCString(ptr: number, maxLen: number): string;
     compareCString(aPtr: number, bPtr: number, ignoreCase: boolean, max: number): number;
     ischartype(ch: number, mask: number): number;
     setMbcp(codepage: number): number;
+    localeCodePage(): number;
+    setErrno(code: number): void;
+    invalidParameter(ctx: Parameters<ThunkImplementation>[0], mem: Uint8Array): void;
 }
 
 export function registerCrtMbExports(exports: Record<string, ThunkImplementation>, host: CrtMbHost): void {
     const chr = (ptr: number, i: number) => Mem.readUint8(ptr + i) ?? 0;
+
+    exports["_mbstrlen"] = (ctx, mem, a) => {
+        const ptr = (a[0] ?? 0) >>> 0;
+        if (!ptr || ptr >= mem.length) {
+            host.setErrno(22); // EINVAL
+            host.invalidParameter(ctx, mem);
+            return 0xffffffff;
+        }
+        let end = ptr;
+        while (end < mem.length && mem[end] !== 0) end++;
+        if (end === mem.length) { host.setErrno(42); return 0xffffffff; } // EILSEQ
+        const count = multibyteCharacterLength(mem.subarray(ptr, end), host.localeCodePage());
+        if (count === 0xffffffff) host.setErrno(42);
+        return count;
+    };
 
     exports["_mbschr"] = (_c, _m, a) => {
         const str = a[0] ?? 0;

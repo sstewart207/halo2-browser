@@ -180,19 +180,19 @@ export default function FrameAnalysisPanel({ isOpen, onClose, worker }: Props) {
         overlay: {
             position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
             zIndex: 10000, display: "flex", justifyContent: "center", alignItems: "flex-start",
-            paddingTop: 24, backgroundColor: "rgba(0,0,0,0.6)",
+            padding: 8, backgroundColor: "rgba(0,0,0,0.6)",
         },
         panel: {
-            width: "95vw", maxWidth: 1400, maxHeight: "90vh",
+            width: "100%", maxWidth: 1400, maxHeight: "calc(100dvh - 16px)", minWidth: 0, minHeight: 0, overflow: "hidden",
             backgroundColor: "#1a1a2e", color: "#e0e0e0", borderRadius: 8,
             fontFamily: "monospace", fontSize: 12, display: "flex", flexDirection: "column",
             border: "1px solid #333",
         },
         header: {
-            display: "flex", justifyContent: "space-between", alignItems: "center",
+            display: "flex", flexShrink: 0, flexWrap: "wrap", gap: 8, justifyContent: "space-between", alignItems: "center",
             padding: "10px 16px", borderBottom: "1px solid #333",
         },
-        body: { overflow: "auto", flex: 1, padding: "8px 12px" },
+        body: { overflow: "auto", flex: 1, minHeight: 0, minWidth: 0, padding: "8px 12px" },
         btn: {
             padding: "4px 12px", border: "1px solid #555", borderRadius: 4,
             backgroundColor: "#252540", color: "#e0e0e0", cursor: "pointer", fontSize: 12,

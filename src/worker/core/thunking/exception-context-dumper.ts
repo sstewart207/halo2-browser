@@ -11,6 +11,7 @@ import { Logger, LogCategory } from '../logger';
 import { System } from '../system';
 import { findSehWindowHit } from '../seh-dispatch';
 import { getStackGuardViolations, getStackGuardViolationCount } from '../memory/stack-write-guard';
+import { MEM_HEAP_HI_SIZE } from '../cpu/emulator-config';
 
 // Fault-region bounds (mirror thunk-dispatcher.ts) — used only to label addresses in the dump.
 const BOOTLOADER_START = 0x7c00;
@@ -437,6 +438,9 @@ export function dumpExceptionContext(d: any, marker: number, cpu: any): void {
                     if (addr < 0x24000000) return 'RESERVED';
                     if (addr < 0x2c000000) return 'ROM';
                     if (addr < 0x40000000) return 'SURFACE';
+                    // HEAP_HI overflow arena (present only when RAM > 1GB); the
+                    // default 1GB layout has nothing mapped here, so keep 'high'.
+                    if (addr < 0x40000000 + MEM_HEAP_HI_SIZE) return 'HEAP_HI';
                     return 'high';
                 };
                 const lines: string[] = [];

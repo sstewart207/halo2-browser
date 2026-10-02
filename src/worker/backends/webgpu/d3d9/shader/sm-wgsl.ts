@@ -73,7 +73,8 @@ function applySwizzle(expr: string, sw: number): string {
 }
 
 /** Build a vec4<f32> WGSL expression for a source operand (swizzle + modifiers). */
-export function srcExpr(src: SmSource, ctx: ShaderCtx): string {
+export function srcExpr(src: SmSource | undefined, ctx: ShaderCtx): string {
+    if (!src || !src.reg) return "vec4<f32>(0.0)";
     let e = ctx.readReg(src.reg);
     const m = src.modifier;
 
@@ -143,8 +144,9 @@ export function maskCount(mask: number): number {
  * `rows` rows starting at src1's register; `dim` = 3 (dot3) or 4 (dot4).
  */
 function matrixResult(instr: SmInstruction, ctx: ShaderCtx, rows: number, dim: number): string {
-    const s0 = srcExpr(instr.src[0], ctx);
-    const base = instr.src[1].reg;
+    const s0 = instr.src[0] ? srcExpr(instr.src[0], ctx) : "vec4<f32>(0.0)";
+    const base = instr.src[1]?.reg;
+    if (!base) return "vec4<f32>(0.0)";
     const rowExprs: string[] = [];
     for (let r = 0; r < 4; r++) {
         if (r < rows) {

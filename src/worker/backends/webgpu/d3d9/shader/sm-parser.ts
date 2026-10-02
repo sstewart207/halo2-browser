@@ -243,13 +243,16 @@ export function parseShader(tokens: Uint32Array): SmProgram {
             }
         }
 
-        const srcCount = Math.max(0, length - consumed);
         const src: SmSource[] = [];
-        for (let s = 0; s < srcCount; s++) {
+        while (consumed < length && i < tokens.length) {
             const srcToken = tokens[i++] >>> 0;
+            consumed += 1;
             const operand = decodeSrc(srcToken);
             // SM2+ relative addressing consumes an extra token (the rel register).
-            if (major >= 2 && operand.reg.relative) i++;
+            if (major >= 2 && operand.reg.relative && consumed < length && i < tokens.length) {
+                i++;
+                consumed += 1;
+            }
             trackReg(operand.reg);
             if (operand.reg.type === RegType.SAMPLER) samplersUsed.add(operand.reg.num);
             src.push(operand);

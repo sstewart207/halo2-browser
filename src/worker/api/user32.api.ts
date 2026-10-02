@@ -573,6 +573,7 @@ export const user32Module: ModuleDescriptor = {
         makeFunc("SetWindowWord", 3),
         makeFunc("ShowWindowAsync", 2),
         makeFunc("TranslateMDISysAccel", 2),
-        makeFunc("wsprintfW", 3),
+        makeFunc("wsprintfW", 16, { callingConvention: "cdecl" }),
+        makeFunc("wvsprintfW", 3),
     ]
 };

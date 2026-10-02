@@ -386,7 +386,8 @@ export function registerStateCommands(svc: HarnessService): void {
     svc.register("faults", (args) => {
         const n = typeof args[0] === "number" ? (args[0] as number) : 16;
         const hx = (v: number) => "0x" + (v >>> 0).toString(16);
-        return faultRecorder.recent(n).map((f) => ({
+        const first = (args[1] as { first?: boolean } | undefined)?.first === true;
+        return (first ? faultRecorder.first(n) : faultRecorder.recent(n)).map((f) => ({
             ts: Math.round(f.ts),
             eip: hx(f.eip),
             faultAddr: hx(f.faultAddr),

@@ -230,7 +230,7 @@ export default function MemWatchBody({ worker }: MemWatchBodyProps) {
       </div>
 
       {/* Probe Results */}
-      <div style={{ padding: 10, borderBottom: "1px solid #4a4a6a", flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+      <div style={{ padding: 10, borderBottom: "1px solid #4a4a6a", flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
           <span style={{ fontWeight: "bold", color: "#888" }}>
             Probe Results ({probes.length})
@@ -286,7 +286,7 @@ export default function MemWatchBody({ worker }: MemWatchBodyProps) {
       </div>
 
       {/* Large Write Events */}
-      <div style={{ padding: 10, flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+      <div style={{ padding: 10, flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
           <span style={{ fontWeight: "bold", color: "#888" }}>
             Large Write Events ({largeWrites.length})

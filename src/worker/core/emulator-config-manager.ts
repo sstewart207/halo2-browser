@@ -330,6 +330,12 @@ export class EmulatorConfig {
     // Directories mkdir-p'd in the VFS on every boot (installer-created empty dirs
     // that store-only ZIP packing loses; e.g. Max Payne's <install>\data tree)
     public createDirs: string[] = [];
+    public nativeDlls: string[] = [];
+
+    public prefersNativeDll(name: string): boolean {
+        const token = name.replace(/\\/g, "/").split("/").pop()!.toLowerCase().replace(/\.dll$/, "");
+        return this.nativeDlls.includes(token);
+    }
 
     /**
      * Guarded Inner-Loop HLE — signature-detects known
@@ -586,6 +592,9 @@ export class EmulatorConfig {
             );
         }
 
+        this.nativeDlls = (config.nativeDlls ?? []).map(name =>
+            name.replace(/\\/g, "/").split("/").pop()!.toLowerCase().replace(/\.dll$/, "")
+        ).filter(Boolean);
         // Apply createDirs list (installer-created empty dirs lost by ZIP packing)
         if (config.createDirs && config.createDirs.length > 0) {
             this.createDirs = config.createDirs
@@ -627,6 +636,7 @@ export class EmulatorConfig {
         this.deleteOnBoot = [];
         this.writeFiles = [];
         this.createDirs = [];
+        this.nativeDlls = [];
         this.ue1 = false;
         this.ue1UserDir = null;
         // hleLibs intentionally NOT reset — it's a dev/debug toggle that the
@@ -656,14 +666,20 @@ export class EmulatorConfig {
 
     // Validation helpers
     private validateRam(ram: number): number {
-        // Minimum 64MB, maximum 2GB
+        // Minimum 64MB, maximum 4GB.
+        // Halo 2 (Project Cartographer) loads ~614MB of map data plus ~230MB of
+        // VirtualAlloc arenas and streams textures on top, landing near 1.5GB of guest
+        // heap — so the old 2GB cap left it exactly on the edge and it still threw
+        // std::bad_alloc. The guest is 32-bit, but giving it more ADDRESS SPACE than a
+        // stock Win32 process would get is harmless: nothing in the game reasons about
+        // "how much can I possibly have", and the emulator, not Windows, is the limit.
         const minRam = 64 * 1024 * 1024;
-        const maxRam = 2 * 1024 * 1024 * 1024;
+        const maxRam = 4 * 1024 * 1024 * 1024;
         let validated = Math.max(minRam, Math.min(maxRam, ram));
         if (validated !== ram) {
             Logger.warn(
                 LogCategory.SYSTEM,
-                `EmulatorConfig: RAM value ${(ram / 1024 / 1024).toFixed(0)} MB clamped to ${(validated / 1024 / 1024).toFixed(0)} MB (min: 64MB, max: 2GB)`
+                `EmulatorConfig: RAM value ${(ram / 1024 / 1024).toFixed(0)} MB clamped to ${(validated / 1024 / 1024).toFixed(0)} MB (min: 64MB, max: 4GB)`
             );
         }
         // v86 identity-maps guest RAM in mem8[0..memory_size). Addresses >= memory_size
