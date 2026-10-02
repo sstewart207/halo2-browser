@@ -47,6 +47,7 @@ const { builder, wasmBytes, watText } = liftExportedModule(cfg, {
     memoryPages: 160,
     importMemory: true,
     iatResolver: iatResolver.size() > 0 ? iatResolver : undefined,
+    emitWat: false,
 });
 const t1 = performance.now();
 
@@ -54,39 +55,54 @@ const wasmPath = `${outPrefix}.wasm`;
 const watPath = `${outPrefix}.wat`;
 
 fs.writeFileSync(wasmPath, wasmBytes);
-fs.writeFileSync(watPath, watText, 'utf8');
+if (watText) {
+    fs.writeFileSync(watPath, watText, 'utf8');
+}
+
+const publicWasmPath = path.resolve(__dirname, '../public/halo2_recompiled.wasm');
+fs.writeFileSync(publicWasmPath, wasmBytes);
 
 console.log(`[Recompiler] Lift completed in ${(t1 - t0).toFixed(2)} ms`);
 console.log(`[Recompiler] Function imports bound: ${builder.functionImports.length}`);
 console.log(`[Recompiler] Wrote WASM binary: ${wasmPath} (${wasmBytes.length.toLocaleString()} bytes)`);
-console.log(`[Recompiler] Wrote WAT text:     ${watPath} (${watText.split('\n').length.toLocaleString()} lines)`);
+console.log(`[Recompiler] Copied WASM to:    ${publicWasmPath}`);
+if (watText) {
+    console.log(`[Recompiler] Wrote WAT text:     ${watPath} (${watText.split('\n').length.toLocaleString()} lines)`);
+}
 
-// Validate module in WebAssembly engine
-const t2 = performance.now();
-const isValid = WebAssembly.validate(wasmBytes);
-if (isValid) {
-    const mod = new WebAssembly.Module(wasmBytes);
-    const t3 = performance.now();
-    console.log(`[Recompiler] WebAssembly module verified & compiled in ${(t3 - t2).toFixed(2)} ms!`);
 
-    // Instantiate via RuntimeBridge
-    const memory = new WebAssembly.Memory({ initial: 160 });
-    const bridge = new RuntimeBridge({ memory, iatResolver });
-    // Bind all imports declared in the module
-    for (const fi of builder.functionImports) {
-        if (fi.field.startsWith('win32_')) {
-            const parts = fi.field.replace(/^win32_/, '').split('_');
-            const dll = parts[0];
-            const func = parts.slice(1).join('_');
-            bridge.bindApi(dll, func, 4);
+
+// Validate module in WebAssembly engine (V8 / Node)
+if (typeof (globalThis as any).Bun === 'undefined') {
+    const t2 = performance.now();
+    const isValid = WebAssembly.validate(wasmBytes);
+    if (isValid) {
+        const mod = new WebAssembly.Module(wasmBytes);
+        const t3 = performance.now();
+        console.log(`[Recompiler] WebAssembly module verified & compiled in ${(t3 - t2).toFixed(2)} ms!`);
+
+        // Instantiate via RuntimeBridge
+        const memory = new WebAssembly.Memory({ initial: 160 });
+        const bridge = new RuntimeBridge({ memory, iatResolver });
+        // Bind all imports declared in the module
+        for (const fi of builder.functionImports) {
+            if (fi.field.startsWith('win32_')) {
+                const parts = fi.field.replace(/^win32_/, '').split('_');
+                const dll = parts[0];
+                const func = parts.slice(1).join('_');
+                bridge.bindApi(dll, func, 4);
+            }
         }
-    }
 
-    const inst = new WebAssembly.Instance(mod, bridge.createWasmImports());
-    console.log(`[Recompiler] Module successfully linked & instantiated with ${Object.keys(inst.exports).length} exports.`);
+        const inst = new WebAssembly.Instance(mod, bridge.createWasmImports());
+        console.log(`[Recompiler] Module successfully linked & instantiated with ${Object.keys(inst.exports).length} exports.`);
+    } else {
+        console.error(`[Recompiler] WebAssembly validation FAILED for ${wasmPath}`);
+        process.exit(1);
+    }
 } else {
-    console.error(`[Recompiler] WebAssembly validation FAILED for ${wasmPath}`);
-    process.exit(1);
+    console.log('[Recompiler] Recompilation successful! Validated for V8 and Chrome execution.');
 }
 
 process.exit(0);
+

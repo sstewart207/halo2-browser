@@ -10,6 +10,8 @@ import { RuntimeBridge } from './runtime-bridge';
 export interface RecompilerRunOptions {
     system: System;
     memory: WebAssembly.Memory;
+    memoryOffset?: number;
+    memoryLength?: number;
     wasmBytes: ArrayBuffer | Uint8Array;
     stackTop: number;
     stackBase?: number;
@@ -36,14 +38,15 @@ export class RecompilerRunner {
     }
 
     async start(options: RecompilerRunOptions): Promise<any> {
-        const { system, memory, wasmBytes, stackTop, stackBase = stackTop - 0x100000, entryName = '___tmainCRTStartup', logCalls = false } = options;
+        const { system, memory, wasmBytes, stackTop, stackBase = stackTop - 0x100000, entryName = '___tmainCRTStartup', logCalls = false, memoryOffset = 0, memoryLength } = options;
+        Logger.log(LogCategory.SYSTEM, `[Recompiler] Guest RAM offset=0x${memoryOffset.toString(16)}, length=${memoryLength ?? memory.buffer.byteLength}`);
 
         Logger.log(LogCategory.SYSTEM, `[Recompiler] Preparing AOT WebAssembly execution (${wasmBytes.byteLength.toLocaleString()} bytes)...`);
 
         // Initialize 4KB TEB page at 0x00030000 and PEB at 0x00031000
         const tebBase = 0x00030000;
         const pebBase = 0x00031000;
-        const view = new DataView(memory.buffer);
+        const view = new DataView(memory.buffer, memoryOffset, memoryLength);
         view.setUint32(tebBase + 0x00, 0xffffffff, true); // ExceptionList
         view.setUint32(tebBase + 0x04, stackTop, true);   // StackBase
         view.setUint32(tebBase + 0x08, stackBase, true);  // StackLimit
@@ -59,6 +62,8 @@ export class RecompilerRunner {
         // Create RuntimeBridge connected to the process dispatcher
         this.bridge = new RuntimeBridge({
             memory,
+            memoryOffset,
+            memoryLength,
             dispatcher: system.process?.dispatcher,
             logCalls,
         });
@@ -72,7 +77,7 @@ export class RecompilerRunner {
         if (importDirRVA && importDirSize) {
             let descOffset = imageBase + importDirRVA;
             const descEnd = descOffset + importDirSize;
-            const memBytes = new Uint8Array(memory.buffer);
+            const memBytes = new Uint8Array(memory.buffer, memoryOffset, memoryLength);
 
             const readAnsi = (addr: number): string => {
                 let str = '';
@@ -134,6 +139,11 @@ export class RecompilerRunner {
         // Instantiate
         this.instance = await WebAssembly.instantiate(mod, this.bridge.createWasmImports());
         const exports = this.instance.exports as any;
+        if (exports.guest_memory_base instanceof WebAssembly.Global) {
+            exports.guest_memory_base.value = memoryOffset;
+        } else if (memoryOffset !== 0) {
+            throw new Error('AOT module lacks guest_memory_base; rebuild before using offset guest RAM');
+        }
         this.bridge.registerExports(exports);
         Logger.log(LogCategory.SYSTEM, `[Recompiler] Module instantiated with ${Object.keys(exports).length} exports.`);
 

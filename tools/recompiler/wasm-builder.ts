@@ -92,6 +92,27 @@ export class WasmFunctionBuilder {
         this.locals.push(count, type);
     }
 
+    // Guest addresses stay guest-relative in registers; translate only at loads/stores.
+    guestMemoryBaseGlobal?: number;
+    guestStoreI32Local?: number;
+    guestStoreF32Local?: number;
+
+    private translateGuestAddress() {
+        if (this.guestMemoryBaseGlobal !== undefined) {
+            this.global_get(this.guestMemoryBaseGlobal);
+            this.i32_add();
+        }
+    }
+
+    private translateGuestStore(float: boolean = false) {
+        if (this.guestMemoryBaseGlobal === undefined) return;
+        const scratch = float ? this.guestStoreF32Local : this.guestStoreI32Local;
+        if (scratch === undefined) throw new Error('Guest memory store scratch local missing');
+        this.local_set(scratch);
+        this.translateGuestAddress();
+        this.local_get(scratch);
+    }
+
     // --- WASM Opcodes ---
 
     emitByte(b: number) {
@@ -127,8 +148,21 @@ export class WasmFunctionBuilder {
         this.watLines.push(`    local.tee ${idx}${name ? ` ;; ${name}` : ''}`);
     }
 
+    global_get(idx: number, name?: string) {
+        this.emitByte(0x23);
+        this.emitBytes(encodeULEB128(idx));
+        this.watLines.push(`    global.get ${idx}${name ? ` ;; ${name}` : ''}`);
+    }
+
+    global_set(idx: number, name?: string) {
+        this.emitByte(0x24);
+        this.emitBytes(encodeULEB128(idx));
+        this.watLines.push(`    global.set ${idx}${name ? ` ;; ${name}` : ''}`);
+    }
+
     // Memory Load / Store
     i32_load(offset: number = 0, align: number = 2) {
+        this.translateGuestAddress();
         this.emitByte(0x28);
         this.emitBytes(encodeULEB128(align));
         this.emitBytes(encodeULEB128(offset));
@@ -136,6 +170,7 @@ export class WasmFunctionBuilder {
     }
 
     i32_load8_u(offset: number = 0, align: number = 0) {
+        this.translateGuestAddress();
         this.emitByte(0x2D);
         this.emitBytes(encodeULEB128(align));
         this.emitBytes(encodeULEB128(offset));
@@ -143,6 +178,7 @@ export class WasmFunctionBuilder {
     }
 
     i32_load8_s(offset: number = 0, align: number = 0) {
+        this.translateGuestAddress();
         this.emitByte(0x2C);
         this.emitBytes(encodeULEB128(align));
         this.emitBytes(encodeULEB128(offset));
@@ -150,6 +186,7 @@ export class WasmFunctionBuilder {
     }
 
     i32_load16_u(offset: number = 0, align: number = 1) {
+        this.translateGuestAddress();
         this.emitByte(0x2F);
         this.emitBytes(encodeULEB128(align));
         this.emitBytes(encodeULEB128(offset));
@@ -157,6 +194,7 @@ export class WasmFunctionBuilder {
     }
 
     i32_load16_s(offset: number = 0, align: number = 1) {
+        this.translateGuestAddress();
         this.emitByte(0x2E);
         this.emitBytes(encodeULEB128(align));
         this.emitBytes(encodeULEB128(offset));
@@ -164,6 +202,7 @@ export class WasmFunctionBuilder {
     }
 
     i32_store(offset: number = 0, align: number = 2) {
+        this.translateGuestStore(false);
         this.emitByte(0x36);
         this.emitBytes(encodeULEB128(align));
         this.emitBytes(encodeULEB128(offset));
@@ -171,6 +210,7 @@ export class WasmFunctionBuilder {
     }
 
     i32_store8(offset: number = 0, align: number = 0) {
+        this.translateGuestStore(false);
         this.emitByte(0x3A);
         this.emitBytes(encodeULEB128(align));
         this.emitBytes(encodeULEB128(offset));
@@ -178,6 +218,7 @@ export class WasmFunctionBuilder {
     }
 
     i32_store16(offset: number = 0, align: number = 1) {
+        this.translateGuestStore(false);
         this.emitByte(0x3B);
         this.emitBytes(encodeULEB128(align));
         this.emitBytes(encodeULEB128(offset));
@@ -210,12 +251,14 @@ export class WasmFunctionBuilder {
         this.watLines.push(`    f32.const ${val}`);
     }
     f32_load(offset: number = 0, align: number = 2) {
+        this.translateGuestAddress();
         this.emitByte(0x2A);
         this.emitBytes(encodeULEB128(align));
         this.emitBytes(encodeULEB128(offset));
         this.watLines.push(`    f32.load offset=${offset}`);
     }
     f32_store(offset: number = 0, align: number = 2) {
+        this.translateGuestStore(true);
         this.emitByte(0x38);
         this.emitBytes(encodeULEB128(align));
         this.emitBytes(encodeULEB128(offset));
@@ -346,9 +389,16 @@ export class WasmModuleBuilder {
     functions: WasmFunctionBuilder[] = [];
     functionImports: Array<{ module: string; field: string; typeIdx: number; name?: string }> = [];
     exports: { name: string; kind: number; index: number }[] = [];
+    globals: Array<{ type: number; mut: number; initVal: number }> = [];
     memoryPages: number = 16;
     importMemory: boolean = false;
     exportMemory: boolean = true;
+
+    addGlobal(type: number = 0x7f, mut: number = 1, initVal: number = 0): number {
+        const idx = this.globals.length;
+        this.globals.push({ type, mut, initVal });
+        return idx;
+    }
 
     addSignature(params: number[], results: number[]): number {
         // Find existing matching signature
@@ -439,6 +489,17 @@ export class WasmModuleBuilder {
                 ...encodeULEB128(this.memoryPages)
             ];
             writer.write(createSection(5, memPayload));
+        }
+
+        // 6. Global Section (ID 6)
+        if (this.globals.length > 0) {
+            const globalPayload: number[] = [...encodeULEB128(this.globals.length)];
+            for (const g of this.globals) {
+                globalPayload.push(g.type, g.mut);
+                // init expr: i32.const <initVal> end
+                globalPayload.push(0x41, ...encodeSLEB128(g.initVal), 0x0B);
+            }
+            writer.write(createSection(6, globalPayload));
         }
 
         // 7. Export Section (ID 7)

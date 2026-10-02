@@ -975,13 +975,24 @@ const loadPeData = async (peData: Uint8Array, skipReset: boolean = false) => {
           runner.start({
             system,
             memory: wasmMemory,
+            memoryOffset: mem8.byteOffset,
+            memoryLength: mem8.byteLength,
             wasmBytes: aotWasmBytes,
             stackTop: stackPointer,
             stackBase: stackPointer - mainStackSize,
             entryName: '___tmainCRTStartup',
             logCalls: false,
+          }).then(result => {
+            gameSessionActive = false;
+            framePacer.stop();
+            const message = `[Recompiler] AOT entry exited with code 0x${(result >>> 0).toString(16)} before a persistent game loop`;
+            Logger.error(LogCategory.SYSTEM, message);
+            postMessage({ type: 'error', message });
           }).catch(err => {
+            gameSessionActive = false;
+            framePacer.stop();
             Logger.error(LogCategory.SYSTEM, `[Recompiler] Fatal execution error: ${err}`);
+            postMessage({ type: 'error', message: String(err) });
           });
         }, 0);
         return true;

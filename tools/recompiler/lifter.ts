@@ -110,6 +110,8 @@ export class Lifter {
     iatResolver?: IATResolver;
     apiImportMap = new Map<string, number>();
     funcEntryMap = new Map<number, number>(); // entryAddr -> local function index (0..N-1)
+    espGlobalIdx: number;
+    memoryBaseGlobalIdx: number;
 
     constructor(options: LiftedModuleOptions = {}) {
         this.options = {
@@ -124,11 +126,18 @@ export class Lifter {
         this.moduleBuilder.importMemory = !!this.options.importMemory;
         this.moduleBuilder.exportMemory = !!this.options.exportMemory;
 
+        // Shared mutable stack pointer global (exported as "esp")
+        this.espGlobalIdx = this.moduleBuilder.addGlobal(0x7f, 1, 0x0019ff00);
+        this.moduleBuilder.addExport('esp', 3, this.espGlobalIdx);
+        this.memoryBaseGlobalIdx = this.moduleBuilder.addGlobal(0x7f, 1, 0);
+        this.moduleBuilder.addExport('guest_memory_base', 3, this.memoryBaseGlobalIdx);
+
         // Standard signature: (param $esp i32, $ecx i32, $eax i32) -> (result i32)
         this.funcSigIndex = this.moduleBuilder.addSignature([0x7f, 0x7f, 0x7f], [0x7f]);
         // Bridge API signature: (param $esp i32) -> (result i32)
         this.apiImportSigIndex = this.moduleBuilder.addSignature([0x7f], [0x7f]);
     }
+
 
     getOrAddApiImport(dll: string, func: string): number {
         const key = `${dll.toLowerCase()}_${func}`;
@@ -207,12 +216,20 @@ export class Lifter {
         // Locals: XMM0..XMM7, ST0..ST7, F32_TMP (17 additional f32 locals)
         wasmFn.addLocals(17, 0x7d);
 
-        // Initialize ESP if 0
+        wasmFn.addLocals(1, 0x7f); // local 32: integer store scratch
+        wasmFn.addLocals(1, 0x7d); // local 33: floating store scratch
+        wasmFn.guestMemoryBaseGlobal = this.memoryBaseGlobalIdx;
+        wasmFn.guestStoreI32Local = 32;
+        wasmFn.guestStoreF32Local = 33;
+
+        // Synchronize ESP: if param $esp != 0, initialize global ESP; else load from global ESP
         wasmFn.local_get(LOCALS.ESP, 'esp');
-        wasmFn.i32_eqz();
         wasmFn.if_block(0x40);
-        wasmFn.i32_const(0x19ff00, 'default stack top 1.6MB');
-        wasmFn.local_set(LOCALS.ESP, 'esp');
+        wasmFn.local_get(LOCALS.ESP);
+        wasmFn.global_set(this.espGlobalIdx);
+        wasmFn.else_block();
+        wasmFn.global_get(this.espGlobalIdx);
+        wasmFn.local_set(LOCALS.ESP);
         wasmFn.end();
 
         if (fn.basicBlocks.length <= 1) {
@@ -221,11 +238,16 @@ export class Lifter {
             if (block) {
                 this.liftBasicBlockInstructions(wasmFn, block);
             }
-            // Return EAX
+            // Return EAX & pop return address
+            wasmFn.local_get(LOCALS.ESP);
+            wasmFn.i32_const(4);
+            wasmFn.i32_add();
+            wasmFn.global_set(this.espGlobalIdx);
             wasmFn.local_get(LOCALS.EAX, 'eax');
             wasmFn.return_op();
             return wasmFn;
         }
+
 
         // Multi-block function: dispatch loop
         const numBlocks = fn.basicBlocks.length;
@@ -266,7 +288,11 @@ export class Lifter {
 
         wasmFn.end('$dispatch_loop_end');
 
-        // Fallback return EAX
+        // Fallback return EAX & pop return address
+        wasmFn.local_get(LOCALS.ESP);
+        wasmFn.i32_const(4);
+        wasmFn.i32_add();
+        wasmFn.global_set(this.espGlobalIdx);
         wasmFn.local_get(LOCALS.EAX, 'eax');
         wasmFn.return_op();
 
@@ -508,14 +534,18 @@ export class Lifter {
             case 'PUSH': {
                 const [src] = inst.operands;
                 if (!src) return;
-                // esp = esp - 4
+                // 1. Evaluate and load value BEFORE modifying ESP (vital for [ESP + offset] addressing!)
+                this.emitLoadOperandValue(fn, src);
+                fn.local_set(LOCALS.TMP0);
+
+                // 2. esp = esp - 4
                 fn.local_get(LOCALS.ESP);
                 fn.i32_const(4);
                 fn.i32_sub();
-                fn.local_set(LOCALS.ESP);
-                // mem[esp] = src
-                fn.local_get(LOCALS.ESP);
-                this.emitLoadOperandValue(fn, src);
+                fn.local_tee(LOCALS.ESP);
+
+                // 3. mem[esp] = value
+                fn.local_get(LOCALS.TMP0);
                 fn.i32_store(0, 2);
                 break;
             }
@@ -1205,15 +1235,15 @@ export class Lifter {
                 fn.nop();
                 break;
             case 'RET': {
+                let imm = 0;
                 if (inst.operands.length > 0 && inst.operands[0].kind === 'imm') {
-                    const imm = inst.operands[0].value;
-                    if (imm > 0) {
-                        fn.local_get(LOCALS.ESP);
-                        fn.i32_const(imm);
-                        fn.i32_add();
-                        fn.local_set(LOCALS.ESP);
-                    }
+                    imm = inst.operands[0].value;
                 }
+                // Pop return address (+4) and callee arguments (+imm)
+                fn.local_get(LOCALS.ESP);
+                fn.i32_const(imm + 4);
+                fn.i32_add();
+                fn.global_set(this.espGlobalIdx);
                 fn.local_get(LOCALS.EAX);
                 fn.return_op();
                 break;
@@ -1231,25 +1261,26 @@ export class Lifter {
                         fn.local_get(LOCALS.ESP);
                         fn.i32_const(4);
                         fn.i32_sub();
-                        fn.local_set(LOCALS.ESP);
-
-                        fn.local_get(LOCALS.ESP);
+                        fn.local_tee(LOCALS.ESP);
                         fn.i32_const(inst.addr + inst.len);
                         fn.i32_store(0, 2);
+
+                        // Sync global ESP before call
+                        fn.local_get(LOCALS.ESP);
+                        fn.global_set(this.espGlobalIdx);
 
                         // Call imported API with esp
                         fn.local_get(LOCALS.ESP);
                         fn.call_func(importIdx, `win32_${entry.dll}_${entry.func}`);
                         fn.local_set(LOCALS.EAX);
 
-                        // Pop return address: esp = esp + 4
-                        fn.local_get(LOCALS.ESP);
-                        fn.i32_const(4);
-                        fn.i32_add();
+                        // Sync local ESP from global ESP (which includes callee stack cleanup)
+                        fn.global_get(this.espGlobalIdx);
                         fn.local_set(LOCALS.ESP);
                         return;
                     }
                 }
+
 
                 // 2. Direct internal function call: CALL imm
                 if (target.kind === 'imm') {
@@ -1375,23 +1406,23 @@ export class Lifter {
                     fn.local_get(LOCALS.ESP);
                     fn.i32_const(4);
                     fn.i32_sub();
-                    fn.local_set(LOCALS.ESP);
-
-                    fn.local_get(LOCALS.ESP);
+                    fn.local_tee(LOCALS.ESP);
                     fn.i32_const(inst.addr + inst.len);
                     fn.i32_store(0, 2);
 
-                    // Call internal function with (esp, ecx, eax)
+                    // Sync global ESP before call
                     fn.local_get(LOCALS.ESP);
+                    fn.global_set(this.espGlobalIdx);
+
+                    // Call internal function with (0, ecx, eax) -> callee loads from global ESP
+                    fn.i32_const(0);
                     fn.local_get(LOCALS.ECX);
                     fn.local_get(LOCALS.EAX);
                     fn.call_func(targetWasmIdx, `fn_0x${target.value.toString(16)}`);
                     fn.local_set(LOCALS.EAX);
 
-                    // Pop return address: esp = esp + 4
-                    fn.local_get(LOCALS.ESP);
-                    fn.i32_const(4);
-                    fn.i32_add();
+                    // Sync local ESP from global ESP
+                    fn.global_get(this.espGlobalIdx);
                     fn.local_set(LOCALS.ESP);
                     return;
                 }
@@ -1400,17 +1431,7 @@ export class Lifter {
                 const indirectIdx = this.getOrAddIndirectCallImport();
                 fn.comment(`Indirect Function Call: ${inst.rawOps}`);
 
-                // Push return address: esp = esp - 4; mem[esp] = retAddr
-                fn.local_get(LOCALS.ESP);
-                fn.i32_const(4);
-                fn.i32_sub();
-                fn.local_set(LOCALS.ESP);
-
-                fn.local_get(LOCALS.ESP);
-                fn.i32_const(inst.addr + inst.len);
-                fn.i32_store(0, 2);
-
-                // Compute target address into WASM stack
+                // Compute target address BEFORE modifying ESP!
                 if (target.kind === 'reg') {
                     fn.local_get(REG_TO_LOCAL[target.baseReg]);
                 } else if (target.kind === 'mem') {
@@ -1419,20 +1440,33 @@ export class Lifter {
                 } else if (target.kind === 'imm') {
                     fn.i32_const(target.value);
                 }
+                fn.local_set(LOCALS.TMP0);
+
+                // Push return address: esp = esp - 4; mem[esp] = retAddr
+                fn.local_get(LOCALS.ESP);
+                fn.i32_const(4);
+                fn.i32_sub();
+                fn.local_tee(LOCALS.ESP);
+                fn.i32_const(inst.addr + inst.len);
+                fn.i32_store(0, 2);
+
+                // Sync global ESP before call
+                fn.local_get(LOCALS.ESP);
+                fn.global_set(this.espGlobalIdx);
 
                 // Arguments to indirect_call: (targetAddr, esp, ecx, eax)
+                fn.local_get(LOCALS.TMP0);
                 fn.local_get(LOCALS.ESP);
                 fn.local_get(LOCALS.ECX);
                 fn.local_get(LOCALS.EAX);
                 fn.call_func(indirectIdx, 'indirect_call');
                 fn.local_set(LOCALS.EAX);
 
-                // Pop return address: esp = esp + 4
-                fn.local_get(LOCALS.ESP);
-                fn.i32_const(4);
-                fn.i32_add();
+                // Sync local ESP from global ESP
+                fn.global_get(this.espGlobalIdx);
                 fn.local_set(LOCALS.ESP);
                 return;
+
             }
             default:
                 fn.comment(`UNHANDLED: ${inst.mnemonic} ${inst.rawOps}`);
@@ -1669,6 +1703,7 @@ export function liftExportedModule(cfgExport: CFGExport, options: LiftedModuleOp
     return {
         builder: lifter.moduleBuilder,
         wasmBytes: lifter.moduleBuilder.toBinary(),
-        watText: lifter.moduleBuilder.toWat(),
+        watText: options.emitWat !== false ? lifter.moduleBuilder.toWat() : '',
     };
+
 }

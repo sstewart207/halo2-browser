@@ -3668,6 +3668,11 @@ export class ThunkDispatcher {
         }
     }
 
+    /** ABI metadata for direct AOT calls; use the same normalized lookup as emulated thunks. */
+    getStubByName(dllName: string, functionName: string): ThunkStub | undefined {
+        return this.findStubsByName(dllName, functionName)[0];
+    }
+
     getImplementation(dllName: string, functionName: string): ThunkImplementation | null {
         const key = `${dllName}:${functionName}`.toLowerCase();
         const pending = this.pendingRegistrations.get(key);
