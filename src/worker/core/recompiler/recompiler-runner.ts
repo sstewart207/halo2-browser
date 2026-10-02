@@ -39,7 +39,7 @@ export class RecompilerRunner {
     }
 
     async start(options: RecompilerRunOptions): Promise<any> {
-        const { system, memory, wasmBytes, stackTop, stackBase = stackTop - 0x100000, entryName = '___tmainCRTStartup', logCalls = false, memoryOffset = 0, memoryLength } = options;
+        const { system, memory, wasmBytes, stackTop, stackBase = stackTop - 0x100000, entryName = 'entry', logCalls = false, memoryOffset = 0, memoryLength } = options;
         Logger.log(LogCategory.SYSTEM, `[Recompiler] Guest RAM offset=0x${memoryOffset.toString(16)}, length=${memoryLength ?? memory.buffer.byteLength}`);
 
         Logger.log(LogCategory.SYSTEM, `[Recompiler] Preparing AOT WebAssembly execution (${wasmBytes.byteLength.toLocaleString()} bytes)...`);
@@ -149,23 +149,13 @@ export class RecompilerRunner {
         this.bridge.registerExports(exports);
         Logger.log(LogCategory.SYSTEM, `[Recompiler] Module instantiated with ${Object.keys(exports).length} exports.`);
 
-        // Initialize PE security cookie via entry() if available
-        if (typeof exports.entry === 'function') {
-            Logger.log(LogCategory.SYSTEM, `[Recompiler] Initializing PE security cookie via entry()...`);
-            try {
-                if (typeof (WebAssembly as any).promising === 'function') await (WebAssembly as any).promising(exports.entry)(stackTop, 0, 0);
-                else exports.entry(stackTop, 0, 0);
-            } catch (error) {
-                if (exports.aot_debug_pc) Logger.error(LogCategory.SYSTEM, `[Recompiler] Last debug block: 0x${(exports.aot_debug_pc.value >>> 0).toString(16)}`);
-                if (exports.aot_debug_fuel?.value === 0) {
-                    Logger.error(LogCategory.SYSTEM, `[Recompiler] Debug block budget exhausted at 0x${(exports.aot_debug_pc.value >>> 0).toString(16)}`);
-                }
-                throw error;
-            }
-        }
-
         // Find entry function
-        const targetEntry = exports[entryName] || exports.___tmainCRTStartup || exports.entry;
+        // PE entry is the entire native wrapper, not a cookie-only initializer.
+        // Invoke one entry exactly once; an explicit alternate is only for tests/tools.
+        const entryAddress = imageBase + view.getUint32(optHeaderOffset + 16, true);
+        const targetEntry = entryName === 'entry'
+            ? exports[`addr_0x${entryAddress.toString(16)}`] || exports.entry
+            : exports[entryName];
         if (typeof targetEntry !== 'function') {
             throw new Error(`[Recompiler] Target entry point "${entryName}" not found in exports!`);
         }
@@ -180,6 +170,11 @@ export class RecompilerRunner {
             Logger.log(LogCategory.SYSTEM, `[Recompiler] Entry point returned: 0x${(result >>> 0).toString(16)}`);
             return result;
         } catch (e: any) {
+            if (exports.aot_unsupported_pc?.value) {
+                const address=(exports.aot_unsupported_pc.value >>> 0).toString(16);
+                Logger.error(LogCategory.SYSTEM, `[Recompiler] Unsupported guest instruction at 0x${address}`);
+                throw new Error(`AOT unsupported guest instruction at 0x${address}`, {cause:e});
+            }
             if (exports.aot_debug_pc) Logger.error(LogCategory.SYSTEM, `[Recompiler] Last debug block: 0x${(exports.aot_debug_pc.value >>> 0).toString(16)}`);
                 if (exports.aot_debug_fuel?.value === 0) {
                 Logger.error(LogCategory.SYSTEM, `[Recompiler] Debug block budget exhausted at 0x${(exports.aot_debug_pc.value >>> 0).toString(16)}`);

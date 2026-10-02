@@ -1,3 +1,23 @@
+# NEWEST-45: Shared x87 state, truthful instruction failures and single PE entry
+
+Oct 2, 2026, Codex. Pushed source checkpoint follows NEWEST-44. Latest verified Chrome error: AOT unsupported guest instruction at 0x68820d. CFG identifies FNCLEX in __fpmath (0x6881f2), followed by RET. NEXT SMALL STEP: implement real clearing of x87 exception/status bits for FNCLEX, add a regression preserving condition/TOP bits, rebuild and boot. Do not suppress unsupported errors or claim menu/60fps.
+
+Completed this session:
+- Replaced function-local f32 x87 values with shared mutable f64 WASM globals (logical ST0..ST7), so double values and stack push/pop survive direct and indirect calls. Corrected 32/64-bit x87 memory loads/stores over offset guest RAM. Added a genuine 80-bit memory decoder that converts to binary64; internal arithmetic is NOT extended-precision x87 fidelity.
+- Added FCOS via scalar Math.cos import, C2 range signaling, FSTCW/FNSTCW/FLDCW, FSTSW/FNSTSW with TOP bits, SAHF and JP/JNP parity branches. FISTP follows nearest-even/floor/ceil/truncate CW modes. Finite scalar tests pass; nonfinite unsupported cases fail explicitly. FPREM1 and several FPU comparisons still trap. x87 exception masks/tag-stack overflow/underflow and full SIMD/MMX fidelity remain incomplete.
+- Real Chrome got past the former cosine/parity blocker before the broader unsupported-opcode guard was enabled. Recovered observed callbacks 0x6a7d99 and 0x68ac88. Before the guard, runtime reached missing callback 0x6990ff through 0x68ac88; these later failures may be consequences of earlier skipped operations, so do NOT start by recovering more cleanup callbacks.
+- Added aot_unsupported_pc and made unhandled instruction bodies trap rather than silently skip. Runner reports exact guest PC. This exposed skipped LEAVE at 0x693719 in ___security_init_cookie. Implemented actual ESP=EBP/pop EBP frame restoration; live boot now passes it and exposes FNCLEX above.
+- Corrected runner/worker to invoke the full PE entry once (PE header entry = 0x421756). entry is NOT a security-cookie-only helper. Previous runner invoked entry and then planned ___tmainCRTStartup separately. Regression proves no duplicate CRT invocation. Explicit entryName remains available for isolated tests.
+- Updated the actual GitHub main/default-branch README through GitHub Contents API and read it back byte-for-byte. It separates historical v86 rendering from unverified AOT menu/60fps and describes current goals. README mirrored on checkpoint branch.
+
+Build: use PRIVATE work/halo2-browser/scratch/ghidra/cfg_full45.json, not cfg_full44.json/cfg_full.json. 16,451 functions / 152,885 blocks / 936,017 instructions. Latest PRIVATE diagnostic public/halo2_recompiled.wasm = 30,842,151 bytes / 32,918 exports; Chrome compiled in 34.36 ms. AOT_DEBUG_BLOCK_LIMIT=1000000 enabled; omit env var for ordinary builds. No assets, CFG, binary, bundles, saves or logs committed.
+
+Validation: clean TypeScript; 996 tests / 115 files / 5006 assertions, zero failures. New tests verify double cosine across calls and guest offsets, C2 status/parity branches, 80-bit decode, rounding modes, unsupported instruction PC, LEAVE stack restoration and single entry invocation. Green tests are not game acceptance.
+
+Other pending: real scheduler TEB/TLS versus fixed FS 0x30000; native DLL DllMain/guest continuations; incomplete arithmetic/flag and SIMD semantics. Audit of case labels (not runtime coverage) found LAHF, FCOM/FCOMPP, UCOMISS, FCOMI, FDIVRP, FSIN, FUCOMIP and double SSE operations without cases. Follow observed PCs first.
+
+Preserve unrelated contributor edits tools/test-recompiled-entry.ts and untracked tools/recompiler/inspect_delay.ts. Keep bun.lock unstaged. One agent editing/boot-testing at a time. Use desktop Chrome, no streaming/emulation fallback, no security changes. No AOT title/menu, campaign, audio/controller/save or 60fps acceptance.
+
 # NEWEST-44: AOT CRT callbacks recovered; stack, flags and import binding fixed
 
 Latest NEWEST-44 live result: optional one-million-block watchdog pinpointed an infinite loop at 0x688a5b inside FUN_00688a19 (CRT cosine). Its FPREM1/FSTSW/SAHF/JP path is incomplete; emitJumpCondition default incorrectly treated unsupported JP as always true. Changed unsupported branch conditions to trap instead of taking fabricated branches. Reboot now stops promptly at block 0x688a2e (FCOS/FSTSW/SAHF/JP), and worker diagnostics answer again. XADD.LOCK was also unsupported at recovered 0x6a8420; implemented single-worker exchange/add with width-aware flags and regression. Multi-worker atomicity is not implemented or claimed.

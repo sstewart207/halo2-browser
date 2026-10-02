@@ -980,7 +980,7 @@ const loadPeData = async (peData: Uint8Array, skipReset: boolean = false) => {
             wasmBytes: aotWasmBytes,
             stackTop: stackPointer,
             stackBase: stackPointer - mainStackSize,
-            entryName: '___tmainCRTStartup',
+            entryName: 'entry',
             logCalls: false,
           }).then(result => {
             gameSessionActive = false;

@@ -112,6 +112,12 @@ export class Lifter {
     funcEntryMap = new Map<number, number>(); // entryAddr -> local function index (0..N-1)
     espGlobalIdx: number;
     memoryBaseGlobalIdx: number;
+    private x87Stack: number[] = [];
+    private x87Status: number;
+    private x87Control: number;
+    private x87Top: number;
+    private x87Imports = new Map<string, number>();
+    private unsupportedPc: number;
     private debugFuel?: number;
     private debugPc?: number;
 
@@ -133,6 +139,17 @@ export class Lifter {
         this.moduleBuilder.addExport('esp', 3, this.espGlobalIdx);
         this.memoryBaseGlobalIdx = this.moduleBuilder.addGlobal(0x7f, 1, 0);
         this.moduleBuilder.addExport('guest_memory_base', 3, this.memoryBaseGlobalIdx);
+        for (let n=0;n<8;n++) {
+            const index=this.moduleBuilder.addGlobal(0x7c,1,0);this.x87Stack.push(index);
+            this.moduleBuilder.addExport(`x87_st${n}`,3,index);
+        }
+        this.x87Status=this.moduleBuilder.addGlobal(0x7f,1,0);
+        this.x87Control=this.moduleBuilder.addGlobal(0x7f,1,0x37f);
+        this.x87Top=this.moduleBuilder.addGlobal(0x7f,1,0);
+        this.moduleBuilder.addExport('x87_status',3,this.x87Status);
+        this.moduleBuilder.addExport('x87_control',3,this.x87Control);
+        this.unsupportedPc=this.moduleBuilder.addGlobal(0x7f,1,0);
+        this.moduleBuilder.addExport('aot_unsupported_pc',3,this.unsupportedPc);
         if (options.debugBlockLimit !== undefined) {
             this.debugFuel = this.moduleBuilder.addGlobal(0x7f, 1, options.debugBlockLimit);
             this.debugPc = this.moduleBuilder.addGlobal(0x7f, 1, 0);
@@ -173,6 +190,11 @@ export class Lifter {
     }
 
     prepareModule(functions: CFGFunction[]) {
+        const ops=functions.flatMap(f=>f.basicBlocks.flatMap(b=>b.instructions));
+        const addMath=(name:string,params:number[])=>this.x87Imports.set(name,this.moduleBuilder.addFunctionImport('env',name,this.moduleBuilder.addSignature(params,[0x7c])));
+        if (ops.some(i=>i.mnemonic==='FCOS')) addMath('aot_cos',[0x7c]);
+        if (ops.some(i=>i.mnemonic==='FLD' && /extended double/.test(i.ops))) addMath('aot_load_f80',[0x7f]);
+
         let hasIndirectCall = false;
 
         for (let i = 0; i < functions.length; i++) {
@@ -227,6 +249,9 @@ export class Lifter {
         wasmFn.addLocals(1, 0x7f); // local 32: integer store scratch
         wasmFn.addLocals(1, 0x7d); // local 33: floating store scratch
         wasmFn.addLocals(2, 0x7f); // locals 34/35: comparison operands
+        wasmFn.addLocals(1, 0x7f); // local 36: PF
+        wasmFn.addLocals(2, 0x7c); // locals 37/38: x87 value and f64 store scratch
+        wasmFn.guestStoreF64Local = 38;
         wasmFn.guestMemoryBaseGlobal = this.memoryBaseGlobalIdx;
         wasmFn.guestStoreI32Local = 32;
         wasmFn.guestStoreF32Local = 33;
@@ -448,6 +473,12 @@ export class Lifter {
                 fn.local_get(LOCALS.ZF);
                 fn.i32_eqz();
                 break;
+            case 'JP':
+            case 'JPE':
+                fn.local_get(36); break;
+            case 'JNP':
+            case 'JPO':
+                fn.local_get(36); fn.i32_eqz(); break;
             case 'JS':
                 fn.local_get(LOCALS.SF);
                 break;
@@ -637,6 +668,7 @@ export class Lifter {
                 fn.local_get(LOCALS.TMP0); fn.i32_eqz(); fn.local_set(LOCALS.ZF);
                 fn.local_get(LOCALS.TMP0); fn.i32_const(1 << (bits - 1)); fn.i32_and();
                 fn.i32_eqz(); fn.i32_eqz(); fn.local_set(LOCALS.SF);
+                this.emitParity(fn);
                 // Unsigned borrow, not the sign of the wrapped subtraction.
                 fn.local_get(34); fn.local_get(35); fn.i32_lt_u(); fn.local_set(LOCALS.CF);
                 // Signed subtraction overflow: (lhs ^ rhs) & (lhs ^ result).
@@ -689,6 +721,12 @@ export class Lifter {
                 this.emitSetFlagsLogic(fn);
                 fn.local_get(LOCALS.TMP0);
                 this.emitStoreOperandValue(fn, dst);
+                break;
+            }
+            case 'LEAVE': {
+                fn.local_get(LOCALS.EBP);fn.local_set(LOCALS.ESP);
+                fn.local_get(LOCALS.ESP);fn.i32_load();fn.local_set(LOCALS.EBP);
+                fn.local_get(LOCALS.ESP);fn.i32_const(4);fn.i32_add();fn.local_set(LOCALS.ESP);
                 break;
             }
             case 'INC': {
@@ -1035,130 +1073,86 @@ export class Lifter {
                 this.emitStoreFloatValue(fn, dst);
                 break;
             }
-            // --- x87 FPU Instructions ---
+            // Shared x87 logical stack: values survive direct and indirect calls.
             case 'FLD': {
-                const [src] = inst.operands;
-                if (!src) return;
-                this.emitLoadFloatValue(fn, src);
-                fn.local_set(LOCALS.ST0);
-                break;
+                const src=inst.operands[0]; if (!src) return;
+                this.emitX87Load(fn,src); fn.local_set(37); this.emitX87Push(fn); break;
             }
-            case 'FLD1': {
-                fn.f32_const(1.0);
-                fn.local_set(LOCALS.ST0);
-                break;
+            case 'FLD1': case 'FLDZ': {
+                fn.f64_const(inst.mnemonic==='FLD1'?1:0);fn.local_set(37);this.emitX87Push(fn);break;
             }
             case 'FILD': {
-                const [src] = inst.operands;
-                if (!src) return;
-                this.emitLoadOperandValue(fn, src);
-                fn.f32_convert_i32_s();
-                fn.local_set(LOCALS.ST0);
-                break;
+                const src=inst.operands[0];if(!src)return;
+                if(src.kind!=='imm' && src.size>4) {fn.emitBytes([0x00]);break;}
+                this.emitLoadOperandValue(fn,src);fn.f64_op(0xb7,'f64.convert_i32_s');fn.local_set(37);this.emitX87Push(fn);break;
             }
-            case 'FST':
-            case 'FSTP': {
-                const [dst] = inst.operands;
-                if (!dst) return;
-                fn.local_get(LOCALS.ST0);
-                this.emitStoreFloatValue(fn, dst);
-                break;
+            case 'FST': case 'FSTP': {
+                const dst=inst.operands[0];if(!dst)return;
+                fn.global_get(this.x87Stack[0]);this.emitX87Store(fn,dst);
+                if(inst.mnemonic==='FSTP')this.emitX87Pop(fn);break;
             }
             case 'FISTP': {
-                const [dst] = inst.operands;
-                if (!dst) return;
-                fn.local_get(LOCALS.ST0);
-                fn.i32_trunc_f32_s();
-                this.emitStoreOperandValue(fn, dst);
-                break;
+                const dst=inst.operands[0];if(!dst)return;
+                fn.global_get(this.x87Stack[0]);fn.local_set(37);
+                for(let mode=0;mode<3;mode++){
+                    fn.global_get(this.x87Control);fn.i32_const(10);fn.i32_shr_u();fn.i32_const(3);fn.i32_and();fn.i32_const(mode);fn.i32_eq();fn.if_block(0x7c);
+                    fn.local_get(37);fn.f64_op([0x9e,0x9c,0x9b][mode],['f64.nearest','f64.floor','f64.ceil'][mode]);fn.else_block();
+                }
+                fn.local_get(37);fn.f64_op(0x9d,'f64.trunc');for(let n=0;n<3;n++)fn.end();
+                fn.f64_op(0xaa,'i32.trunc_f64_s');this.emitStoreOperandValue(fn,dst);this.emitX87Pop(fn);break;
             }
-            case 'FADD':
-            case 'FADDP':
-            case 'FIADD': {
-                const [src] = inst.operands;
-                if (!src) return;
-                fn.local_get(LOCALS.ST0);
-                this.emitLoadFloatValue(fn, src);
-                fn.f32_add();
-                fn.local_set(LOCALS.ST0);
-                break;
+            case 'FADD': case 'FADDP': case 'FIADD':
+            case 'FSUB': case 'FSUBP': case 'FSUBRP':
+            case 'FMUL': case 'FMULP': case 'FDIV': case 'FDIVP': case 'FDIVR': {
+                const operands=inst.operands;
+                const pop=inst.mnemonic.endsWith('P');
+                const dst=operands.length>1?operands[0]:null;
+                const src=operands.length>1?operands[1]:operands[0];
+                const index=dst?.kind==='reg'&&dst.baseReg.startsWith('ST')?Number(dst.baseReg.slice(2)):(pop?1:0);
+                const reverse=inst.mnemonic==='FSUBRP'||inst.mnemonic==='FDIVR';
+                const loadSrc=()=>{if(src)this.emitX87Load(fn,src,inst.mnemonic==='FIADD');else fn.global_get(this.x87Stack[0]);};
+                if(reverse){loadSrc();fn.global_get(this.x87Stack[index]);}else{fn.global_get(this.x87Stack[index]);loadSrc();}
+                const op=inst.mnemonic.startsWith('FA')||inst.mnemonic==='FIADD'?0xa0:inst.mnemonic.startsWith('FS')?0xa1:inst.mnemonic.startsWith('FM')?0xa2:0xa3;
+                fn.f64_op(op,['f64.add','f64.sub','f64.mul','f64.div'][op-0xa0]);fn.global_set(this.x87Stack[index]);
+                if(pop)this.emitX87Pop(fn);break;
             }
-            case 'FSUB':
-            case 'FSUBP': {
-                const [src] = inst.operands;
-                if (!src) return;
-                fn.local_get(LOCALS.ST0);
-                this.emitLoadFloatValue(fn, src);
-                fn.f32_sub();
-                fn.local_set(LOCALS.ST0);
-                break;
-            }
-            case 'FSUBRP': {
-                const [src] = inst.operands;
-                if (!src) return;
-                this.emitLoadFloatValue(fn, src);
-                fn.local_get(LOCALS.ST0);
-                fn.f32_sub();
-                fn.local_set(LOCALS.ST0);
-                break;
-            }
-            case 'FMUL':
-            case 'FMULP': {
-                const [src] = inst.operands;
-                if (!src) return;
-                fn.local_get(LOCALS.ST0);
-                this.emitLoadFloatValue(fn, src);
-                fn.f32_mul();
-                fn.local_set(LOCALS.ST0);
-                break;
-            }
-            case 'FDIV':
-            case 'FDIVP': {
-                const [src] = inst.operands;
-                if (!src) return;
-                fn.local_get(LOCALS.ST0);
-                this.emitLoadFloatValue(fn, src);
-                fn.f32_div();
-                fn.local_set(LOCALS.ST0);
-                break;
-            }
-            case 'FDIVR': {
-                const [src] = inst.operands;
-                if (!src) return;
-                this.emitLoadFloatValue(fn, src);
-                fn.local_get(LOCALS.ST0);
-                fn.f32_div();
-                fn.local_set(LOCALS.ST0);
-                break;
-            }
-            case 'FCHS': {
-                fn.f32_const(0.0);
-                fn.local_get(LOCALS.ST0);
-                fn.f32_sub();
-                fn.local_set(LOCALS.ST0);
-                break;
-            }
-            case 'FABS': {
-                fn.local_get(LOCALS.ST0);
-                fn.emitByte(0x8B); // f32.abs
-                fn.watLines.push('    f32.abs');
-                fn.local_set(LOCALS.ST0);
-                break;
+            case 'FCHS': case 'FABS': case 'FSQRT': {
+                fn.global_get(this.x87Stack[0]);const op=inst.mnemonic==='FCHS'?0x9a:inst.mnemonic==='FABS'?0x99:0x9f;
+                fn.f64_op(op,inst.mnemonic);fn.global_set(this.x87Stack[0]);break;
             }
             case 'FXCH': {
-                fn.local_get(LOCALS.ST0);
-                fn.local_get(LOCALS.ST1);
-                fn.local_set(LOCALS.ST0);
-                fn.local_set(LOCALS.ST1);
-                break;
+                const src=inst.operands[0];const index=src?.kind==='reg'?Number(src.baseReg.slice(2)):1;
+                fn.global_get(this.x87Stack[0]);fn.local_set(37);fn.global_get(this.x87Stack[index]);fn.global_set(this.x87Stack[0]);fn.local_get(37);fn.global_set(this.x87Stack[index]);break;
             }
-            case 'FLDCW':
-            case 'FNSTCW':
-            case 'FNSTSW':
-            case 'FCOMP':
-            case 'FCOMIP':
-                // FPU control/status word & comparison stubs
-                break;
+            case 'FCOS': {
+                // Infinity needs unsupported invalid-operation handling, not C2 range success.
+                fn.global_get(this.x87Stack[0]);fn.f64_op(0x99,'f64.abs');fn.f64_const(Infinity);fn.f64_op(0x61,'f64.eq');
+                fn.if_block(0x40);fn.emitBytes([0x00]);fn.end();
+                // Intel C2 reports an argument outside the hardware reduction range.
+                fn.global_get(this.x87Stack[0]);fn.f64_op(0x99,'f64.abs');fn.f64_const(2**63);fn.f64_op(0x66,'f64.ge');
+                fn.if_block(0x40);fn.global_get(this.x87Status);fn.i32_const(0x400);fn.i32_or();fn.global_set(this.x87Status);
+                fn.else_block();fn.global_get(this.x87Stack[0]);fn.call_func(this.x87Imports.get('aot_cos')!);fn.global_set(this.x87Stack[0]);
+                fn.global_get(this.x87Status);fn.i32_const(~0x400);fn.i32_and();fn.global_set(this.x87Status);fn.end();break;
+            }
+            case 'FSTCW': case 'FNSTCW': {
+                const dst=inst.operands[0];if(!dst)return;fn.global_get(this.x87Control);this.emitStoreOperandValue(fn,dst);break;
+            }
+            case 'FLDCW': {
+                const src=inst.operands[0];if(!src)return;this.emitLoadOperandValue(fn,src);fn.global_set(this.x87Control);break;
+            }
+            case 'FSTSW': case 'FNSTSW': {
+                const dst=inst.operands[0];if(!dst)return;
+                fn.global_get(this.x87Status);fn.i32_const(~0x3800);fn.i32_and();fn.global_get(this.x87Top);fn.i32_const(11);fn.i32_shl();fn.i32_or();this.emitStoreOperandValue(fn,dst);break;
+            }
+            case 'SAHF': {
+                for(const [bit,local] of [[0,LOCALS.CF],[2,36],[6,LOCALS.ZF],[7,LOCALS.SF]]) {
+                    fn.local_get(LOCALS.EAX);fn.i32_const(8+bit);fn.i32_shr_u();fn.i32_const(1);fn.i32_and();fn.local_set(local);
+                }break;
+            }
+            case 'FPREM1': case 'FCOMP': case 'FCOMIP':
+                // Explicit unsupported behavior, rather than fabricated status/results.
+                fn.i32_const(inst.addr);fn.global_set(this.unsupportedPc);
+                fn.emitBytes([0x00]); break;
             case 'XADD':
             case 'XADD.LOCK': {
                 // AOT currently runs on one worker. No guest thread can race
@@ -1548,11 +1542,18 @@ export class Lifter {
             }
             default:
                 fn.comment(`UNHANDLED: ${inst.mnemonic} ${inst.rawOps}`);
+                fn.i32_const(inst.addr);fn.global_set(this.unsupportedPc);
+                fn.emitBytes([0x00]);fn.watLines.push('    unreachable');
                 break;
         }
     }
 
+    private emitParity(fn: WasmFunctionBuilder) {
+        fn.local_get(LOCALS.TMP0);fn.i32_const(0xff);fn.i32_and();fn.emitByte(0x69);fn.watLines.push('    i32.popcnt');
+        fn.i32_const(1);fn.i32_and();fn.i32_eqz();fn.local_set(36);
+    }
     emitSetFlagsLogic(fn: WasmFunctionBuilder) {
+        this.emitParity(fn);
         // ZF = (TMP0 == 0)
         fn.local_get(LOCALS.TMP0);
         fn.i32_eqz();
@@ -1568,6 +1569,7 @@ export class Lifter {
     }
 
     emitSetFlagsArithmetic(fn: WasmFunctionBuilder) {
+        this.emitParity(fn);
         // ZF = (TMP0 == 0)
         fn.local_get(LOCALS.TMP0);
         fn.i32_eqz();
@@ -1577,6 +1579,35 @@ export class Lifter {
         fn.i32_const(0);
         fn.i32_lt_s();
         fn.local_set(LOCALS.SF);
+    }
+
+    private emitX87Push(fn: WasmFunctionBuilder) {
+        for(let n=7;n>0;n--){fn.global_get(this.x87Stack[n-1]);fn.global_set(this.x87Stack[n]);}
+        fn.local_get(37);fn.global_set(this.x87Stack[0]);
+        fn.global_get(this.x87Top);fn.i32_const(1);fn.i32_sub();fn.i32_const(7);fn.i32_and();fn.global_set(this.x87Top);
+    }
+    private emitX87Pop(fn: WasmFunctionBuilder) {
+        for(let n=0;n<7;n++){fn.global_get(this.x87Stack[n+1]);fn.global_set(this.x87Stack[n]);}
+        fn.f64_const(0);fn.global_set(this.x87Stack[7]);
+        fn.global_get(this.x87Top);fn.i32_const(1);fn.i32_add();fn.i32_const(7);fn.i32_and();fn.global_set(this.x87Top);
+    }
+    private emitX87Load(fn: WasmFunctionBuilder, op: Operand, integer=false) {
+        if(op.kind==='reg'&&op.baseReg.startsWith('ST')){fn.global_get(this.x87Stack[Number(op.baseReg.slice(2))]);return;}
+        if(integer){this.emitLoadOperandValue(fn,op);fn.f64_op(0xb7,'f64.convert_i32_s');return;}
+        if(op.kind!=='mem'){fn.emitBytes([0x00]);return;}
+        this.emitEffectiveAddress(fn,op);
+        if(op.size===10)fn.call_func(this.x87Imports.get('aot_load_f80')!);
+        else if(op.size===8)fn.f64_load();
+        else if(op.size===4){fn.f32_load();fn.f64_op(0xbb,'f64.promote_f32');}
+        else fn.emitBytes([0x00]);
+    }
+    private emitX87Store(fn: WasmFunctionBuilder, op: Operand) {
+        if(op.kind==='reg'&&op.baseReg.startsWith('ST')){fn.global_set(this.x87Stack[Number(op.baseReg.slice(2))]);return;}
+        if(op.kind!=='mem'){fn.emitBytes([0x00]);return;}
+        fn.local_set(37);this.emitEffectiveAddress(fn,op);fn.local_get(37);
+        if(op.size===8)fn.f64_store();
+        else if(op.size===4){fn.f64_op(0xb6,'f32.demote_f64');fn.f32_store();}
+        else fn.emitBytes([0x00]);
     }
 
     emitEffectiveAddress(fn: WasmFunctionBuilder, mem: MemoryOperand) {

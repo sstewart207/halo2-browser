@@ -36,7 +36,7 @@ test('AOT and HLE share offset guest RAM without modifying emulator prefix', asy
     };
     const system = {process: {dispatcher, moduleRegistry: {getMainExecutableBase: () => 0x400000}}} as any;
     const result = await new RecompilerRunner().start({system, memory, memoryOffset, memoryLength,
-        wasmBytes: lifter.moduleBuilder.toBinary(), stackTop: 0x19ff00});
+        wasmBytes: lifter.moduleBuilder.toBinary(), stackTop: 0x19ff00, entryName: fn.name});
     expect(result).toBe(1);
     expect(observedSize).toBe(148);
     expect(view.getUint32(0x2000, true)).toBe(148);

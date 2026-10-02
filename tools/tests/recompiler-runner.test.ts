@@ -56,3 +56,18 @@ describe('RecompilerRunner AOT Integration', () => {
         expect(view.getUint32(0x00030030, true)).toBe(0x00031000); // PEB
     });
 });
+
+it('executes the PE wrapper once without independently starting CRT again', async () => {
+    const builder=new WasmModuleBuilder();builder.importMemory=true;builder.memoryPages=160;
+    const sig=builder.addSignature([0x7f,0x7f,0x7f],[0x7f]);
+    const counter=builder.addGlobal(0x7f,1,0);builder.addExport('count',3,counter);
+    const entry=builder.addFunction('entry',sig);entry.global_get(counter);entry.i32_const(1);entry.i32_add();entry.global_set(counter);entry.i32_const(7);entry.return_op();
+    const crt=builder.addFunction('___tmainCRTStartup',sig);crt.emitBytes([0x00]);crt.i32_const(99);crt.return_op();
+    builder.addExport('entry',0,0);builder.addExport('addr_0x401000',0,0);builder.addExport('___tmainCRTStartup',0,1);
+    const memory=new WebAssembly.Memory({initial:160});const view=new DataView(memory.buffer);
+    view.setUint32(0x400000+24+16,0x1000,true);
+    const runner=new RecompilerRunner();
+    expect(await runner.start({system:{process:{moduleRegistry:{getMainExecutableBase:()=>0x400000},dispatcher:null}} as any,memory,wasmBytes:builder.toBinary(),stackTop:0x19ff00})).toBe(7);
+    const instance=(runner as any).instance as WebAssembly.Instance;
+    expect((instance.exports.count as WebAssembly.Global).value).toBe(1);
+});

@@ -96,6 +96,7 @@ export class WasmFunctionBuilder {
     guestMemoryBaseGlobal?: number;
     guestStoreI32Local?: number;
     guestStoreF32Local?: number;
+    guestStoreF64Local?: number;
 
     private translateGuestAddress() {
         if (this.guestMemoryBaseGlobal !== undefined) {
@@ -224,6 +225,17 @@ export class WasmFunctionBuilder {
         this.emitBytes(encodeULEB128(offset));
         this.watLines.push(`    i32.store16 offset=${offset}`);
     }
+
+    f64_const(value: number) { this.emitByte(0x44); const b=Buffer.alloc(8); b.writeDoubleLE(value); this.emitBytes([...b]); this.watLines.push(`    f64.const ${value}`); }
+    f64_load(offset=0, align=3) { this.translateGuestAddress(); this.emitBytes([0x2b,...encodeULEB128(align),...encodeULEB128(offset)]); this.watLines.push('    f64.load'); }
+    f64_store(offset=0, align=3) {
+        if (this.guestMemoryBaseGlobal !== undefined) {
+            if (this.guestStoreF64Local === undefined) throw new Error('Missing f64 store scratch');
+            this.local_set(this.guestStoreF64Local); this.translateGuestAddress(); this.local_get(this.guestStoreF64Local);
+        }
+        this.emitBytes([0x39,...encodeULEB128(align),...encodeULEB128(offset)]); this.watLines.push('    f64.store');
+    }
+    f64_op(opcode: number, name: string) { this.emitByte(opcode); this.watLines.push(`    ${name}`); }
 
     // Arithmetic & Logic
     i32_add() { this.emitByte(0x6A); this.watLines.push('    i32.add'); }
@@ -497,7 +509,11 @@ export class WasmModuleBuilder {
             for (const g of this.globals) {
                 globalPayload.push(g.type, g.mut);
                 // init expr: i32.const <initVal> end
-                globalPayload.push(0x41, ...encodeSLEB128(g.initVal), 0x0B);
+                if (g.type === 0x7c || g.type === 0x7d) {
+                    const b=Buffer.alloc(g.type === 0x7c ? 8 : 4);
+                    if (g.type === 0x7c) b.writeDoubleLE(g.initVal); else b.writeFloatLE(g.initVal);
+                    globalPayload.push(g.type === 0x7c ? 0x44 : 0x43,...b,0x0b);
+                } else globalPayload.push(0x41, ...encodeSLEB128(g.initVal), 0x0B);
             }
             writer.write(createSection(6, globalPayload));
         }
