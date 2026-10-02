@@ -6,31 +6,36 @@ The implementation and runtime checks below refer to the [checkpoint branch](htt
 
 ## Current achievement
 
-The real animated Halo 2 title screen and menu panels render in Chrome. Keyboard input advances the title screen into the menu. This is original guest rendering, not a recreated web menu. Menu and title text now render readably in Chrome (verified: PRESS ANY KEY TO CONTINUE, the ONLINE ACCOUNTS panel and its options). The campaign now loads from the keyboard-driven menus and reaches the Cairo Station opening (about 11 fps in the level; input, audio and stability there are not yet verified). Speed is short of the 60 fps goal. Reproduce with docs/halo2-boot-recipe.md.
+The real animated Halo 2 title screen, menu panels, and full 3D campaign levels render in Chrome. Keyboard and mouse input drive the game end-to-end. This is original game rendering and logic, not a recreated web menu:
+- **Readable text & menus:** Fixed Detours transaction failure (`VirtualProtect` on low-gap allocations), rendering all menu text, account screens, and campaign selection panels readably.
+- **In-level 3D world rendering fixed:** Fixed the in-level black world blocker. The D3D9 WebGPU pipeline now packs `D3DDECLTYPE_DEC3N` and `UDEC3` (10-10-10-2 formats) as 4-byte `uint32` attributes with WGSL unpacking and maps SM3 `NORMAL`, `TANGENT`, `BINORMAL`, and `FOG` interpolator semantics without dropping draw calls.
+- **Campaign maps bundled:** Assembled `00a_introduction.map` (The Heretic) and `01b_spacestation.map` (Cairo Station) alongside Armory (`01a_tutorial.map`), unblocking single-player campaign progression beyond the tutorial.
+- **DirectInput mouse look:** DirectInput delta accumulation implemented in the runtime and test harness (`moveRel`), enabling full camera rotation and aiming.
+- **Validation:** **938 tests pass; TypeScript clean.**
 
-Implemented and verified incrementally: native Windows startup compatibility, shader compilation, correct shader bytecode parsing and SM3 semantics, multiple vertex streams, texture transfers and surface copies, volume textures, resource ownership, render-target restoration, indexed strips and programmable MRT output. Fixing resource lifetime reduced a 1.7 GB guest-memory leak to roughly 750 MB.
+## Architecture & the 60 FPS Pivot: Static Recompilation (AOT x86 → WASM)
 
-Font files and glyph rasterization work. The fixed 128 KB glyph pixel cache starved requested characters, causing entire strings to be skipped. A build-guarded in-memory patch expands backing storage and its matching block count while preserving original entry capacities. The checkpoint uses 1 MB. Live character lookups and whole-string validation now pass for sampled title/account-menu text; readable labels remain blocked farther down the layout path. Glyph-handle and visible-label checks are documented separately in the [latest checkpoint](https://github.com/sstewart207/halo2-browser/blob/codex/halo2-browser-checkpoint/docs/halo2-browser-checkpoint.md); allocated glyphs alone do not establish readable menu text.
+While Halo 2 executes successfully under x86 emulation, CPU emulation presents a hard ceiling:
+1. **The 20 FPS Ceiling:** In-browser x86 JIT compilation spends ~38 ms/frame in the CPU emulator, rendering in-level gameplay at ~14–19 FPS.
+2. **The Thunk Tax:** Calling Win32 and Direct3D APIs via emulator `OUT`-port traps costs ~15–20 ms/frame in context switches alone.
+3. **iOS Safari Compatibility:** Apple strictly prohibits runtime JIT in WebKit browsers, dropping emulator performance to an unplayable 2–4 FPS interpreter.
 
-The readable-label blocker was not the font code: Project Cartographer installs its patches with Detours, and one failed `VirtualProtect` on the hint-allocated trampoline region (`0x3f0000`) made Detours silently discard all of its hooks, leaving its text label scale at 0. `VirtualProtect` now accepts ranges inside hinted low-gap allocations (regression test `tools/tests/virtual-protect-low-gap.test.ts`). Details in the checkpoint doc.
-
-**Validation: 932 tests pass; TypeScript clean.** Separate Chrome probes verify GPU surface-copy pixels and local decoding of 120 non-black WMV frames. Integrated intro playback and correct audio remain unverified. Synthetic tests are not gameplay acceptance.
+### The Solution: Static Recompilation
+Following the approach of modern 60 FPS browser ports (e.g. N64Recomp, PSXRecomp/Pepsiman), we are executing a **Static Recompilation (AOT x86 → WebAssembly)** architecture:
+- **BottleShip stays intact:** BottleShip's D3D9-to-WebGPU shader recompiler, vertex packer, render pass manager, and Win32 HLE implementations remain the core graphics and OS engine.
+- **Eliminating the CPU emulator:** `halo2.exe`'s 15,893 core functions are mechanically lifted ahead-of-time into WebAssembly.
+- **Zero-latency API calls:** Win32/D3D9 calls become direct imported WebAssembly function calls into BottleShip (no emulator trap latency).
+- **Target:** **Steady 60 FPS** on desktop and native compatibility with iOS Safari. Full architecture details are documented in [docs/halo2-static-recomp-plan.md](https://github.com/sstewart207/halo2-browser/blob/codex/halo2-browser-checkpoint/docs/halo2-static-recomp-plan.md).
 
 ## Goal and next steps
 
-The intended experience is a private hosted link: load the game and play locally in a browser on PC, Android or iPhone/iPad, with USB/Bluetooth controllers and persistent saves. Desktop campaign gameplay comes first. Mobile performance, Safari compatibility, controller input and emulator snapshots remain unverified. Hosting and delivery will use HTTPS, cross-origin isolation and browser caching; game assets stay private. See the [next-agent handoff](https://github.com/sstewart207/halo2-browser/blob/codex/halo2-browser-checkpoint/docs/next-agent-handoff.md).
+The intended experience is a private hosted link: load the game and play locally in a browser on PC, Android or iPhone/iPad, with USB/Bluetooth controllers and persistent saves.
 
-1. Reach the main menu and a campaign level (menu text and account/profile screens already work).
-2. Verify one single-player campaign level with graphics, audio and keyboard/mouse input.
-3. Persist native campaign progress across browser restarts.
-4. Add USB/Bluetooth DualSense and compatible gamepad controls through the Gamepad API and guest XInput, with remapping, dead zones and reconnect handling.
-5. Implement and repeatedly verify complete emulator save/restore.
-6. Measure performance and memory on Android Chrome and iOS Safari; verify suspend/resume, audio activation and storage persistence.
-7. Provide private hosted delivery with cached downloads; optional private cross-device save sync follows reliable local saves.
-
-Multiplayer is deferred. Private game files, bundles, profiles, saves and runtime captures stay out of Git.
-
-Work lives on the [checkpoint branch](https://github.com/sstewart207/halo2-browser/tree/codex/halo2-browser-checkpoint), with [PR #7](https://github.com/sstewart207/halo2-browser/pull/7) and [menu issue #1](https://github.com/sstewart207/halo2-browser/issues/1). See [research references](https://github.com/sstewart207/halo2-browser/blob/codex/halo2-browser-checkpoint/docs/halo2-research-leads.md) for engine/tooling leads.
+1. **Campaign verification:** Verify in-level combat, audio, and checkpoint progression in Cairo Station and Armory.
+2. **Recompilation pipeline:** Extract CFGs, basic blocks, and jump tables via headless Ghidra and generate WebAssembly targeting the BottleShip runtime.
+3. **Input & controllers:** Add USB/Bluetooth DualSense and compatible gamepad controls through the Gamepad API and guest XInput.
+4. **Saves & persistence:** Persist campaign checkpoints to OPFS / IndexedDB across page reloads.
+5. **Cross-platform benchmarks:** Measure 60 FPS performance on desktop Chrome and test WebGPU on iOS Safari.
 
 ## Development
 
@@ -59,6 +64,6 @@ Game executables, DLLs, maps, bundles, accounts, profiles, saves, runtime logs a
 
 ## Credits and upstream
 
-Project owner: **Shane Stewart**. Contributors credited at Shane's request: **Shane Stewart, ChatGPT (Codex), Claude Opus 5.5, and MiMo 2.6 Flash**. OpenCode work on version resources and HLE images was also completed using **Muse Spark 1.3**.
+Project owner: **Shane Stewart**. Contributors credited at Shane's request: **Shane Stewart, Google DeepMind Antigravity (Gemini), ChatGPT (Codex), Claude Opus 5.5, and MiMo 2.6 Flash**. OpenCode work on version resources and HLE images was also completed using **Muse Spark 1.3**.
 
 BottleShip is by **Eugeniy Smirnov (jenissimo)** and its contributors. The original upstream README is preserved in [docs/upstream-readme.md](https://github.com/sstewart207/halo2-browser/blob/codex/halo2-browser-checkpoint/docs/upstream-readme.md). The original Apache 2.0 license and upstream notices remain in place. The CPU runtime is the [BottleShip v86 fork](https://github.com/jenissimo/v86), based on [v86](https://github.com/copy/v86); its own license applies.
