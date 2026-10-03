@@ -2,7 +2,7 @@
 
 Private research by **Shane Stewart** into running **Halo 2 Project Cartographer locally in a web browser**, using BottleShip and ahead-of-time x86 → WebAssembly recompilation. No streaming or remote game execution.
 
-## Current status — October 2, 2026
+## Current status — October 3, 2026
 
 **The recompiled game reaches native startup in desktop Chrome, but the AOT title screen, menu, campaign and steady 60 FPS are not yet verified.** Compiling the binary is a toolchain milestone, not proof of complete instruction support or playable gameplay.
 
@@ -10,20 +10,20 @@ Active code is on [codex/halo2-browser-checkpoint](https://github.com/sstewart20
 
 ### Verified progress
 
-- Ghidra CFG extraction and whole-program WASM generation: the latest build covers **31,126 functions across the EXE, D3DX and Cartographer DLL**. Additional observed indirect-call entries are recovered as startup exposes them.
+- Ghidra CFG extraction and whole-program WASM generation: the latest build covers **31,139 functions across the EXE, D3DX and Cartographer DLL**. Additional observed indirect-call entries are recovered as startup exposes them.
 - Chrome compiles and instantiates the actual generated WASM over guest memory. Execution proceeds through real CRT paths and Win32 HLE calls, including version checks, heap allocation, locks and TLS/FLS operations.
 - Corrected stack and calling-convention bugs: mutable shared ESP, stdcall cleanup, multi-block returns, external/indirect tail calls, SEH epilog stack restoration and CALL-IAT/RET wrappers.
 - Fixed CMP borrow/overflow, HLE export jump trampolines and API import parsing for names such as `ws2_32`.
 - Diagnosed a startup hang in the CRT cosine routine: unsupported `JP` had become an unconditional jump. Shared binary64 x87 state, stack push/pop, double memory access, cosine, status/control words, SAHF/parity branches and rounding-mode conversion now pass targeted tests. **The real Chrome boot gets past the previous cosine blocker.** Full x87 fidelity is still incomplete.
-- **1,033 tests pass; TypeScript checks clean.** Synthetic tests do not establish gameplay or rendering acceptance.
+- **1,039 tests pass; TypeScript checks clean.** Synthetic tests do not establish gameplay or rendering acceptance.
 
 Earlier CPU-emulation checkpoints recorded title/menu rendering and Armory campaign work. Those results belong to the earlier v86 execution path; they do not establish AOT rendering, AOT performance, or mobile compatibility.
 
 ### Current work
 
-Latest verified Chrome boot (NEWEST-51): **D3DX completes its real native DLL initialization, then Cartographer's xlive DLL executes its native startup.** The current stop is unsupported `MOVLPD` at `0x131957c4` in CRT security-cookie setup. The combined 80.2 MB WASM module contains 31,126 functions and compiles in Chrome in 49.37 ms; that measures compilation, not frame rate.
+Latest verified Chrome boot (NEWEST-52): **D3DX completes native initialization and Cartographer's xlive CRT executes farther after fixing SSE register storage.** The original `MOVLPD` blocker is resolved. XCHG, missing CRT initializer entries and CMOVZ are also resolved; the current explicit stop is `INC.LOCK` at `0x131b79bb`.
 
-Added relocation-aware multi-image recompilation, native DLL attach/export routing and compiled CRT constructor callbacks. Next: bit-accurate low-64-bit SSE operations, finish xlive startup, then compile and initialize the remaining bundled DLLs. Actual TEB/TLS reconciliation remains incomplete. The private EXE CFG still contains experimental shell-success and synchronous-job substitutions that require review. There is no verified playable AOT build or 60 FPS result yet.
+The private combined module contains 31,139 functions (81.2 MB). SSE registers now retain all 128 bits across compiled calls; tests cover exact bit patterns and upper-lane preservation. Next: locked increment semantics, finish xlive startup, then the remaining DLLs and actual TEB/TLS. SIMD support is still incomplete. The private EXE CFG contains experimental shell-success and synchronous-job substitutions that require review. No playable AOT build, rendered AOT video or 60 FPS result is verified yet.
 
 ## Goal
 
@@ -52,7 +52,7 @@ node node_modules/tsgo/bin/tsc -p tsconfig.json --noEmit
 bun test tools/tests
 ```
 
-Run the dev server on port 5174 for the existing Chrome workflow. Game assets and the local extracted CFG are supplied privately and are not included in the repository. The current private multi-image build uses `native-build51x.json`, described in the latest handoff.
+Run the dev server on port 5174 for the existing Chrome workflow. Game assets and the local extracted CFG are supplied privately and are not included in the repository. The current private multi-image build uses `native-build52.json`, described in the latest handoff.
 
 ```powershell
 # Optional bounded startup diagnostic; omit for an ordinary build.

@@ -1,3 +1,18 @@
+# NEWEST-52: MOVLPD fixed; Cartographer native CRT progresses farther
+
+Oct 3, 2026. Codex continued from NEWEST-51 and verified each new build in desktop Chrome.
+
+- Original refresh error 0x131957c4 is resolved live. Root cause: XMM registers had only a scalar f32 local, losing upper bits. Added shared four-i32-lane globals for each XMM0..7, exported as xmmN_laneM. Bit-preserving moves now copy all relevant lanes across functions; scalar float arithmetic reads/writes the low lane.
+- Implemented MOVLPD/MOVLPS low-64-bit load/store with upper-register preservation; corrected MOVSS memory-load clearing versus register-copy preservation, full MOVAPS/MOVAPD/MOVDQA moves, unaligned MOVUPS/MOVUPD/MOVDQU, XMM MOVD upper clearing, and full-lane XORPS/XORPD/PXOR for distinct registers. SSE MOVSD uses low-64-bit copying, distinct from the existing string MOVSD path. No claim of complete SIMD fidelity: alignment exception semantics, MMX, MOVQ, packed arithmetic and several instructions remain incomplete.
+- Chrome next stopped at XCHG 0x13199b5e. Implemented register/memory exchange, evaluating/storing memory before changing an address register; arithmetic flags preserved. Current AOT has one guest thread, so this does not certify multi-thread atomic ordering.
+- Chrome then exposed missing CRT initializer 0x131b55a6, then 0x131b55d5. Ghidra recovered the first observed target, then all entries from the exact __acrt_initialize table 0x10234b18..0x10234b98 (20 unique nonzero init/uninit targets). Added 13 missing functions total; cfg_xlive52b.json now has 9,916 functions. Logs and extracted tables remain private.
+- Implemented CMOVZ/CMOVE/CMOVNZ/CMOVNE after Chrome stopped at 0x131b9a67. Tests cover true/false selection and unchanged flags. Final live stop: unsupported INC.LOCK dword ptr [EAX] at runtime 0x131b79bb, preferred 0x101b79bb, in a named CRT lambda operator. Next: inspect existing INC flag semantics and add single-thread locked increment support with a regression; do not fake success or claim multi-thread atomics.
+- Current private build manifest: scratch/ghidra/native-build52.json, EXE cfg_full53.json + D3DX cfg_d3dx9_43_51d.json at 0x13a10000 + xlive cfg_xlive52b.json at 0x13000000. Output halo2-native52.wasm copied to public/halo2_recompiled.wasm: 31,139 functions / 81,213,784 bytes. Build validates. DLL load-base guards remain enabled.
+- Validation: TypeScript clean; 1,039 tests pass / 0 fail, 5,118 assertions across 123 files. New tests include nonzero/NaN bit patterns, neighboring memory, upper-lane preservation, cross-function XMM state, actual distinct-register XOR, XCHG with its own address register and CMOV conditions.
+- Local Vite server had stopped, causing Failed to fetch after refresh. Restarted on 127.0.0.1:5174; Chrome reload/bundle load works. Current dev server shell session 92934. Browser tab 1897427847 is retained for next boot.
+- D3DX attach still succeeds; xlive attach has not completed. No AOT title/menu/video, campaign or 60 FPS acceptance. Remaining native DLLs, actual TEB/TLS, dynamic DLL attach and thread callbacks remain pending. Preserve NEWEST-51/50 warnings about experimental EXE shell/queue substitutions.
+- Unrelated Gemini runtime/filesystem edits remain unstaged. Preserve bun.lock, bundles, CFGs, binaries, saves, logs and screenshots outside Git. Only push/comment in sstewart207/halo2-browser; do not merge PR7 or close issues.
+
 # NEWEST-51: Native D3DX attach succeeds; Cartographer DLL executes in AOT
 
 Oct 2, 2026. Codex continued the native DLL execution work after NEWEST-50.

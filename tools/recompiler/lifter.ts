@@ -122,6 +122,7 @@ export class Lifter {
     funcEntryMap = new Map<number, number>(); // entryAddr -> local function index (0..N-1)
     espGlobalIdx: number;
     private registerGlobals = new Map<number, number>();
+    private xmmLanes: number[][] = [];
     memoryBaseGlobalIdx: number;
     private x87Stack: number[] = [];
     private x87Status: number;
@@ -157,6 +158,14 @@ export class Lifter {
             this.moduleBuilder.addExport(name.toLowerCase(), 3, index);
         }
         this.memoryBaseGlobalIdx = this.moduleBuilder.addGlobal(0x7f, 1, 0);
+        for (let reg=0;reg<8;reg++) {
+            const lanes: number[]=[];
+            for(let lane=0;lane<4;lane++) {
+                const index=this.moduleBuilder.addGlobal(0x7f,1,0);lanes.push(index);
+                this.moduleBuilder.addExport(`xmm${reg}_lane${lane}`,3,index);
+            }
+            this.xmmLanes.push(lanes);
+        }
         this.moduleBuilder.addExport('guest_memory_base', 3, this.memoryBaseGlobalIdx);
         for (let n=0;n<8;n++) {
             const index=this.moduleBuilder.addGlobal(0x7c,1,0);this.x87Stack.push(index);
@@ -1210,15 +1219,16 @@ export class Lifter {
                 break;
             }
             // --- SSE Single-Precision Instructions ---
-            case 'MOVSS':
+            case 'MOVLPD': case 'MOVLPS': {
+                this.emitXmmMove(fn,inst,2,false);break;
+            }
+            case 'MOVSS': {
+                this.emitXmmMove(fn,inst,1,true);break;
+            }
             case 'MOVAPS':
             case 'MOVAPD':
-            case 'MOVDQA': {
-                const [dst, src] = inst.operands;
-                if (!dst || !src) return;
-                this.emitLoadFloatValue(fn, src);
-                this.emitStoreFloatValue(fn, dst);
-                break;
+            case 'MOVUPS': case 'MOVUPD': case 'MOVDQU': case 'MOVDQA': {
+                this.emitXmmMove(fn,inst,4,false);break;
             }
             case 'ADDSS': {
                 const [dst, src] = inst.operands;
@@ -1285,9 +1295,16 @@ export class Lifter {
                 this.emitStoreOperandValue(fn, dst);
                 break;
             }
-            case 'XORPS': {
-                const [dst] = inst.operands;
+            case 'XORPD': case 'XORPS': {
+                const [dst,src] = inst.operands;
                 if (!dst) return;
+                if(this.xmmIndex(dst)!==undefined && src) {
+                    for(let lane=0;lane<4;lane++) {
+                        this.emitXmmLaneLoad(fn,dst,lane);this.emitXmmLaneLoad(fn,src,lane);
+                        fn.i32_xor();this.emitXmmLaneStore(fn,dst,lane);
+                    }
+                    break;
+                }
                 fn.f32_const(0.0);
                 this.emitStoreFloatValue(fn, dst);
                 break;
@@ -1410,6 +1427,24 @@ export class Lifter {
                 // Explicit unsupported behavior, rather than fabricated status/results.
                 fn.i32_const(inst.addr);fn.global_set(this.unsupportedPc);
                 fn.emitBytes([0x00]); break;
+            case 'CMOVZ': case 'CMOVE': case 'CMOVNZ': case 'CMOVNE': {
+                const [dst,src]=inst.operands;if(!dst || !src)return;
+                this.emitLoadOperandValue(fn,src);fn.local_set(34);
+                this.emitJumpCondition(fn,inst.mnemonic==='CMOVZ'||inst.mnemonic==='CMOVE'?'JZ':'JNZ');
+                fn.if_block(0x40);fn.local_get(34);this.emitStoreOperandValue(fn,dst);fn.end();break;
+            }
+            case 'XCHG': {
+                let [dst,src]=inst.operands;
+                if(!dst || !src)return;
+                // Store memory before changing a register used by its address.
+                if(src.kind==='mem') [dst,src]=[src,dst];
+                this.emitLoadOperandValue(fn,dst);fn.local_set(34);
+                this.emitLoadOperandValue(fn,src);fn.local_set(35);
+                fn.local_get(35);this.emitStoreOperandValue(fn,dst);
+                fn.local_get(34);this.emitStoreOperandValue(fn,src);
+                // XCHG preserves arithmetic flags. AOT currently has one guest thread.
+                break;
+            }
             case 'XADD':
             case 'XADD.LOCK': {
                 // AOT currently runs on one worker. No guest thread can race
@@ -1539,8 +1574,7 @@ export class Lifter {
             case 'MOVSD': case 'MOVSD.REP': {
                 // A5 string-copy form; SSE MOVSD with XMM operands is a separate instruction.
                 if (/XMM/i.test(inst.rawOps)) {
-                    fn.i32_const(inst.addr); fn.global_set(this.unsupportedPc);
-                    fn.emitBytes([0x00]); fn.watLines.push('    unreachable'); break;
+                    this.emitXmmMove(fn,inst,2,true);break;
                 }
                 const repeated = inst.mnemonic === 'MOVSD.REP';
                 if (repeated) {
@@ -1637,8 +1671,15 @@ export class Lifter {
                 break;
             }
             case 'PXOR': {
-                const [dst] = inst.operands;
+                const [dst,src] = inst.operands;
                 if (!dst) return;
+                if(this.xmmIndex(dst)!==undefined && src) {
+                    for(let lane=0;lane<4;lane++) {
+                        this.emitXmmLaneLoad(fn,dst,lane);this.emitXmmLaneLoad(fn,src,lane);
+                        fn.i32_xor();this.emitXmmLaneStore(fn,dst,lane);
+                    }
+                    break;
+                }
                 fn.f32_const(0.0);
                 this.emitStoreFloatValue(fn, dst);
                 break;
@@ -1653,6 +1694,14 @@ export class Lifter {
             case 'MOVD': {
                 const [dst, src] = inst.operands;
                 if (!dst || !src) return;
+                if(this.xmmIndex(dst)!==undefined) {
+                    this.emitLoadOperandValue(fn,src);this.emitXmmLaneStore(fn,dst,0);
+                    for(let lane=1;lane<4;lane++){fn.i32_const(0);this.emitXmmLaneStore(fn,dst,lane);}
+                    break;
+                }
+                if(this.xmmIndex(src)!==undefined) {
+                    this.emitXmmLaneLoad(fn,src,0);this.emitStoreOperandValue(fn,dst);break;
+                }
                 if (dst.kind === 'reg' && src.kind === 'reg') {
                     const srcIsFloat = isFloatReg(src.baseReg);
                     const dstIsFloat = isFloatReg(dst.baseReg);
@@ -2085,7 +2134,39 @@ export class Lifter {
         }
     }
 
+    private xmmIndex(op: Operand): number | undefined {
+        return op.kind==='reg' && /^XMM[0-7]$/.test(op.baseReg) ? Number(op.baseReg.slice(3)) : undefined;
+    }
+
+    private emitXmmLaneLoad(fn: WasmFunctionBuilder, op: Operand, lane: number) {
+        const reg=this.xmmIndex(op);
+        if(reg!==undefined){fn.global_get(this.xmmLanes[reg][lane]);return;}
+        if(op.kind==='mem'){this.emitEffectiveAddress(fn,op);fn.i32_load(lane*4,0);return;}
+        throw new Error('Invalid XMM lane source');
+    }
+
+    private emitXmmLaneStore(fn: WasmFunctionBuilder, op: Operand, lane: number) {
+        const reg=this.xmmIndex(op);
+        if(reg!==undefined){fn.global_set(this.xmmLanes[reg][lane]);return;}
+        if(op.kind==='mem'){
+            fn.local_set(32);this.emitEffectiveAddress(fn,op);fn.local_get(32);fn.i32_store(lane*4,0);return;
+        }
+        throw new Error('Invalid XMM lane destination');
+    }
+
+    private emitXmmMove(fn: WasmFunctionBuilder, inst: ParsedInstruction, lanes: number, clearMemoryLoadUpper: boolean) {
+        const [dst,src]=inst.operands;
+        if(!dst || !src || (this.xmmIndex(dst)===undefined && this.xmmIndex(src)===undefined)) {
+            fn.i32_const(inst.addr);fn.global_set(this.unsupportedPc);fn.emitBytes([0x00]);return;
+        }
+        for(let lane=0;lane<lanes;lane++){this.emitXmmLaneLoad(fn,src,lane);this.emitXmmLaneStore(fn,dst,lane);}
+        if(clearMemoryLoadUpper && src.kind==='mem' && this.xmmIndex(dst)!==undefined){
+            for(let lane=lanes;lane<4;lane++){fn.i32_const(0);this.emitXmmLaneStore(fn,dst,lane);}
+        }
+    }
+
     emitLoadOperandValue(fn: WasmFunctionBuilder, op: Operand) {
+        if(this.xmmIndex(op)!==undefined){this.emitXmmLaneLoad(fn,op,0);return;}
         if (op.kind === 'imm') {
             fn.i32_const(op.value);
             return;
@@ -2182,6 +2263,7 @@ export class Lifter {
     }
 
     emitLoadFloatValue(fn: WasmFunctionBuilder, op: Operand) {
+        if(this.xmmIndex(op)!==undefined){this.emitXmmLaneLoad(fn,op,0);fn.f32_reinterpret_i32();return;}
         if (op.kind === 'imm') {
             fn.f32_const(op.value);
             return;
@@ -2199,6 +2281,7 @@ export class Lifter {
     }
 
     emitStoreFloatValue(fn: WasmFunctionBuilder, dst: Operand) {
+        if(this.xmmIndex(dst)!==undefined){fn.i32_reinterpret_f32();this.emitXmmLaneStore(fn,dst,0);return;}
         if (dst.kind === 'reg') {
             const localIdx = REG_TO_LOCAL[dst.baseReg];
             fn.local_set(localIdx, dst.name);
