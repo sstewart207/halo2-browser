@@ -1,6 +1,7 @@
 import { ModuleDescriptor, calculateStackCleanup } from "../api/types";
 import { setupapiModule } from "../api/setupapi.api";
 import { xinput9_1_0Module } from "../api/xinput9_1_0.api";
+import { sldl_dllModule } from "../api/sldl_dll.api";
 import { kernel32VistaSupplement } from "../api/kernel32-vista-supplement";
 import { win32ImportSupplements } from "../api/win32-import-supplement";
 import { REFERENCE_ARG_COUNTS } from "../reference-argcounts.generated";
@@ -76,6 +77,7 @@ export class APIRegistry {
         // is fixed at compile time — new *.api.ts files are invisible until rebuild).
         this.registerModule(setupapiModule);
         this.registerModule(xinput9_1_0Module);
+        this.registerModule(sldl_dllModule);
 
         try {
             const apiModules = import.meta.glob('../api/*.api.ts', { eager: true });

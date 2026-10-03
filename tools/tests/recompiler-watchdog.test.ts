@@ -2,6 +2,25 @@ import {test,expect} from 'bun:test';
 import {Lifter} from '../recompiler/lifter';
 import {RuntimeBridge} from '../recompiler/runtime-bridge';
 import type {CFGFunction} from '../recompiler/types';
+test('truncated multi-block CFG traps at missing code instead of wrapping to entry',()=>{
+ const f:CFGFunction={name:'truncated',entry:'0x1000',rva:'0x1000',size:4,basicBlocks:[
+ {start:'0x1000',end:'0x1000',instructions:[{addr:'0x1000',len:2,mnemonic:'JMP',ops:'0x1002'}],destinations:[{addr:'0x1002',type:'UNCONDITIONAL_JUMP'}]},
+ {start:'0x1002',end:'0x1002',instructions:[{addr:'0x1002',len:2,mnemonic:'INC',ops:'EAX'}],destinations:[]}]};
+ const l=new Lifter({importMemory:true,memoryPages:1,debugBlockLimit:10});l.prepareModule([f]);l.liftFunction(f);l.moduleBuilder.addExport('run',0,0);
+ const b=new RuntimeBridge({memory:new WebAssembly.Memory({initial:1})});const i=new WebAssembly.Instance(new WebAssembly.Module(l.moduleBuilder.toBinary()),b.createWasmImports());
+ expect(()=> (i.exports.run as Function)(0x8000,0,0)).toThrow();
+ expect((i.exports.aot_unsupported_pc as WebAssembly.Global).value).toBe(0x1004);
+ expect((i.exports.aot_debug_fuel as WebAssembly.Global).value).toBe(8);
+});
+test('nonbranch fallthrough uses guest addresses with unordered CFG blocks',()=>{
+ const f:CFGFunction={name:'ordered',entry:'0x1000',rva:'0x1000',size:5,basicBlocks:[
+ {start:'0x1000',end:'0x1000',instructions:[{addr:'0x1000',len:2,mnemonic:'MOV',ops:'EAX, 0x5'}],destinations:[{addr:'0x1002',type:'FALL_THROUGH'}]},
+ {start:'0x1004',end:'0x1004',instructions:[{addr:'0x1004',len:1,mnemonic:'RET',ops:''}],destinations:[]},
+ {start:'0x1002',end:'0x1002',instructions:[{addr:'0x1002',len:2,mnemonic:'ADD',ops:'EAX, 0x7'}],destinations:[{addr:'0x1004',type:'FALL_THROUGH'}]}]};
+ const l=new Lifter({importMemory:true,memoryPages:1});l.prepareModule([f]);l.liftFunction(f);l.moduleBuilder.addExport('run',0,0);
+ const b=new RuntimeBridge({memory:new WebAssembly.Memory({initial:1})});const i=new WebAssembly.Instance(new WebAssembly.Module(l.moduleBuilder.toBinary()),b.createWasmImports());
+ expect((i.exports.run as Function)(0x8000,0,0)).toBe(12);expect((i.exports.esp as WebAssembly.Global).value).toBe(0x8004);
+});
 test('optional watchdog stops a guest loop and identifies its block',()=>{
  const f:CFGFunction={name:'loop',entry:'0x1000',rva:'0x1000',size:3,basicBlocks:[
  {start:'0x1000',end:'0x1000',instructions:[{addr:'0x1000',len:1,mnemonic:'JMP',ops:'0x1001'}],destinations:[{addr:'0x1001',type:'UNCONDITIONAL_JUMP'}]},

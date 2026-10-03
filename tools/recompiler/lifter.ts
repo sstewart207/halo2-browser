@@ -530,7 +530,17 @@ export class Lifter {
 
         // Non-branch instructions, including the last one, were already emitted.
         // Re-emitting a terminal CALL executes it twice and corrupts the stack.
-        const nextIdx = (blockIdx + 1) % numBlocks;
+        // Execution falls through to the next instruction address, not the
+        // next JSON array element (and never wraps to the function entry).
+        // Incomplete Ghidra disassembly must stop rather than invent a loop.
+        const fallthrough = block.destinations.find(dst => dst.type === 'FALL_THROUGH');
+        const nextAddr = fallthrough ? parseInt(fallthrough.addr, 16) : lastInst.addr + lastInst.len;
+        const nextIdx = blockMap.get(nextAddr);
+        if (nextIdx === undefined) {
+            fn.i32_const(nextAddr); fn.global_set(this.unsupportedPc);
+            fn.emitBytes([0x00]);
+            return;
+        }
         fn.i32_const(nextIdx);
         fn.local_set(LOCALS.BLOCK_ID);
         fn.br(loopDepth);

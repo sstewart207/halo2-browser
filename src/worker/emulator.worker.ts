@@ -51,6 +51,7 @@ import { Ws2_32 } from "./modules/ws2_32";
 import { Psapi } from "./modules/psapi";
 import { Powrprof } from "./modules/powrprof";
 import { XInput910 } from "./modules/xinput9_1_0";
+import { SldlDll } from "./modules/sldl_dll";
 import { Iphlpapi } from "./modules/iphlpapi";
 import { Tapi32 } from "./modules/tapi32";
 import { Setupapi } from "./modules/setupapi";
@@ -2052,6 +2053,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       const psapi = new Psapi();
       const powrprof = new Powrprof();
       const xinput9_1_0 = new XInput910();
+      const sldl_dll = new SldlDll();
       const imagehlp = new ImageHlp();
       const ifc20 = new IFC20();
       const gdiplus = new GdiPlus();
@@ -2088,6 +2090,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
           psapi.name,
           powrprof.name,
           xinput9_1_0.name,
+          sldl_dll.name,
           imagehlp.name,
           iphlpapi.name,
           tapi32.name,
@@ -2162,6 +2165,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       psapi.initialize(process);
       powrprof.initialize(process);
       xinput9_1_0.initialize(process);
+      sldl_dll.initialize(process);
       imagehlp.initialize(process);
       ifc20.initialize(process);
       gdiplus.initialize(process);
@@ -2228,6 +2232,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       process.registerModule(psapi.name, psapi);
       process.registerModule(powrprof.name, powrprof);
       process.registerModule(xinput9_1_0.name, xinput9_1_0);
+      process.registerModule(sldl_dll.name, sldl_dll);
       process.registerModule(iphlpapi.name, iphlpapi);
       process.registerModule(tapi32.name, tapi32);
       process.registerModule(setupapi.name, setupapi);
@@ -2298,6 +2303,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       process.dispatcher.registerModule(psapi.name, psapi.exports);
       process.dispatcher.registerModule(powrprof.name, powrprof.exports);
       process.dispatcher.registerModule(xinput9_1_0.name, xinput9_1_0.exports);
+      process.dispatcher.registerModule(sldl_dll.name, sldl_dll.exports);
       process.dispatcher.registerModule(iphlpapi.name, iphlpapi.exports);
       process.dispatcher.registerModule(tapi32.name, tapi32.exports);
       process.dispatcher.registerModule(setupapi.name, setupapi.exports);
