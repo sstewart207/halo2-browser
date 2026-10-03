@@ -134,6 +134,8 @@ export class Lifter {
     private mxcsr: number;
     private debugFuel?: number;
     private debugPc?: number;
+    private debugEsp?: number;
+    private debugEbp?: number;
     private sehPrologs = new Map<number, { handler: number; cookie: number }>();
     private sehEpilogs = new Set<number>();
     private allocaProbes = new Map<number, number>();
@@ -188,8 +190,12 @@ export class Lifter {
         if (options.debugBlockLimit !== undefined) {
             this.debugFuel = this.moduleBuilder.addGlobal(0x7f, 1, options.debugBlockLimit);
             this.debugPc = this.moduleBuilder.addGlobal(0x7f, 1, 0);
+            this.debugEsp = this.moduleBuilder.addGlobal(0x7f, 1, 0);
+            this.debugEbp = this.moduleBuilder.addGlobal(0x7f, 1, 0);
             this.moduleBuilder.addExport('aot_debug_fuel', 3, this.debugFuel);
             this.moduleBuilder.addExport('aot_debug_pc', 3, this.debugPc);
+            this.moduleBuilder.addExport('aot_debug_esp', 3, this.debugEsp);
+            this.moduleBuilder.addExport('aot_debug_ebp', 3, this.debugEbp);
         }
 
         // Standard signature: (param $esp i32, $ecx i32, $eax i32) -> (result i32)
@@ -416,6 +422,10 @@ export class Lifter {
     private emitDebugWatchdog(fn: WasmFunctionBuilder, block: CFGBasicBlock) {
         if (this.debugFuel === undefined || this.debugPc === undefined) return;
         fn.i32_const(parseInt(block.start, 16)); fn.global_set(this.debugPc);
+        if (this.debugEsp !== undefined && this.debugEbp !== undefined) {
+            fn.local_get(LOCALS.ESP); fn.global_set(this.debugEsp);
+            fn.local_get(LOCALS.EBP); fn.global_set(this.debugEbp);
+        }
         fn.global_get(this.debugFuel); fn.i32_eqz(); fn.if_block(0x40);
         fn.emitBytes([0x00]); fn.watLines.push('    unreachable'); fn.end();
         fn.global_get(this.debugFuel); fn.i32_const(1); fn.i32_sub(); fn.global_set(this.debugFuel);

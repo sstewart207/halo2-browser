@@ -11,6 +11,17 @@ test('native imports call the actual compiled export and preserve native cleanup
  expect(bridge.callApi('xlive.dll','ord_5000',0x8000)).toBe(7);expect(esp.value).toBe(0x8008);
 });
 
+test('environment APIs preserve the caller stack across zero-arg retrieval and one-arg free',()=>{
+ const memory=new WebAssembly.Memory({initial:1});const esp=new WebAssembly.Global({value:'i32',mutable:true},0);
+ const bridge=new RuntimeBridge({memory});bridge.registerExports({esp});
+ bridge.registerModule('kernel32',{GetEnvironmentStringsW:(_c,_m,args)=>{expect(args).toEqual([]);return 0x3000;},FreeEnvironmentStringsW:(_c,_m,args)=>{expect(args).toEqual([0x3000]);return 1;}});
+ const view=new DataView(memory.buffer);view.setUint32(0x8004,0x3000,true);
+ expect(bridge.callApi('kernel32','GetEnvironmentStringsW',0x8000)).toBe(0x3000);
+ expect(esp.value).toBe(0x8004);
+ expect(bridge.callApi('kernel32','FreeEnvironmentStringsW',0x8000)).toBe(1);
+ expect(esp.value).toBe(0x8008);
+});
+
 test('missing native export reports the loaded guest address without fake success',()=>{
  const bridge=new RuntimeBridge({memory:new WebAssembly.Memory({initial:1}),nativeApiResolver:()=>0x13001234});
  expect(()=>bridge.callApi('xlive.dll','ord_5000',0x8000)).toThrow('AOT native export not recompiled: xlive.dll!ord_5000@0x13001234');

@@ -266,7 +266,7 @@ export class RecompilerRunner {
                 Logger.error(LogCategory.SYSTEM, `[Recompiler] Unsupported guest instruction at 0x${address}`);
                 throw new Error(`AOT unsupported guest instruction at 0x${address}`, {cause:e});
             }
-            if (exports.aot_debug_pc) Logger.error(LogCategory.SYSTEM, `[Recompiler] Last debug block: 0x${(exports.aot_debug_pc.value >>> 0).toString(16)}`);
+            if (exports.aot_debug_pc) Logger.error(LogCategory.SYSTEM, `[Recompiler] Last debug block: 0x${(exports.aot_debug_pc.value >>> 0).toString(16)} ESP=0x${(exports.aot_debug_esp?.value >>> 0).toString(16)} EBP=0x${(exports.aot_debug_ebp?.value >>> 0).toString(16)}`);
                 if (exports.aot_debug_fuel?.value === 0) {
                 Logger.error(LogCategory.SYSTEM, `[Recompiler] Debug block budget exhausted at 0x${(exports.aot_debug_pc.value >>> 0).toString(16)}`);
             }

@@ -1,3 +1,15 @@
+# NEWEST-63: pccompat native process attach succeeds in live Chrome
+
+October 3, 2026. Live Chrome completes pccompat.dll DllMain and advances to d3dx9_31.dll entry 0x13e8af6c. No AOT title/menu/video/campaign/60fps acceptance.
+
+- Build62 reproduced the live pccompat failure at __CRT_INIT epilogue 0x13c3a01b. GetModuleHandleA("KERNEL32.DLL") already returned nonzero 0x7c800000, so __mtinit module lookup was sound. EBP held 0x13c39f2e, the return address following ___crtGetEnvironmentStringsA.
+- A temporary AOT trace measured environment routine entry ESP=0x1301f90 and exit-block ESP=0x1301f88. Six saved pushes require entry-24=0x1301f78: the stack was over-cleaned by exactly 16 bytes. AOT bridge's four-argument default incorrectly handled zero-argument GetEnvironmentStringsW, so POP EBP restored the return address.
+- Added exact Win32 stdcall counts: GetEnvironmentStrings/GetEnvironmentStringsA/W=0; FreeEnvironmentStringsA/W=1. Test checks actual arguments and ESP for retrieval/free. 1,075 tests pass, 0 fail, 5,382 assertions; TypeScript clean.
+- Live Chrome after fix: environment exit ESP=0x1301f78, pccompat DllMain returns TRUE, runner attempts d3dx9_31 DllMain at 0x13e8af6c and stops explicitly because that native function is not compiled. Debug PC 0x13c3a112 is merely pccompat's last block, not the failure.
+- Temporary routine-specific trace was removed. Optional AOT block diagnostic now exposes aot_debug_esp/aot_debug_ebp alongside aot_debug_pc. The private Build63b with temporary trace verified Chrome; final source should be recompiled in next build.
+- NEXT: inspect exact extracted d3dx9_31.dll PE header and loader base, Ghidra export its CFG, add to native manifest, rebuild, boot. Entry 0x13e8af6c and preferred RVA 0x21af6c imply base 0x13c70000, but verify rather than assume. After attach, enter EXE at 0x407fd3/0x408005. Do not fabricate attach success. Experimental inherited EXE shell-success/queue substitutions remain unvalidated.
+- Keep private PE/CFG/WASM/bundle/logs/saves out of Git, bun.lock and unrelated files unstaged. Own private repo only; PR7 and issues remain open. Vite5174; tools/boot-halo2.ts loads the private bundle.
+
 # NEWEST-61: sldl_dll cleanly stubbed via HLE; native build 61 produced
 
 October 3, 2026. Bypassed the native sldl_dll self-decrypting runtime initializer deadlock cleanly by implementing a faithful HLE sldl_dll module and removing sldl_dll from the native AOT compilation unit.
