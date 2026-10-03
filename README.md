@@ -15,15 +15,15 @@ Active code is on [codex/halo2-browser-checkpoint](https://github.com/sstewart20
 - Corrected stack and calling-convention bugs: mutable shared ESP, stdcall cleanup, multi-block returns, external/indirect tail calls, SEH epilog stack restoration and CALL-IAT/RET wrappers.
 - Fixed CMP borrow/overflow, HLE export jump trampolines and API import parsing for names such as `ws2_32`.
 - Diagnosed a startup hang in the CRT cosine routine: unsupported `JP` had become an unconditional jump. Shared binary64 x87 state, stack push/pop, double memory access, cosine, status/control words, SAHF/parity branches and rounding-mode conversion now pass targeted tests. **The real Chrome boot gets past the previous cosine blocker.** Full x87 fidelity is still incomplete.
-- **1,052 tests pass; TypeScript checks clean.** Synthetic tests do not establish gameplay or rendering acceptance.
+- **1,057 tests pass; TypeScript checks clean.** Synthetic tests do not establish gameplay or rendering acceptance.
 
 Earlier CPU-emulation checkpoints recorded title/menu rendering and Armory campaign work. Those results belong to the earlier v86 execution path; they do not establish AOT rendering, AOT performance, or mobile compatibility.
 
 ### Current work
 
-Latest verified Chrome boot (NEWEST-54): **D3DX completes initialization and Cartographer executes farther through native CRT and constructor code.** Locked increment, bit tests, SSE lane shuffling and conditional moves are implemented. A nine-argument Windows API previously received only four; the AOT bridge now uses registered argument metadata. Recovered 43 omitted constructor entries.
+Latest verified Chrome boot (NEWEST-55): **D3DX completes initialization and Cartographer executes farther through native CRT and constructor code.** Locked increment, bit tests, SSE lane shuffling and conditional moves are implemented. A nine-argument Windows API previously received only four; the AOT bridge now uses registered argument metadata. Recovered 43 omitted constructor entries.
 
-The private module contains 31,182 functions (82.4 MB). CVTDQ2PD, ADDSD and CVTPD2PS now pass real Chrome startup. Current explicit stop: `PSRLQ` at `0x131c7706` in a CRT math routine. Next: packed shifts/math and MOVQ fidelity, finish xlive startup, then remaining DLLs and true TEB/TLS. Experimental EXE shell-success/synchronous-job substitutions still require review. No AOT video/menu, playable campaign or 60 FPS result is verified.
+The private module contains 31,182 functions (82.4 MB). CVTDQ2PD, ADDSD and CVTPD2PS now pass real Chrome startup. MOVQ, packed shifts, bit masks/subtraction and comparison now pass the CRT math routine. Current explicit stop: `BSR` at `0x130ab79e` in Cartographer container initialization. Next: bit scan, finish xlive startup, then remaining DLLs and true TEB/TLS. Experimental EXE shell-success/synchronous-job substitutions still require review. No AOT video/menu, playable campaign or 60 FPS result is verified.
 
 ## Goal
 
