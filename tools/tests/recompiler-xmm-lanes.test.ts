@@ -12,6 +12,16 @@ function build(ops:string[][],callee?:CFGFunction){
  return {i,v:new DataView(memory.buffer,0x1000,65536),run:()=> (i.exports.run as Function)(0x8000,0,0)};
 }
 const bits=[0x7fa12345,0x89abcdef,0x80000000,0x12345678];
+test('PSRLDQ shifts the whole 128-bit value by bytes and zeros vacated bytes',()=>{
+ for(const count of [0,1,4,8,15,16,255]){
+  const {v,run}=build([['MOVDQU','XMM0, xmmword ptr [0x2000]'],['PSRLDQ',`XMM0, 0x${count.toString(16)}`],['MOVDQU','xmmword ptr [0x2040], XMM0'],['RET','']]);for(let n=0;n<16;n++)v.setUint8(0x2000+n,n+1);run();expect(Array.from({length:16},(_,n)=>v.getUint8(0x2040+n))).toEqual(Array.from({length:16},(_,n)=>n+count<16?n+count+1:0));
+ }
+});
+test('low-byte/word unpack interleaves both low qwords without alias corruption',()=>{
+ for(const width of [1,2])for(const src of ['XMM1','XMM0','xmmword ptr [0x2020]']){
+  const {v,run}=build([['MOVDQU','XMM0, xmmword ptr [0x2000]'],['MOVDQU','XMM1, xmmword ptr [0x2020]'],[width===1?'PUNPCKLBW':'PUNPCKLWD',`XMM0, ${src}`],['MOVDQU','xmmword ptr [0x2040], XMM0'],['RET','']]);for(let n=0;n<16;n++){v.setUint8(0x2000+n,n+1);v.setUint8(0x2020+n,0x80+n);}const expected=[];for(let n=0;n<8;n+=width){for(const start of [0x2000,src==='XMM0'?0x2000:0x2020])for(let byte=0;byte<width;byte++)expected.push(v.getUint8(start+n+byte));}run();expect(Array.from({length:16},(_,n)=>v.getUint8(0x2040+n))).toEqual(expected);
+ }
+});
 test('BSF finds first matching byte mask with aliased destination and zero flag',()=>{
  for(const [value,expected] of [[1,0],[0x80000000,31],[0xb330,4],[0,undefined]] as const){
   const {v,run}=build([['MOV',`EAX, 0x${value.toString(16)}`],['BSF','EAX, EAX'],['PUSHFD',''],['POP','ECX'],['MOV','dword ptr [0x2040], ECX'],['RET','']]);const result=run();if(expected!==undefined)expect(result).toBe(expected);expect(v.getUint32(0x2040,true)&0x40).toBe(value===0?64:0);
@@ -88,6 +98,9 @@ test('CVTPD2PS memory conversion rounds to nearest even and preserves signed zer
  expect(v.getFloat32(0x2040,true)).toBe(1);expect(v.getUint32(0x2044,true)).toBe(0x80000000);
 });
 test('CMOVA and signed conditional moves distinguish ordering and equality',()=>{
+ for(const [op,carry] of [['CMOVC',true],['CMOVNC',false]] as const){
+  for(const less of [true,false]){const {run}=build([['MOV','EAX, 0x7'],['MOV','EDX, 0x9'],['CMP',less?'EAX, EDX':'EDX, EAX'],[op,'EAX, EDX'],['RET','']]);expect(run()).toBe(less===carry?9:7);}
+ }
  for(const [op,left,right,selected] of [['CMOVA','0x201','0x200',true],['CMOVA','0x200','0x200',false],['CMOVA','0x1','0xffffffff',false],['CMOVB','0x1','0xffffffff',true],['CMOVL','0xffffffff','0x1',true],['CMOVGE','0xffffffff','0x1',false]] as const){
   const {run}=build([['MOV',`ECX, ${left}`],['MOV',`EDX, ${right}`],['CMP','ECX, EDX'],['MOV','EAX, 0x7'],['MOV','EDX, 0x9'],[op,'EAX, EDX'],['RET','']]);expect(run()).toBe(selected?9:7);
  }

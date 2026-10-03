@@ -1,3 +1,14 @@
+# NEWEST-57: Cartographer reaches native display-mode enumeration
+
+October 3, 2026. Ghidra recovered observed callback 0x101891e0 into cfg_xlive57.json (9,962 xlive functions). It runs two native helpers and returns a status value; Chrome passes it, initializing additional CRT critical sections.
+
+- Added CMOVC/CMOVNC aliases using tested carry conditions. Added PUNPCKLBW/PUNPCKLWD interleaving low qwords into full 128-bit output with aliased source snapshots. Added PSRLDQ full-register byte shifting, crossing dword boundaries and clearing vacated bytes/counts >=16. MMX unpack forms explicitly trap.
+- Chrome passes CMOVC 0x131c8c6e, PUNPCKLBW 0x131c9706, PUNPCKLWD and PSRLDQ 0x131c971e. Native Cartographer now enumerates 25 display modes (EnumDisplaySettingsW), a materially later setup phase. This is display setup, not rendered video or frame-rate acceptance.
+- Current unresolved target 0x13059b30, preferred 0x10059b30, return 0x131aaf76, last debug block 0x131aaf54. Next Ghidra-recover verified target, rebuild and boot; then remaining native DLLs/true TEB/TLS/thread work. xlive process attach has not returned yet.
+- Validation: 1,064 tests / 0 failures / 5,288 assertions across 125 files; TypeScript clean. Private native-build57.json / halo2-native57.wasm: 31,185 functions, 82,532,325 bytes, public binary copied. Inputs EXE cfg_full53, D3DX cfg_d3dx9_43_51d, Cartographer cfg_xlive57. Proprietary files and logs stay outside Git.
+- No AOT title/menu/video/campaign/60fps acceptance. Preserve NEWEST-56 inherited rounding, TEB/TLS, remaining DLLs/dynamic attach/threads and experimental EXE shell/queue limitations.
+- Root AGENTS/CODEX-HANDOFF/HANDOFF and repo handoffs updated. Unrelated Gemini edits and bun.lock remain unstaged; only own private repo for pushes/comments, no PR merge or issue closure.
+
 # NEWEST-56: Native string routines and two recovered Cartographer entries
 
 October 3, 2026. BSR/BSF implement highest/lowest-set-bit indexing with word masking and ZF for zero. Zero-source destination and other flags are architecturally undefined, not certified. PSHUFLW snapshots low-word shuffles and preserves upper source qword. PCMPEQW compares all eight words, ORPS combines all four bit lanes, PMOVMSKB extracts all sixteen sign bits. MMX variants remain explicitly unsupported.

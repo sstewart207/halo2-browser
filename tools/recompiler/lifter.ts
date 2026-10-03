@@ -1268,6 +1268,33 @@ export class Lifter {
                 }
                 break;
             }
+            case 'PSRLDQ': {
+                const [dst,count]=inst.operands;
+                if(count.kind!=='imm')throw new Error('PSRLDQ requires an immediate');
+                for(let lane=0;lane<4;lane++){this.emitXmmLaneLoad(fn,dst,lane);fn.local_set(39+lane);}
+                for(let lane=0;lane<4;lane++){
+                    const bit=lane*32+count.value*8,index=Math.floor(bit/32),shift=bit%32;
+                    if(index>=4)fn.i32_const(0);
+                    else {
+                        fn.local_get(39+index);if(shift){fn.i32_const(shift);fn.i32_shr_u();}
+                        if(shift && index+1<4){fn.local_get(40+index);fn.i32_const(32-shift);fn.i32_shl();fn.i32_or();}
+                    }this.emitXmmLaneStore(fn,dst,lane);
+                }break;
+            }
+            case 'PUNPCKLBW':
+            case 'PUNPCKLWD': {
+                const [dst,src]=inst.operands;
+                if(this.xmmIndex(dst)===undefined){fn.i32_const(inst.addr);fn.global_set(this.unsupportedPc);fn.emitBytes([0x00]);break;}
+                for(let lane=0;lane<2;lane++){this.emitXmmLaneLoad(fn,dst,lane);fn.local_set(39+lane);this.emitXmmLaneLoad(fn,src,lane);fn.local_set(41+lane);}
+                const width=inst.mnemonic==='PUNPCKLBW'?8:16, units=32/width;
+                for(let lane=0;lane<4;lane++){
+                    for(let unit=0;unit<units;unit++){
+                        const element=Math.floor((lane*units+unit)/2),sourceLocal=(unit%2?41:39)+Math.floor(element/units);
+                        fn.local_get(sourceLocal);fn.i32_const((element%units)*width);fn.i32_shr_u();fn.i32_const((1<<width)-1);fn.i32_and();
+                        if(unit){fn.i32_const(unit*width);fn.i32_shl();fn.i32_or();}
+                    }this.emitXmmLaneStore(fn,dst,lane);
+                }break;
+            }
             case 'PCMPEQW': {
                 const [dst,src]=inst.operands;
                 if(this.xmmIndex(dst)===undefined){fn.i32_const(inst.addr);fn.global_set(this.unsupportedPc);fn.emitBytes([0x00]);break;}
@@ -1551,6 +1578,7 @@ export class Lifter {
             case 'CMOVZ': case 'CMOVE': case 'CMOVNZ': case 'CMOVNE': {
                 this.emitConditionalMove(fn,inst);break;
             }
+            case 'CMOVC': case 'CMOVNC':
             case 'CMOVA': case 'CMOVAE': case 'CMOVB': case 'CMOVBE':
             case 'CMOVL': case 'CMOVLE': case 'CMOVG': case 'CMOVGE':
             case 'CMOVS': case 'CMOVNS': case 'CMOVP': case 'CMOVNP': {
