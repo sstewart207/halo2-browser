@@ -439,4 +439,13 @@ Chrome passes all four native DLL attaches, Cartographer ordinal 5236, EXE callb
 - Space Bunny Max Alpha (Codebuff) notes: Single scenario map `01a_tutorial.map` (Armory); selecting other maps spins `GetFileAttributesA` forever with frozen heap. DInput accumulator slot gap blocks synthetic mouse-look. v86 2GB clamp is in `CPU.create_memory`.
 - Next: Inspect and recover target 0x5aa955 in Ghidra, append to `cfg_full72-merged.json`, recompile Build 73, and boot. Keep assets/binaries/logs/saves private and bun.lock unstaged.
 
+# NEWEST-73: EXE startup advances through 0x5aa955; next target 0x5a9e4e
+
+Chrome passes all four native DLL attaches, Cartographer ordinal 5236, EXE callback 0x5a9de6, and recovered EXE startup targets 0x5ac089, 0x5ab400, and 0x5aa955. Execution progresses past discord probes, heap allocations, CRT TLS/error handling, and block 0x5aa955, reaching unresolved indirect call target 0x5a9e4e (return 0x5aaaca, last block 0x5aa955). No AOT title/menu/video/campaign/60fps acceptance.
+
+- Private `../halo2-browser/scratch/ghidra/native-build73.json` uses `cfg_full73-merged.json` (38,649 functions / 123,352,728 bytes). Public binary `public/halo2_recompiled.wasm` is Build 73.
+- All 1,084 tests pass across 128 files (0 failures), typecheck clean (`tsc -p tsconfig.json --noEmit`).
+- Next: Inspect and recover target 0x5a9e4e in Ghidra, append to `cfg_full73-merged.json`, recompile Build 74, and boot. Keep assets/binaries/logs/saves private and bun.lock unstaged.
+
+
 
