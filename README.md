@@ -10,7 +10,7 @@ Active code is on [codex/halo2-browser-checkpoint](https://github.com/sstewart20
 
 ### Verified progress
 
-- Ghidra CFG extraction and whole-program WASM generation: the latest build covers **31,187 functions across the EXE, D3DX and Cartographer DLL**. Additional observed indirect-call entries are recovered as startup exposes them.
+- Ghidra CFG extraction and whole-program WASM generation: the latest build covers **34,486 functions across the EXE, D3DX, Cartographer and sldl DLLs**. Additional observed indirect-call entries are recovered as startup exposes them.
 - Chrome compiles and instantiates the actual generated WASM over guest memory. Execution proceeds through real CRT paths and Win32 HLE calls, including version checks, heap allocation, locks and TLS/FLS operations.
 - Corrected stack and calling-convention bugs: mutable shared ESP, stdcall cleanup, multi-block returns, external/indirect tail calls, SEH epilog stack restoration and CALL-IAT/RET wrappers.
 - Fixed CMP borrow/overflow, HLE export jump trampolines and API import parsing for names such as `ws2_32`.
@@ -21,9 +21,9 @@ Earlier CPU-emulation checkpoints recorded title/menu rendering and Armory campa
 
 ### Current work
 
-Latest verified Chrome boot (NEWEST-59): **both D3DX and Cartographer's native xlive DLL complete process initialization successfully.** Implemented missing CRT instructions, corrected shared SIMD and arithmetic state, recovered native callback entries, and added the Unicode CryptoAPI provider entry and real SHA-256 output with browser WebCrypto/JSPI. The checksum placeholder is not used as a SHA-256 digest.
+Latest verified Chrome boot (NEWEST-60): **both D3DX and Cartographer's native xlive DLL complete process initialization successfully.** Unicode CryptoAPI and real SHA-256 now work on that path. The next native DLL, sldl, is compiled and its startup begins; all 19 native CRT initializer-table entries have been recovered with Ghidra.
 
-The private module contains 31,187 functions (89.3 MB). Current explicit stop: **sldl_dll entry `0x13eb0a5a` has not been recompiled yet.** Next: that DLL, pccompat and d3dx9_31, then remaining thread/TLS/runtime work and actual title/menu acceptance. Experimental EXE shell-success/synchronous-job substitutions still require review. No AOT video/menu, playable campaign or 60 FPS result is claimed.
+The private module contains 34,486 functions (94.8 MB). Current stop: **an incompletely disassembled sldl initializer loops at `0x13eb0416` until the watchdog stops it.** Original bytes identify a missing LEA instruction and stack-based return dispatch. Next: correct that analysis and implement/test the required control flow, then remaining DLL/thread/TLS work and title/menu acceptance. Experimental EXE shell-success/synchronous-job substitutions still require review. No AOT video/menu, playable campaign or 60 FPS result is claimed.
 
 ## Goal
 
