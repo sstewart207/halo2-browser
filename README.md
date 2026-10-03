@@ -10,20 +10,20 @@ Active code is on [codex/halo2-browser-checkpoint](https://github.com/sstewart20
 
 ### Verified progress
 
-- Ghidra CFG extraction and whole-program WASM generation: the latest build covers **16,451 functions and 936,017 instructions**. Additional observed indirect-call entries are recovered as startup exposes them.
+- Ghidra CFG extraction and whole-program WASM generation: the latest build covers **16,549 functions and 938,032 instructions**. Additional observed indirect-call entries are recovered as startup exposes them.
 - Chrome compiles and instantiates the actual generated WASM over guest memory. Execution proceeds through real CRT paths and Win32 HLE calls, including version checks, heap allocation, locks and TLS/FLS operations.
 - Corrected stack and calling-convention bugs: mutable shared ESP, stdcall cleanup, multi-block returns, external/indirect tail calls, SEH epilog stack restoration and CALL-IAT/RET wrappers.
 - Fixed CMP borrow/overflow, HLE export jump trampolines and API import parsing for names such as `ws2_32`.
 - Diagnosed a startup hang in the CRT cosine routine: unsupported `JP` had become an unconditional jump. Shared binary64 x87 state, stack push/pop, double memory access, cosine, status/control words, SAHF/parity branches and rounding-mode conversion now pass targeted tests. **The real Chrome boot gets past the previous cosine blocker.** Full x87 fidelity is still incomplete.
-- **996 tests pass; TypeScript checks clean.** Synthetic tests do not establish gameplay or rendering acceptance.
+- **1,013 tests pass; TypeScript checks clean.** Synthetic tests do not establish gameplay or rendering acceptance.
 
 Earlier CPU-emulation checkpoints recorded title/menu rendering and Armory campaign work. Those results belong to the earlier v86 execution path; they do not establish AOT rendering, AOT performance, or mobile compatibility.
 
 ### Current work
 
-Latest verified Chrome stop: **`FNCLEX` at `0x68820d` in `__fpmath`**. Unsupported instructions now stop and report their exact guest address instead of being silently skipped. That exposed an earlier missing `LEAVE` stack-frame instruction, which is now implemented and verified. The runner now invokes the complete PE entry once rather than treating it as a cookie-only initializer.
+Latest verified Chrome stop (NEWEST-50): **missing `xlive.dll!ord_5000` (`XLiveInitialize`) at debug block `0x6a85cb`**. The shared-register and SEH save/restore fixes get past the repeated temporary-filename loop and into further game initialization. `FNCLEX`, CPUID and the earlier CRT blockers are resolved.
 
-Next: implement actual x87 exception-state clearing for FNCLEX and continue from observed instruction failures. Full x87 precision/status, SIMD, native DLL initialization and actual TEB/TLS reconciliation remain incomplete. Keep changes tied to meaningful tests and real Chrome results.
+Next: execute or port the required Cartographer DLL initialization path accurately, then verify a real AOT title/menu and input. The current private CFG includes experimental shell-success and synchronous-job substitutions; those still need review and are not evidence of faithful game behavior. Native DLL initialization, complete instruction semantics and actual TEB/TLS reconciliation remain incomplete. There is no verified playable AOT build or 60 FPS result yet.
 
 ## Goal
 
