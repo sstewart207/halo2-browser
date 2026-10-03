@@ -43,3 +43,21 @@ test('real parity branch follows FCOS status through FSTSW and SAHF',()=>{
  const {i,v}=build([f]);v.setFloat64(0x2000,Math.PI,true);expect((i.exports.branch as Function)(0x8000,0,0)).toBe(7);
  v.setFloat64(0x2000,2**63,true);expect((i.exports.branch as Function)(0x8000,0,0)).toBe(9);
 });
+
+test('FNCLEX clears exception and busy flags while preserving condition codes and TOP bits',()=>{
+ const f=fn('clex_test',0x1000,[['FLD','double ptr [0x2000]'],['FCOS',''],['FNCLEX',''],['FSTSW','AX'],['RET','']]);
+ const {i,v}=build([f]);v.setFloat64(0x2000,2**63,true);(i.exports.x87_status as WebAssembly.Global).value=0x80ff;
+ const result=(i.exports.clex_test as Function)(0x8000,0,0);
+ expect(result & 0x00ff).toBe(0);
+ expect(result & 0x8000).toBe(0);
+ expect(result & 0x0400).toBe(0x0400);
+ expect((result >> 11) & 7).toBe(7);
+});
+
+test('FCLEX alias clears seeded exception flags',()=>{
+ const f=fn('fclex_test',0x1000,[['FCLEX',''],['FSTSW','AX'],['RET','']]);
+ const {i}=build([f]);(i.exports.x87_status as WebAssembly.Global).value=0x803f;
+ const result=(i.exports.fclex_test as Function)(0x8000,0,0);
+ expect(result & 0x80ff).toBe(0);
+});
+

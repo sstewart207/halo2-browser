@@ -118,6 +118,7 @@ export class Lifter {
     private x87Top: number;
     private x87Imports = new Map<string, number>();
     private unsupportedPc: number;
+    private eflags: number;
     private debugFuel?: number;
     private debugPc?: number;
 
@@ -150,6 +151,8 @@ export class Lifter {
         this.moduleBuilder.addExport('x87_control',3,this.x87Control);
         this.unsupportedPc=this.moduleBuilder.addGlobal(0x7f,1,0);
         this.moduleBuilder.addExport('aot_unsupported_pc',3,this.unsupportedPc);
+        this.eflags = this.moduleBuilder.addGlobal(0x7f, 1, 0x0202);
+        this.moduleBuilder.addExport('eflags', 3, this.eflags);
         if (options.debugBlockLimit !== undefined) {
             this.debugFuel = this.moduleBuilder.addGlobal(0x7f, 1, options.debugBlockLimit);
             this.debugPc = this.moduleBuilder.addGlobal(0x7f, 1, 0);
@@ -628,6 +631,108 @@ export class Lifter {
                 fn.local_set(LOCALS.ESP);
                 // store to dst
                 this.emitStoreOperandValue(fn, dst);
+                break;
+            }
+            case 'PUSHFD': case 'PUSHF': {
+                fn.global_get(this.eflags);
+                fn.i32_const(~0x08d5);
+                fn.i32_and();
+                fn.i32_const(0x0002);
+                fn.i32_or();
+
+                fn.local_get(LOCALS.CF);
+                fn.i32_const(1);
+                fn.i32_and();
+                fn.i32_or();
+
+                fn.local_get(36);
+                fn.i32_const(1);
+                fn.i32_and();
+                fn.i32_const(2);
+                fn.i32_shl();
+                fn.i32_or();
+
+                fn.local_get(LOCALS.ZF);
+                fn.i32_const(1);
+                fn.i32_and();
+                fn.i32_const(6);
+                fn.i32_shl();
+                fn.i32_or();
+
+                fn.local_get(LOCALS.SF);
+                fn.i32_const(1);
+                fn.i32_and();
+                fn.i32_const(7);
+                fn.i32_shl();
+                fn.i32_or();
+
+                fn.local_get(LOCALS.OF);
+                fn.i32_const(1);
+                fn.i32_and();
+                fn.i32_const(11);
+                fn.i32_shl();
+                fn.i32_or();
+
+                fn.local_set(LOCALS.TMP0);
+
+                fn.local_get(LOCALS.ESP);
+                fn.i32_const(4);
+                fn.i32_sub();
+                fn.local_tee(LOCALS.ESP);
+
+                fn.local_get(LOCALS.TMP0);
+                fn.i32_store(0, 2);
+                break;
+            }
+            case 'POPFD': case 'POPF': {
+                fn.local_get(LOCALS.ESP);
+                fn.i32_load(0, 2);
+                fn.local_set(LOCALS.TMP0);
+
+                fn.local_get(LOCALS.ESP);
+                fn.i32_const(4);
+                fn.i32_add();
+                fn.local_set(LOCALS.ESP);
+
+                fn.local_get(LOCALS.TMP0);
+                fn.i32_const(1);
+                fn.i32_and();
+                fn.local_set(LOCALS.CF);
+
+                fn.local_get(LOCALS.TMP0);
+                fn.i32_const(2);
+                fn.i32_shr_u();
+                fn.i32_const(1);
+                fn.i32_and();
+                fn.local_set(36);
+
+                fn.local_get(LOCALS.TMP0);
+                fn.i32_const(6);
+                fn.i32_shr_u();
+                fn.i32_const(1);
+                fn.i32_and();
+                fn.local_set(LOCALS.ZF);
+
+                fn.local_get(LOCALS.TMP0);
+                fn.i32_const(7);
+                fn.i32_shr_u();
+                fn.i32_const(1);
+                fn.i32_and();
+                fn.local_set(LOCALS.SF);
+
+                fn.local_get(LOCALS.TMP0);
+                fn.i32_const(11);
+                fn.i32_shr_u();
+                fn.i32_const(1);
+                fn.i32_and();
+                fn.local_set(LOCALS.OF);
+
+                fn.local_get(LOCALS.TMP0);
+                fn.i32_const(~0x08d5);
+                fn.i32_and();
+                fn.i32_const(0x0002);
+                fn.i32_or();
+                fn.global_set(this.eflags);
                 break;
             }
             case 'ADD': {
@@ -1143,6 +1248,13 @@ export class Lifter {
             case 'FSTSW': case 'FNSTSW': {
                 const dst=inst.operands[0];if(!dst)return;
                 fn.global_get(this.x87Status);fn.i32_const(~0x3800);fn.i32_and();fn.global_get(this.x87Top);fn.i32_const(11);fn.i32_shl();fn.i32_or();this.emitStoreOperandValue(fn,dst);break;
+            }
+            case 'FCLEX': case 'FNCLEX': {
+                fn.global_get(this.x87Status);
+                fn.i32_const(0x7f00);
+                fn.i32_and();
+                fn.global_set(this.x87Status);
+                break;
             }
             case 'SAHF': {
                 for(const [bit,local] of [[0,LOCALS.CF],[2,36],[6,LOCALS.ZF],[7,LOCALS.SF]]) {
