@@ -981,6 +981,7 @@ const loadPeData = async (peData: Uint8Array, skipReset: boolean = false) => {
             stackTop: stackPointer,
             stackBase: stackPointer - mainStackSize,
             entryName: 'entry',
+            dllInits: pendingDllInits,
             logCalls: false,
           }).then(result => {
             gameSessionActive = false;

@@ -1,3 +1,20 @@
+# NEWEST-51: Native D3DX attach succeeds; Cartographer DLL executes in AOT
+
+Oct 2, 2026. Codex continued the native DLL execution work after NEWEST-50.
+
+- The EXE-only module omitted real DLL entry points. Runner now invokes pending native DLL_PROCESS_ATTACH callbacks before the EXE, checks their BOOL return, and marks initialization only on success. Missing compiled entries and mismatched DLL load bases stop explicitly.
+- Real DLL exports bypass HLE and execute compiled functions; native IAT target addresses are preserved. DLL import names are collected so SDK imports parse correctly. Removed fabricated pccompat success and mutex fallback from the active src RuntimeBridge. Gemini's delay-import bindings and argument-count additions are preserved in the committed runtime files; unrelated Gemini edits remain unstaged.
+- Added tools/recompile-native-cfg.ts and relocation-aware tools/recompiler/rebase-cfg.ts. Use private manifest inputs; merge EXE/DLL functions into one module with shared register globals. PE HIGHLOW records identify relocatable operands; constants are not rebased by guesswork. Unsupported relocations and ambiguous operands reject the build.
+- Ghidra exported exact bundled d3dx9_43.dll and existing xlive.dll. Recovered observed D3DX C/C++ constructor entries, including 66 missing functions from its initializer table. Final D3DX CFG cfg_d3dx9_43_51d.json has 4,674 functions; cfg_xlive51.json has 9,903.
+- Routed msvcrt _initterm/_initterm_e callbacks into compiled exports instead of the old CPU scheduler. Callback tables are validated before execution; _initterm_e propagates failure. Added MOVSD/MOVSD.REP, CLD/STD and FDIVRP with regressions. Unsupported AVX instructions compile as explicit address-reporting traps without parsing YMM operands; this is not AVX support.
+- Verified desktop Chrome: D3DX DllMain at 0x13bcec0d returns success, then xlive DllMain at 0x131949ff executes. Current honest stop is MOVLPD at runtime 0x131957c4, preferred 0x101957c4, in FUN_101957b7 (CRT security-cookie setup). Exact operand: qword ptr [EBP + -0xc], XMM0, preceded by XORPS XMM0, XMM0. Implement bit-accurate low-64-bit SSE semantics; do not generalize a zero-store shortcut.
+- Latest private manifest scratch/ghidra/native-build51x.json combines cfg_full53.json, cfg_d3dx9_43_51d.json at base 0x13a10000, and cfg_xlive51.json at base 0x13000000. Build: 31,126 functions, 80,204,428 bytes, 62,278 Chrome exports, compile 49.37 ms. Output scratch/ghidra/halo2-native51.wasm copied to public/halo2_recompiled.wasm (generated assets stay private).
+- Validation: TypeScript clean; 1,033 tests pass / 0 fail across 122 files, 5,103 assertions. Tests verify native import routing, IAT preservation, attach ordering/failure/base guards, constructor execution, relocation selection, string copy directions and floating-point reverse divide/pop.
+- Next DLLs after xlive: sldl_dll at 0x13c10000 / entry 0x13eb0a5a; pccompat at 0x13f00000 / entry 0x13f2a118; d3dx9_31 at 0x13f60000 / entry 0x1417af6c. Their exact bundled PE files are extracted privately in scratch/ghidra. They still need recompilation and validated attach execution. Check bases against live loader before builds.
+- Outstanding: real TEB/TLS reconciliation (runner uses 0x30000; scheduler main TEB 0x1302000), native dynamic LoadLibrary attach continuation, compiled thread callbacks, full SIMD/x87 semantics. Native CRT callback bridge is implemented only for _initterm/_initterm_e.
+- Preserve NEWEST-50 warning: cfg_full53 still includes Gemini's experimental successful-shell and synchronous-queue substitutions. This checkpoint does not certify faithful whole-game recompilation. No AOT title/menu/frames, 60 FPS, gameplay/audio/controller/save acceptance. No playable-build clock ETA is supported.
+- Bundles, game DLLs, CFGs, logs, screenshots, saves and accounts remain outside Git. bun.lock stays unstaged. Do not touch upstream repos or merge PR7/close issues.
+
 # NEWEST-50: AOT internal register ABI fixed; Chrome reaches missing XLiveInitialize
 
 Oct 2, 2026. Codex resumed Gemini/Antigravity's interrupted, uncommitted work on `codex/halo2-browser-checkpoint`.

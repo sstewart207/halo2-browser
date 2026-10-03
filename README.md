@@ -10,20 +10,20 @@ Active code is on [codex/halo2-browser-checkpoint](https://github.com/sstewart20
 
 ### Verified progress
 
-- Ghidra CFG extraction and whole-program WASM generation: the latest build covers **16,549 functions and 938,032 instructions**. Additional observed indirect-call entries are recovered as startup exposes them.
+- Ghidra CFG extraction and whole-program WASM generation: the latest build covers **31,126 functions across the EXE, D3DX and Cartographer DLL**. Additional observed indirect-call entries are recovered as startup exposes them.
 - Chrome compiles and instantiates the actual generated WASM over guest memory. Execution proceeds through real CRT paths and Win32 HLE calls, including version checks, heap allocation, locks and TLS/FLS operations.
 - Corrected stack and calling-convention bugs: mutable shared ESP, stdcall cleanup, multi-block returns, external/indirect tail calls, SEH epilog stack restoration and CALL-IAT/RET wrappers.
 - Fixed CMP borrow/overflow, HLE export jump trampolines and API import parsing for names such as `ws2_32`.
 - Diagnosed a startup hang in the CRT cosine routine: unsupported `JP` had become an unconditional jump. Shared binary64 x87 state, stack push/pop, double memory access, cosine, status/control words, SAHF/parity branches and rounding-mode conversion now pass targeted tests. **The real Chrome boot gets past the previous cosine blocker.** Full x87 fidelity is still incomplete.
-- **1,013 tests pass; TypeScript checks clean.** Synthetic tests do not establish gameplay or rendering acceptance.
+- **1,033 tests pass; TypeScript checks clean.** Synthetic tests do not establish gameplay or rendering acceptance.
 
 Earlier CPU-emulation checkpoints recorded title/menu rendering and Armory campaign work. Those results belong to the earlier v86 execution path; they do not establish AOT rendering, AOT performance, or mobile compatibility.
 
 ### Current work
 
-Latest verified Chrome stop (NEWEST-50): **missing `xlive.dll!ord_5000` (`XLiveInitialize`) at debug block `0x6a85cb`**. The shared-register and SEH save/restore fixes get past the repeated temporary-filename loop and into further game initialization. `FNCLEX`, CPUID and the earlier CRT blockers are resolved.
+Latest verified Chrome boot (NEWEST-51): **D3DX completes its real native DLL initialization, then Cartographer's xlive DLL executes its native startup.** The current stop is unsupported `MOVLPD` at `0x131957c4` in CRT security-cookie setup. The combined 80.2 MB WASM module contains 31,126 functions and compiles in Chrome in 49.37 ms; that measures compilation, not frame rate.
 
-Next: execute or port the required Cartographer DLL initialization path accurately, then verify a real AOT title/menu and input. The current private CFG includes experimental shell-success and synchronous-job substitutions; those still need review and are not evidence of faithful game behavior. Native DLL initialization, complete instruction semantics and actual TEB/TLS reconciliation remain incomplete. There is no verified playable AOT build or 60 FPS result yet.
+Added relocation-aware multi-image recompilation, native DLL attach/export routing and compiled CRT constructor callbacks. Next: bit-accurate low-64-bit SSE operations, finish xlive startup, then compile and initialize the remaining bundled DLLs. Actual TEB/TLS reconciliation remains incomplete. The private EXE CFG still contains experimental shell-success and synchronous-job substitutions that require review. There is no verified playable AOT build or 60 FPS result yet.
 
 ## Goal
 
@@ -52,7 +52,7 @@ node node_modules/tsgo/bin/tsc -p tsconfig.json --noEmit
 bun test tools/tests
 ```
 
-Run the dev server on port 5174 for the existing Chrome workflow. Game assets and the local extracted CFG are supplied privately and are not included in the repository. The latest local CFG is `cfg_full45.json`.
+Run the dev server on port 5174 for the existing Chrome workflow. Game assets and the local extracted CFG are supplied privately and are not included in the repository. The current private multi-image build uses `native-build51x.json`, described in the latest handoff.
 
 ```powershell
 # Optional bounded startup diagnostic; omit for an ordinary build.

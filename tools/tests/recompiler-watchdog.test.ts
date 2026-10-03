@@ -38,3 +38,11 @@ test('LEAVE restores the saved frame before RET publishes ESP',()=>{
  const b=new RuntimeBridge({memory:new WebAssembly.Memory({initial:1})});const i=new WebAssembly.Instance(new WebAssembly.Module(l.moduleBuilder.toBinary()),b.createWasmImports());
  expect((i.exports.frame as Function)(0x8000,0,0)).toBe(7);expect((i.exports.esp as WebAssembly.Global).value).toBe(0x8004);
 });
+
+test('unsupported AVX with YMM operands compiles to an explicit PC trap',()=>{
+ const f:CFGFunction={name:'avx',entry:'0x1234',rva:'0x1234',size:2,basicBlocks:[{start:'0x1234',end:'0x1235',instructions:[{addr:'0x1234',len:1,mnemonic:'VMOVDQU',ops:'YMM0, ymmword ptr [EAX]'},{addr:'0x1235',len:1,mnemonic:'RET',ops:''}],destinations:[]}]};
+ const l=new Lifter({importMemory:true,memoryPages:1});l.prepareModule([f]);l.liftFunction(f);l.moduleBuilder.addExport('avx',0,0);
+ const b=new RuntimeBridge({memory:new WebAssembly.Memory({initial:1})});const i=new WebAssembly.Instance(new WebAssembly.Module(l.moduleBuilder.toBinary()),b.createWasmImports());
+ expect(()=> (i.exports.avx as Function)(0x8000,0,0)).toThrow('unreachable');
+ expect((i.exports.aot_unsupported_pc as WebAssembly.Global).value).toBe(0x1234);
+});

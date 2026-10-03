@@ -7,6 +7,7 @@ import { System } from '../system';
 import { Logger, LogCategory } from '../logger';
 import { RuntimeBridge } from './runtime-bridge';
 import { parseAotApiImport } from './import-name';
+import type { DllInitEntry } from '../pe-loader';
 
 export interface RecompilerRunOptions {
     system: System;
@@ -18,6 +19,7 @@ export interface RecompilerRunOptions {
     stackBase?: number;
     entryName?: string;
     logCalls?: boolean;
+    dllInits?: DllInitEntry[];
 }
 
 export class RecompilerRunner {
@@ -60,6 +62,12 @@ export class RecompilerRunner {
         const imageBase = system.process?.moduleRegistry?.getMainExecutableBase() ?? 0x00400000;
         view.setUint32(pebBase + 0x08, imageBase, true);  // ImageBaseAddress
 
+        const nativeApiResolver = (dll: string, func: string): number | undefined => {
+            const registry = system.process?.moduleRegistry;
+            const module = registry?.getByName?.(dll);
+            return registry && module?.isRealDll ? registry.getExportAddress(dll, func) : undefined;
+        };
+
         // Create RuntimeBridge connected to the process dispatcher
         this.bridge = new RuntimeBridge({
             memory,
@@ -68,6 +76,7 @@ export class RecompilerRunner {
             memoryLength,
             dispatcher: system.process?.dispatcher,
             logCalls,
+            nativeApiResolver,
         });
 
         // Parse in-memory PE Import Directory at imageBase to bind all IAT entries
@@ -114,14 +123,67 @@ export class RecompilerRunner {
                     }
 
                     if (funcName) {
+                        const nativeAddress = nativeApiResolver(dllName, funcName);
                         this.bridge.registerIatEntry(iatSlot, dllName, funcName);
                         // Populate IAT slot in memory with its own address for indirect calls
-                        view.setUint32(iatSlot, iatSlot, true);
+                        view.setUint32(iatSlot, nativeAddress ?? iatSlot, true);
                     }
                     i++;
                 }
                 descOffset += 20;
             }
+        }
+
+        // Native modules introduce additional HLE imports (e.g. msvcrt).
+        // Collect their actual PE import DLL names for unambiguous WASM name parsing.
+        for (const loaded of system.process?.moduleRegistry?.getAllModules?.() ?? []) {
+            if (!loaded.isRealDll) continue;
+            const base = loaded.baseAddress;
+            const optional = base + view.getUint32(base + 0x3c, true) + 24;
+            const rva = view.getUint32(optional + 104, true);
+            const size = view.getUint32(optional + 108, true);
+            if (!rva || !size) continue;
+            for (let descriptor = base + rva; descriptor + 20 <= base + rva + size; descriptor += 20) {
+                const nameRva = view.getUint32(descriptor + 12, true);
+                if (!nameRva) break;
+                let name = '';
+                for (let pointer = base + nameRva; pointer < view.byteLength; pointer++) {
+                    const value = view.getUint8(pointer); if (!value) break;
+                    name += String.fromCharCode(value);
+                }
+                if (name) importDllNames.add(name);
+            }
+        }
+
+        // Register Halo 2 delay-load import slots and thunks
+        const delayImports: Array<{ slot: number; thunk: number; dll: string; func: string }> = [
+            { slot: 0x86d74c, thunk: 0x412d95, dll: "advapi32.dll", func: "RegQueryValueExW" },
+            { slot: 0x86d748, thunk: 0x412dba, dll: "advapi32.dll", func: "RegOpenKeyExW" },
+            { slot: 0x86d760, thunk: 0x412ddf, dll: "kernel32.dll", func: "CreateFileW" },
+            { slot: 0x86d7ac, thunk: 0x412e04, dll: "kernel32.dll", func: "GetModuleFileNameW" },
+            { slot: 0x86d7e4, thunk: 0x412e29, dll: "shell32.dll", func: "ShellExecuteW" },
+            { slot: 0x86d7a0, thunk: 0x412e4e, dll: "kernel32.dll", func: "GetFileAttributesW" },
+            { slot: 0x86d770, thunk: 0x412e73, dll: "kernel32.dll", func: "ExpandEnvironmentStringsW" },
+            { slot: 0x86d804, thunk: 0x412e98, dll: "user32.dll", func: "LoadStringW" },
+            { slot: 0x86d7b0, thunk: 0x412ebd, dll: "kernel32.dll", func: "GetModuleHandleW" },
+            { slot: 0x86d808, thunk: 0x412ee2, dll: "user32.dll", func: "MessageBoxW" },
+            { slot: 0x86d764, thunk: 0x412f07, dll: "kernel32.dll", func: "CreateMutexW" },
+            { slot: 0x86d7f8, thunk: 0x412f2c, dll: "user32.dll", func: "GetMessageW" },
+            { slot: 0x86d7f4, thunk: 0x412f51, dll: "user32.dll", func: "DispatchMessageW" },
+            { slot: 0x86d80c, thunk: 0x412f76, dll: "user32.dll", func: "PeekMessageW" },
+            { slot: 0x86d7f0, thunk: 0x412f9b, dll: "user32.dll", func: "DefWindowProcW" },
+            { slot: 0x86d7cc, thunk: 0x412fc0, dll: "kernel32.dll", func: "MultiByteToWideChar" },
+            { slot: 0x86d7d8, thunk: 0x412fe5, dll: "kernel32.dll", func: "WideCharToMultiByte" },
+            { slot: 0x86d7e0, thunk: 0x41300a, dll: "kernel32.dll", func: "lstrlenW" },
+            { slot: 0x86d7b4, thunk: 0x41302f, dll: "kernel32.dll", func: "GetProcAddress" },
+            { slot: 0x86d7e8, thunk: 0x413054, dll: "user32.dll", func: "CharNextW" },
+            { slot: 0x86d814, thunk: 0x413079, dll: "user32.dll", func: "SendMessageW" },
+            { slot: 0x86d800, thunk: 0x41309e, dll: "user32.dll", func: "IsWindowUnicode" },
+        ];
+        for (const d of delayImports) {
+            this.bridge.registerIatEntry(d.slot, d.dll, d.func);
+            this.bridge.registerIatEntry(d.thunk, d.dll, d.func);
+            importDllNames.add(d.dll);
         }
 
         // Compile WASM module
@@ -146,6 +208,15 @@ export class RecompilerRunner {
         } else if (memoryOffset !== 0) {
             throw new Error('AOT module lacks guest_memory_base; rebuild before using offset guest RAM');
         }
+        for (const [name, global] of Object.entries(exports)) {
+            if (!name.startsWith('aot_native_base_')) continue;
+            const dllName = name.slice('aot_native_base_'.length);
+            const loaded = system.process?.moduleRegistry?.getByName?.(dllName + '.dll');
+            const expected = Number((global as WebAssembly.Global).value) >>> 0;
+            if (!loaded || loaded.baseAddress !== expected) {
+                throw new Error(`AOT native image base mismatch: ${dllName}, expected 0x${expected.toString(16)}, actual ${loaded ? '0x'+loaded.baseAddress.toString(16) : 'not loaded'}`);
+            }
+        }
         this.bridge.registerExports(exports);
         Logger.log(LogCategory.SYSTEM, `[Recompiler] Module instantiated with ${Object.keys(exports).length} exports.`);
 
@@ -160,10 +231,24 @@ export class RecompilerRunner {
             throw new Error(`[Recompiler] Target entry point "${entryName}" not found in exports!`);
         }
 
-        Logger.log(LogCategory.SYSTEM, `[Recompiler] Invoking native entry "${entryName}"(esp=0x${stackTop.toString(16)})...`);
 
-        // Invoke entry point
+        // Native DLL attach callbacks precede the EXE's CRT, as in the CPU bootloader.
+        // Missing compiled entries must stop explicitly rather than skip initialization.
         try {
+            for (const dll of options.dllInits ?? []) {
+                const esp = stackTop - 16;
+                view.setUint32(esp, 0, true);
+                view.setUint32(esp + 4, dll.baseAddress, true);
+                view.setUint32(esp + 8, 1, true); // DLL_PROCESS_ATTACH
+                view.setUint32(esp + 12, 1, true); // static load: lpReserved != NULL
+                Logger.log(LogCategory.SYSTEM, `[Recompiler] DllMain ${dll.name}@0x${dll.entryPoint.toString(16)}`);
+                const attached = await this.bridge.invokeNative(dll.entryPoint, esp);
+                if (!attached) throw new Error(`AOT DllMain rejected process attach: ${dll.name}`);
+                const loaded = system.process?.moduleRegistry?.getByBase?.(dll.baseAddress);
+                if (loaded) loaded.initialized = true;
+            }
+            // Invoke entry point exactly once after native DLL initialization.
+            Logger.log(LogCategory.SYSTEM, `[Recompiler] Invoking native entry "${entryName}"(esp=0x${stackTop.toString(16)})...`);
             const result = typeof (WebAssembly as any).promising === 'function'
                 ? await (WebAssembly as any).promising(targetEntry)(stackTop, 0, 0)
                 : targetEntry(stackTop, 0, 0);

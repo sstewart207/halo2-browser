@@ -16,12 +16,12 @@ export class IATResolver {
     private addressToEntry = new Map<number, IATEntry>();
     private nameToAddress = new Map<string, number>();
 
-    loadFromBuffer(buf: Buffer) {
+    loadFromBuffer(buf: Buffer, loadBase?: number) {
         const e_lfanew = buf.readUInt32LE(0x3c);
         const numSections = buf.readUInt16LE(e_lfanew + 6);
         const optHeaderSize = buf.readUInt16LE(e_lfanew + 20);
         const optHeaderOffset = e_lfanew + 24;
-        const imageBase = buf.readUInt32LE(optHeaderOffset + 28);
+        const imageBase = loadBase ?? buf.readUInt32LE(optHeaderOffset + 28);
         const importDirRVA = buf.readUInt32LE(optHeaderOffset + 104);
         const importDirSize = buf.readUInt32LE(optHeaderOffset + 108);
 

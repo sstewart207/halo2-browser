@@ -12,6 +12,12 @@ function build(functions:CFGFunction[],offset=0){
  const i=new WebAssembly.Instance(new WebAssembly.Module(l.moduleBuilder.toBinary()),bridge.createWasmImports());(i.exports.guest_memory_base as WebAssembly.Global).value=offset;bridge.registerExports(i.exports);
  return {i,v:new DataView(memory.buffer,offset,65536),memory};
 }
+test('FDIVRP divides ST0 by ST1 and pops while preserving the next stack value',()=>{
+ const f=fn('divide_pop',0x1000,[['FLD','double ptr [0x2000]'],['FLD','double ptr [0x2008]'],['FLD','double ptr [0x2010]'],['FDIVRP',''],['FSTP','double ptr [0x2018]'],['FSTP','double ptr [0x2020]'],['RET','']]);
+ const {i,v}=build([f]);v.setFloat64(0x2000,17,true);v.setFloat64(0x2008,2,true);v.setFloat64(0x2010,8,true);
+ (i.exports.divide_pop as Function)(0x8000,0,0);
+ expect(v.getFloat64(0x2018,true)).toBe(4);expect(v.getFloat64(0x2020,true)).toBe(17);
+});
 test('x87 doubles, stack pushes/pops and cosine survive an internal call at an offset',()=>{
  const caller=fn('caller',0x1000,[['FLD','double ptr [0x2000]'],['FLD','double ptr [0x2008]'],['CALL','0x1100'],['FSTP','double ptr [0x2010]'],['FSTP','double ptr [0x2018]'],['RET','']]);
  const callee=fn('callee',0x1100,[['FCOS',''],['RET','']]);

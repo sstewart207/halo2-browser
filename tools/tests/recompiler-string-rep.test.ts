@@ -82,3 +82,25 @@ test('SCASB.REPNE finds byte and sets ZF', () => {
     const zf = (instance.exports.test_scasb as Function)(0x8000, 0, 0) & 0xff;
     expect(zf).toBe(1);
 });
+
+
+for (const backwards of [false,true]) test(`MOVSD.REP copies dwords with DF=${backwards?1:0}`,()=>{
+ const {instance,view}=buildFn('copy_dwords',[
+  ['MOV',`ESI, ${backwards?'0x3008':'0x3000'}`],['MOV',`EDI, ${backwards?'0x4008':'0x4000'}`],['MOV','ECX, 3'],
+  [backwards?'STD':'CLD',''],['MOVSD.REP','ES:EDI, ESI'],['MOV','dword ptr [0x5000], ESI'],['MOV','dword ptr [0x5004], EDI'],['MOV','dword ptr [0x5008], ECX'],['RET','']
+ ]);
+ [1,2,3].forEach((value,i)=>view.setUint32(0x3000+i*4,value,true));
+ (instance.exports.copy_dwords as Function)(0x8000,0,0);
+ expect([0,4,8].map(n=>view.getUint32(0x4000+n,true))).toEqual([1,2,3]);
+ expect(view.getUint32(0x5000,true)).toBe(backwards?0x2ffc:0x300c);expect(view.getUint32(0x5004,true)).toBe(backwards?0x3ffc:0x400c);expect(view.getUint32(0x5008,true)).toBe(0);
+});
+
+test('zero-count REP MOVSD leaves memory and pointers untouched',()=>{
+ const {instance,view}=buildFn('copy_none',[['MOV','ESI, 0x3000'],['MOV','EDI, 0x4000'],['XOR','ECX, ECX'],['MOVSD.REP','ES:EDI, ESI'],['MOV','EAX, ESI'],['RET','']]);
+ view.setUint32(0x3000,42,true);expect((instance.exports.copy_none as Function)(0x8000,0,0)).toBe(0x3000);expect(view.getUint32(0x4000,true)).toBe(0);
+});
+
+test('single MOVSD preserves flags and ECX while moving one dword',()=>{
+ const {instance,view}=buildFn('copy_one',[['MOV','ESI, 0x3000'],['MOV','EDI, 0x4000'],['MOV','ECX, 9'],['CMP','ECX, 9'],['MOVSD','ES:EDI, ESI'],['SETZ','AL'],['MOV','dword ptr [0x5000], ECX'],['RET','']]);
+ view.setUint32(0x3000,0xabc123,true);expect((instance.exports.copy_one as Function)(0x8000,0,0)&255).toBe(1);expect(view.getUint32(0x4000,true)).toBe(0xabc123);expect(view.getUint32(0x5000,true)).toBe(9);
+});

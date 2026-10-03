@@ -6,6 +6,7 @@ import {
     CFGBasicBlock,
     CFGFunction,
     CFGExport,
+    CFGInstruction,
     MemoryOperand,
     Operand,
     ParsedInstruction,
@@ -17,6 +18,15 @@ import { parseInstruction } from './parser';
 import { WasmFunctionBuilder, WasmModuleBuilder } from './wasm-builder';
 
 import { IATResolver } from './iat-resolver';
+
+// AVX semantics are not implemented. Preserve the instruction address for an
+// explicit runtime trap without trying to parse unsupported YMM operands.
+function parseForLifting(inst: CFGInstruction): ParsedInstruction {
+    if (/^V[A-Z]/.test(inst.mnemonic)) {
+        return {addr:parseInt(inst.addr,16),len:inst.len,mnemonic:inst.mnemonic,operands:[],rawOps:inst.ops};
+    }
+    return parseInstruction(inst);
+}
 
 // Local indices inside lifted WASM function
 export const LOCALS = {
@@ -374,7 +384,7 @@ export class Lifter {
     liftBasicBlockInstructions(fn: WasmFunctionBuilder, block: CFGBasicBlock) {
         this.emitDebugWatchdog(fn, block);
         for (const rawInst of block.instructions) {
-            const inst = parseInstruction(rawInst);
+            const inst = parseForLifting(rawInst);
             this.liftInstruction(fn, inst);
         }
     }
@@ -387,7 +397,7 @@ export class Lifter {
         blockMap: Map<number, number>
     ) {
         this.emitDebugWatchdog(fn, block);
-        const insts = block.instructions.map(parseInstruction);
+        const insts = block.instructions.map(parseForLifting);
         const lastInst = insts.length > 0 ? insts[insts.length - 1] : null;
 
         // Check if last instruction is a branch or return
@@ -1312,13 +1322,13 @@ export class Lifter {
             }
             case 'FADD': case 'FADDP': case 'FIADD':
             case 'FSUB': case 'FSUBP': case 'FSUBRP':
-            case 'FMUL': case 'FMULP': case 'FDIV': case 'FDIVP': case 'FDIVR': {
+            case 'FMUL': case 'FMULP': case 'FDIV': case 'FDIVP': case 'FDIVR': case 'FDIVRP': {
                 const operands=inst.operands;
                 const pop=inst.mnemonic.endsWith('P');
                 const dst=operands.length>1?operands[0]:null;
                 const src=operands.length>1?operands[1]:operands[0];
                 const index=dst?.kind==='reg'&&dst.baseReg.startsWith('ST')?Number(dst.baseReg.slice(2)):(pop?1:0);
-                const reverse=inst.mnemonic==='FSUBRP'||inst.mnemonic==='FDIVR';
+                const reverse=inst.mnemonic==='FSUBRP'||inst.mnemonic==='FDIVR'||inst.mnemonic==='FDIVRP';
                 const loadSrc=()=>{if(src)this.emitX87Load(fn,src,inst.mnemonic==='FIADD');else fn.global_get(this.x87Stack[0]);};
                 if(reverse){loadSrc();fn.global_get(this.x87Stack[index]);}else{fn.global_get(this.x87Stack[index]);loadSrc();}
                 const op=inst.mnemonic.startsWith('FA')||inst.mnemonic==='FIADD'?0xa0:inst.mnemonic.startsWith('FS')?0xa1:inst.mnemonic.startsWith('FM')?0xa2:0xa3;
@@ -1519,6 +1529,35 @@ export class Lifter {
                 fn.br(0);
                 fn.end();
                 fn.end();
+                break;
+            }
+            case 'CLD': case 'STD': {
+                fn.global_get(this.eflags); fn.i32_const(inst.mnemonic === 'CLD' ? ~0x400 : 0x400);
+                if (inst.mnemonic === 'CLD') fn.i32_and(); else fn.i32_or();
+                fn.global_set(this.eflags); break;
+            }
+            case 'MOVSD': case 'MOVSD.REP': {
+                // A5 string-copy form; SSE MOVSD with XMM operands is a separate instruction.
+                if (/XMM/i.test(inst.rawOps)) {
+                    fn.i32_const(inst.addr); fn.global_set(this.unsupportedPc);
+                    fn.emitBytes([0x00]); fn.watLines.push('    unreachable'); break;
+                }
+                const repeated = inst.mnemonic === 'MOVSD.REP';
+                if (repeated) {
+                    fn.block(0x40); fn.loop(0x40);
+                    fn.local_get(LOCALS.ECX); fn.i32_eqz(); fn.br_if(1);
+                }
+                fn.local_get(LOCALS.EDI); fn.local_get(LOCALS.ESI); fn.i32_load(); fn.i32_store();
+                fn.global_get(this.eflags); fn.i32_const(0x400); fn.i32_and();
+                fn.if_block(0x7f); fn.i32_const(-4); fn.else_block(); fn.i32_const(4); fn.end();
+                fn.local_set(LOCALS.TMP0);
+                for (const reg of [LOCALS.ESI, LOCALS.EDI]) {
+                    fn.local_get(reg); fn.local_get(LOCALS.TMP0); fn.i32_add(); fn.local_set(reg);
+                }
+                if (repeated) {
+                    fn.local_get(LOCALS.ECX); fn.i32_const(1); fn.i32_sub(); fn.local_set(LOCALS.ECX);
+                    fn.br(0); fn.end(); fn.end();
+                }
                 break;
             }
             case 'MOVSB': {
