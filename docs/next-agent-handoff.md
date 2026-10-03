@@ -1,3 +1,20 @@
+# NEWEST-50: AOT internal register ABI fixed; Chrome reaches missing XLiveInitialize
+
+Oct 2, 2026. Codex resumed Gemini/Antigravity's interrupted, uncommitted work on `codex/halo2-browser-checkpoint`.
+
+- Ghidra is not running. The video_flow, video_startup and bitmap_create logs report successful output writes. Gemini continued beyond NEWEST-49: private CFG48..53 recover WinMain/preloop/subsystem/queue functions; runtime edits bind delay imports and extend API argument counts.
+- Important audit: cfg_full49 substitutes successful shell/compatibility initialization; cfg_full52/53 execute a queued callback synchronously instead of the native queue path. These are experimental behavior substitutions, not faithful whole-program recompilation. Preserve them for investigation; do not treat startup progress as full Cartographer acceptance. The uncommitted RuntimeBridge also contains fallback success for pccompat and a fabricated mutex handle; those remain unreviewed, not endorsed by this checkpoint.
+- Reproduced Gemini's latest binary in real desktop Chrome: repeated GetFileAttributesW("\s16i.") and debug fuel exhaustion at 0x68e66c (xtow_s). No filesystem cleanup performed.
+- Root compiler defect: only ESP/ECX/EAX crossed lifted function boundaries; optimized internal functions such as wgenfname consume inherited EBX. Added mutable shared ECX/EDX/EBX/EBP/ESI/EDI globals, publication before calls/tail calls/returns and reload after calls; entry inherits non-parameter registers. This preserves the existing three-argument WASM signature.
+- A regression first failed with expected 42 / received 0, then passed. A second regression verifies native SEH callee saves/restores EBX/ESI/EDI and caller EBP.
+- Sharing registers exposed an existing inlined __SEH_prolog4/epilog4 omission. Verified original Ghidra helper instructions: save EBX/ESI/EDI and cookie, net inline frame overhead 0x1c, restore registers after cookie, preserve the caller return slot. Corrected actual save/restore slots; expanded synthetic test RAM to include the real security-cookie address 0x868b38.
+- Final validation: typecheck clean; 1,013 tests pass across 120 files, 5,048 assertions. Rebuilt private cfg_full53.json: 16,549 functions / 153,164 blocks / 938,032 instructions; 35,513,425-byte WASM, debug fuel 1,000,000. Original Gemini binary preserved privately as scratch/ghidra/halo2_recompiled-gemini53-preserved.wasm; current generated binary is halo2_recompiled-register50.wasm and public/halo2_recompiled.wasm.
+- Final live Chrome: filename progresses to \s16i.11, COM known-folder initialization runs, and execution stops honestly at `AOT API implementation missing: xlive.dll!ord_5000`, debug block 0x6a85cb. Source confirms ordinal 5000 is XLiveInitialize -> XLiveInitializeEx -> initialize_instance + D3D integration (work/cartographer-source/xlive/H2MOD/GUI/XLiveRendering.cpp). There is no existing xlive HLE module. Do not return fake success; next scope is actual native DLL export/initialization execution or a reviewed source-backed port of the required path.
+- No AOT title/menu/rendered frame, gameplay, 60 FPS, controller/audio/save acceptance. Screenshot capture timed out; live log/DOM evidence only. Browser control stopped after three tool failures per AGENTS rule. No usable screenshot saved this checkpoint.
+- Gemini's unreviewed edits and private disassembly/CFG files remain locally preserved and unstaged. Do not commit private dumps, bun.lock, assets, saves or logs. Latest changes do not certify Gemini's synthetic CFG patches.
+
+Next: review existing native xlive loading/export mapping, recover/compile its real initializer and required dependencies, and reassess experimental shell/queue patches. Keep unsupported continuations explicit. Finish desktop AOT menu navigation before campaign. No reliable playable-build clock ETA exists yet.
+
 # Next agent: first playable build (menu text is fixed)
 
 ## Oct 2 2026, Antigravity/Gemini (with Codex): STATIC RECOMPILATION STAGE 7 (INDIRECT CALL RESOLUTION, DYNAMIC IMPORT THUNKS & NATIVE CRT EXECUTION) COMPLETE (NEWEST-38)

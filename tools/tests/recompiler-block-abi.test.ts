@@ -26,8 +26,8 @@ test('inlined SEH epilog restores caller return slot without popping it twice', 
  {addr:'0x200c',len:3,mnemonic:'MOV',ops:'EAX, dword ptr [EBP + 0x8]'},
  {addr:'0x200f',len:5,mnemonic:'CALL',ops:'0x692d08'},
  {addr:'0x2014',len:3,mnemonic:'RET',ops:'0x4'}]}]};
- const l=new Lifter({importMemory:true,memoryPages:4});l.prepareModule([f]);l.liftFunction(f);l.moduleBuilder.addExport('caller',0,0);
- const memory=new WebAssembly.Memory({initial:4});new DataView(memory.buffer).setUint32(0x8004,0xabc123,true);
+ const l=new Lifter({importMemory:true,memoryPages:160});l.prepareModule([f]);l.liftFunction(f);l.moduleBuilder.addExport('caller',0,0);
+ const memory=new WebAssembly.Memory({initial:160});new DataView(memory.buffer).setUint32(0x8004,0xabc123,true);
  const b=new RuntimeBridge({memory});const i=new WebAssembly.Instance(new WebAssembly.Module(l.moduleBuilder.toBinary()),b.createWasmImports());b.registerExports(i.exports);
  expect((i.exports.caller as Function)(0x8000,0,0)).toBe(0xabc123);
  expect((i.exports.esp as WebAssembly.Global).value).toBe(0x8008);
