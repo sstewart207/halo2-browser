@@ -10,20 +10,20 @@ Active code is on [codex/halo2-browser-checkpoint](https://github.com/sstewart20
 
 ### Verified progress
 
-- Ghidra CFG extraction and whole-program WASM generation: the latest private build covers **38,632 functions across the EXE, D3DX9_43, Cartographer xlive, pccompat and D3DX9_31 DLLs**. Additional observed entries are recovered as startup exposes them.
+- Ghidra CFG extraction and whole-program WASM generation: the latest private build covers **38,645 functions across the EXE, D3DX9_43, Cartographer xlive, pccompat and D3DX9_31 DLLs**. Additional observed entries are recovered as startup exposes them.
 - Chrome compiles and instantiates the actual generated WASM over guest memory. Execution proceeds through real CRT paths and Win32 HLE calls, including version checks, heap allocation, locks and TLS/FLS operations.
 - Corrected stack and calling-convention bugs: mutable shared ESP, stdcall cleanup, multi-block returns, external/indirect tail calls, SEH epilog stack restoration and CALL-IAT/RET wrappers.
 - Fixed CMP borrow/overflow, HLE export jump trampolines and API import parsing for names such as `ws2_32`.
 - Diagnosed a startup hang in the CRT cosine routine: unsupported `JP` had become an unconditional jump. Shared binary64 x87 state, stack push/pop, double memory access, cosine, status/control words, SAHF/parity branches and rounding-mode conversion now pass targeted tests. **The real Chrome boot gets past the previous cosine blocker.** Full x87 fidelity is still incomplete.
-- **1,077 tests pass; TypeScript checks clean.** Synthetic tests do not establish gameplay or rendering acceptance.
+- **1,082 tests pass; TypeScript checks clean.** Synthetic tests do not establish gameplay or rendering acceptance.
 
 Earlier CPU-emulation checkpoints recorded title/menu rendering and Armory campaign work. Those results belong to the earlier v86 execution path; they do not establish AOT rendering, AOT performance, or mobile compatibility.
 
 ### Current work
 
-Latest verified Chrome boot (NEWEST-64): **D3DX9_43, Cartographer xlive, pccompat and D3DX9_31 complete native process initialization, and halo2.exe startup is executing.** The next explicit stop is a missing EXE target at **0x404561** after recovered function 0x5ba425.
+Latest verified Chrome boot (NEWEST-69): **D3DX9_43, Cartographer xlive, pccompat and D3DX9_31 complete native process initialization, and halo2.exe startup is executing.** EXE startup now calls into native Cartographer code and receives callbacks. The next explicit stop is an unresolved EXE callback at **0x5a9de6** from xlive.
 
-The current private module contains 38,632 functions (123.3 MB). The next step recovers the observed EXE target and tests whether startup can advance toward WinMain. Experimental EXE shell-success/synchronous-job substitutions still require review. No AOT video/menu, playable campaign or 60 FPS result is claimed.
+The current private module contains 38,645 functions (123.3 MB). The next step recovers the observed EXE callback and tests whether startup can advance toward WinMain. Experimental EXE shell-success/synchronous-job substitutions still require review. No AOT video/menu, playable campaign or 60 FPS result is claimed.
 
 ## Goal
 

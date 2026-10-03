@@ -12,6 +12,21 @@ function build(ops:string[][],callee?:CFGFunction){
  return {i,v:new DataView(memory.buffer,0x1000,65536),run:()=> (i.exports.run as Function)(0x8000,0,0)};
 }
 const bits=[0x7fa12345,0x89abcdef,0x80000000,0x12345678];
+test('PADDD wraps each dword and ANDPS masks each lane',()=>{
+ const {v,run}=build([['MOVDQU','XMM0, xmmword ptr [0x2000]'],['MOVDQU','XMM1, xmmword ptr [0x2020]'],['PADDD','XMM0, XMM1'],['ANDPS','XMM0, XMM1'],['MOVDQU','xmmword ptr [0x2040], XMM0'],['RET','']]);
+ const rhs=[1,0xf0f0f0f0,0xffffffff,0x12345678];
+ bits.forEach((x,n)=>{v.setUint32(0x2000+n*4,x,true);v.setUint32(0x2020+n*4,rhs[n],true);});run();
+ expect([0,1,2,3].map(n=>v.getUint32(0x2040+n*4,true))).toEqual(bits.map((x,n)=>(((x+rhs[n])>>>0)&rhs[n])>>>0));
+});
+test('PACKUSWB saturates signed words and snapshots aliased source',()=>{
+ const left=[-2,0,1,254,255,256,32767,-32768],right=[300,2,-1,42,1234,250,0,1];
+ const clamp=(x:number)=>Math.max(0,Math.min(255,x));
+ for(const src of ['XMM0','XMM1','xmmword ptr [0x2020]']){
+  const {v,run}=build([['MOVDQU','XMM0, xmmword ptr [0x2000]'],['MOVDQU','XMM1, xmmword ptr [0x2020]'],['PACKUSWB',`XMM0, ${src}`],['MOVDQU','xmmword ptr [0x2040], XMM0'],['RET','']]);
+  left.forEach((x,n)=>v.setInt16(0x2000+n*2,x,true));right.forEach((x,n)=>v.setInt16(0x2020+n*2,x,true));run();
+  expect(Array.from({length:16},(_,n)=>v.getUint8(0x2040+n))).toEqual([...left,...(src==='XMM0'?left:right)].map(clamp));
+ }
+});
 test('single-thread locked OR updates CRT stream flags without neighboring writes',()=>{
  const {v,run}=build([['MOV','EAX, 0x2000'],['MOV','ECX, 0x2000'],['OR.LOCK','dword ptr [EAX], ECX'],['PUSHFD',''],['POP','EAX'],['RET','']]);v.setUint32(0x2000,0x80000001,true);v.setUint32(0x2004,0xcafebabe,true);expect(run()&0x8c5).toBe(0x80);expect(v.getUint32(0x2000,true)).toBe(0x80002001);expect(v.getUint32(0x2004,true)).toBe(0xcafebabe);
 });

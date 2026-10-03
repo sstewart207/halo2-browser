@@ -83,6 +83,31 @@ test('SCASB.REPNE finds byte and sets ZF', () => {
     expect(zf).toBe(1);
 });
 
+for (const backwards of [false, true]) test(`CMPSB.REPE compares until mismatch with DF=${backwards ? 1 : 0}`, () => {
+ const {instance,view}=buildFn('compare_bytes',[
+  ['MOV',`ESI, ${backwards?'0x3002':'0x3000'}`],
+  ['MOV',`EDI, ${backwards?'0x4002':'0x4000'}`],
+  ['MOV','ECX, 3'],[backwards?'STD':'CLD',''],['CMPSB.REPE','ES:EDI, ESI'],
+  ['SETZ','AL'],['MOV','dword ptr [0x5000], ESI'],['MOV','dword ptr [0x5004], EDI'],['MOV','dword ptr [0x5008], ECX'],['RET','']
+ ]);
+ [1,2,3].forEach((x,i)=>{view.setUint8(0x3000+i,x);view.setUint8(0x4000+i,x);});
+ view.setUint8(backwards?0x4000:0x4002,9);
+ const result=(instance.exports.compare_bytes as Function)(0x8000,0,0);
+ expect(result&0xff).toBe(0);
+ expect(view.getUint32(0x5008,true)).toBe(0);
+ expect(view.getUint32(0x5000,true)).toBe(backwards?0x2fff:0x3003);
+ expect(view.getUint32(0x5004,true)).toBe(backwards?0x3fff:0x4003);
+});
+
+test('zero-count CMPSB.REPE preserves the prior comparison flags',()=>{
+ const {instance,view}=buildFn('compare_none',[
+  ['MOV','ESI, 0x3000'],['MOV','EDI, 0x4000'],['CMP','EAX, EAX'],['MOV','ECX, 0'],
+  ['CMPSB.REPE','ES:EDI, ESI'],['SETZ','AL'],['RET','']
+ ]);
+ expect((instance.exports.compare_none as Function)(0x8000,0,7)&0xff).toBe(1);
+ expect(view.getUint8(0x3000)).toBe(0);
+});
+
 
 for (const backwards of [false,true]) test(`MOVSD.REP copies dwords with DF=${backwards?1:0}`,()=>{
  const {instance,view}=buildFn('copy_dwords',[

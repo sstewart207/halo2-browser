@@ -231,11 +231,16 @@ export class Lifter {
     }
 
     prepareModule(functions: CFGFunction[]) {
-        const ops=functions.flatMap(f=>f.basicBlocks.flatMap(b=>b.instructions));
         const addMath=(name:string,params:number[])=>this.x87Imports.set(name,this.moduleBuilder.addFunctionImport('env',name,this.moduleBuilder.addSignature(params,[0x7c])));
-        if (ops.some(i=>i.mnemonic==='FCOS')) addMath('aot_cos',[0x7c]);
-        if (ops.some(i=>i.mnemonic==='FPATAN')) addMath('aot_atan2',[0x7c,0x7c]);
-        if (ops.some(i=>i.mnemonic==='FLD' && /extended double/.test(i.ops))) addMath('aot_load_f80',[0x7f]);
+        let hasCos = false, hasAtan2 = false, hasF80 = false;
+        for (const fn of functions) for (const bb of fn.basicBlocks) for (const inst of bb.instructions) {
+            if (inst.mnemonic === 'FCOS') hasCos = true;
+            else if (inst.mnemonic === 'FPATAN') hasAtan2 = true;
+            else if (inst.mnemonic === 'FLD' && /extended double/.test(inst.ops)) hasF80 = true;
+        }
+        if (hasCos) addMath('aot_cos',[0x7c]);
+        if (hasAtan2) addMath('aot_atan2',[0x7c,0x7c]);
+        if (hasF80) addMath('aot_load_f80',[0x7f]);
 
         let hasIndirectCall = false;
 
@@ -1376,14 +1381,44 @@ export class Lifter {
                     fn.local_get(39);this.emitXmmLaneLoad(fn,src,byte>>>2);fn.i32_const((byte%4)*8+7);fn.i32_shr_u();fn.i32_const(1);fn.i32_and();fn.i32_const(byte);fn.i32_shl();fn.i32_or();fn.local_set(39);
                 }fn.local_get(39);this.emitStoreOperandValue(fn,dst);break;
             }
+            case 'PACKUSWB': {
+                const [dst,src]=inst.operands;
+                if(!dst||!src||this.xmmIndex(dst)===undefined){fn.i32_const(inst.addr);fn.global_set(this.unsupportedPc);fn.emitBytes([0x00]);break;}
+                // Snapshot both operands: PACKUSWB XMM0,XMM0 must read all old words.
+                const srcLocals=[34,35,LOCALS.TMP0,LOCALS.TMP1];
+                for(let lane=0;lane<4;lane++){
+                    this.emitXmmLaneLoad(fn,dst,lane);fn.local_set(39+lane);
+                    this.emitXmmLaneLoad(fn,src,lane);fn.local_set(srcLocals[lane]);
+                }
+                for(let lane=0;lane<4;lane++){
+                    for(let byte=0;byte<4;byte++){
+                        const word=(lane%2)*4+byte;
+                        fn.local_get(lane<2?39+(word>>>1):srcLocals[word>>>1]);
+                        if((word&1)===0){fn.i32_const(16);fn.i32_shl();}
+                        fn.i32_const(16);fn.i32_shr_s();fn.local_set(32);
+                        fn.local_get(32);fn.i32_const(0);fn.i32_lt_s();fn.if_block(0x7f);
+                        fn.i32_const(0);fn.else_block();
+                        fn.local_get(32);fn.i32_const(255);fn.i32_gt_s();fn.if_block(0x7f);
+                        fn.i32_const(255);fn.else_block();fn.local_get(32);fn.end();fn.end();
+                        if(byte){fn.i32_const(byte*8);fn.i32_shl();fn.i32_or();}
+                    }
+                    this.emitXmmLaneStore(fn,dst,lane);
+                }
+                break;
+            }
             case 'ORPS':
+            case 'ANDPS':
             case 'ANDPD':
+            case 'PADDD':
             case 'PSUBD': {
                 const [dst,src]=inst.operands;
                 if(this.xmmIndex(dst)===undefined){fn.i32_const(inst.addr);fn.global_set(this.unsupportedPc);fn.emitBytes([0x00]);break;}
                 for(let lane=0;lane<4;lane++){
                     this.emitXmmLaneLoad(fn,dst,lane);this.emitXmmLaneLoad(fn,src,lane);
-                    if(inst.mnemonic==='ANDPD')fn.i32_and();else if(inst.mnemonic==='ORPS')fn.i32_or();else fn.i32_sub();
+                    if(inst.mnemonic==='ANDPD'||inst.mnemonic==='ANDPS')fn.i32_and();
+                    else if(inst.mnemonic==='ORPS')fn.i32_or();
+                    else if(inst.mnemonic==='PADDD')fn.i32_add();
+                    else fn.i32_sub();
                     this.emitXmmLaneStore(fn,dst,lane);
                 }
                 break;
@@ -1883,6 +1918,33 @@ export class Lifter {
                 fn.br(0);
                 fn.end();
                 fn.end();
+                break;
+            }
+            case 'CMPSB.REPE': case 'CMPSB.REPZ': {
+                fn.block(0x40, '$cmpsb_end');
+                fn.loop(0x40, '$cmpsb_loop');
+                fn.local_get(LOCALS.ECX); fn.i32_eqz(); fn.br_if(1);
+                fn.local_get(LOCALS.ESI); fn.i32_load8_u(0, 0); fn.local_set(34);
+                fn.local_get(LOCALS.EDI); fn.i32_load8_u(0, 0); fn.local_set(35);
+                fn.local_get(34); fn.local_get(35); fn.i32_sub();
+                fn.i32_const(0xff); fn.i32_and(); fn.local_set(LOCALS.TMP0);
+                fn.local_get(LOCALS.TMP0); fn.i32_eqz(); fn.local_set(LOCALS.ZF);
+                fn.local_get(LOCALS.TMP0); fn.i32_const(0x80); fn.i32_and();
+                fn.i32_eqz(); fn.i32_eqz(); fn.local_set(LOCALS.SF);
+                this.emitParity(fn);
+                fn.local_get(34); fn.local_get(35); fn.i32_lt_u(); fn.local_set(LOCALS.CF);
+                fn.local_get(34); fn.local_get(35); fn.i32_xor();
+                fn.local_get(34); fn.local_get(LOCALS.TMP0); fn.i32_xor(); fn.i32_and();
+                fn.i32_const(0x80); fn.i32_and(); fn.i32_eqz(); fn.i32_eqz(); fn.local_set(LOCALS.OF);
+                fn.global_get(this.eflags); fn.i32_const(0x400); fn.i32_and();
+                fn.if_block(0x7f); fn.i32_const(-1); fn.else_block(); fn.i32_const(1); fn.end();
+                fn.local_set(LOCALS.TMP1);
+                for (const reg of [LOCALS.ESI, LOCALS.EDI]) {
+                    fn.local_get(reg); fn.local_get(LOCALS.TMP1); fn.i32_add(); fn.local_set(reg);
+                }
+                fn.local_get(LOCALS.ECX); fn.i32_const(1); fn.i32_sub(); fn.local_set(LOCALS.ECX);
+                fn.local_get(LOCALS.ZF); fn.i32_eqz(); fn.br_if(1);
+                fn.br(0); fn.end(); fn.end();
                 break;
             }
             case 'RDTSC': {

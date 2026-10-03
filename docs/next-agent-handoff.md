@@ -420,3 +420,11 @@ October 3, 2026. Live Chrome completes all four native DLL DllMain calls (d3dx9_
 - Whole-image compiler no longer retains WAT with `emitWat:false`, defers binary serialization until DLL exports exist and parses each DLL CFG once. Private `native-build64e.json` outputs 38,632-function, 123,275,338-byte WASM. `cfg_full64e-merged.json` starts from prior cfg_full53 and adds only Ghidra-recovered EXE function 0x5ba425; replacing cfg_full53 with raw Ghidra export would lose 13 prior functions.
 - Next inspect exact 0x404561 in Ghidra, recover if actual entry, append only its CFG to cfg_full64e-merged, rebuild and Chrome boot. `bun run tools/boot-halo2.ts` works through the connected Chrome harness. Tests 1,077 pass, typecheck clean. Keep private binaries/CFG/bundle/logs/saves and bun.lock out of Git.
 
+# NEWEST-69: EXE startup reaches Cartographer callback; next target 0x5a9de6
+
+Chrome passes all four native DLL attaches and recovered EXE startup functions, including import wrapper 0x6a8679 for xlive ordinal 5236. The compiled xlive export is preferred 0x100d54f0/runtime 0x130d54f0. Current explicit stop is EXE target 0x5a9de6, return 0x1304e3bb, last xlive block 0x1304e3a7. No AOT title/menu/video/campaign/60fps acceptance.
+
+- Private `../halo2-browser/scratch/ghidra/native-build69.json` uses `cfg_full68b-merged.json`, preserving inherited cfg_full53 plus 14 verified recovered EXE functions. Build69 contains 38,645 functions/123,332,845 bytes. The local ignored public WASM is this build. Use Node with `--max-old-space-size=3584` while system memory is constrained.
+- Implemented/tested CMPSB.REPE (flags, DF, zero count), PADDD/ANDPS and PACKUSWB (signed saturation, alias snapshot). Chrome passes all of them. Tests 1,082 pass, 5,400 assertions, typecheck clean.
+- Next Ghidra inspect/recover 0x5a9de6, append only its real CFG to merged EXE CFG, rebuild and boot. Beware incorrect `0x10d54f0` xlive address from an earlier missing zero; correct preferred xlive export is `0x100d54f0` and already compiled. Ghidra's raw EXE export has fewer inherited functions, so do not replace merged CFG. Keep assets/binaries/logs/saves private and bun.lock unstaged.
+
