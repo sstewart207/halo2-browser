@@ -429,3 +429,14 @@ Chrome passes all four native DLL attaches and recovered EXE startup functions, 
 - Next Ghidra inspect/recover 0x5a9de6, append only its real CFG to merged EXE CFG, rebuild and boot. Beware incorrect `0x10d54f0` xlive address from an earlier missing zero; correct preferred xlive export is `0x100d54f0` and already compiled. Ghidra's raw EXE export has fewer inherited functions, so do not replace merged CFG. Keep assets/binaries/logs/saves private and bun.lock unstaged.
 - Note for all agents (Codex / Claude / Antigravity): User is on metered personal subscriptions ($20/mo tiers for ChatGPT Plus and Claude Pro, limited Gemini quota). Avoid exploratory token burn, unnecessary subagent calls, or redundant polling loops. Keep steps focused and handoffs clear.
 
+# NEWEST-72: EXE startup advances through discord probes; next target 0x5aa955
+
+Chrome passes all four native DLL attaches, Cartographer ordinal 5236, EXE callback 0x5a9de6, and recovered EXE startup targets 0x5ac089 and 0x5ab400. Execution progresses through discord_game_sdk load probes, heap allocations, and CRT TLS/error handling, stopping at unresolved indirect call target 0x5aa955 (return 0x5abdb3, last block 0x690d13). No AOT title/menu/video/campaign/60fps acceptance.
+
+- Private `../halo2-browser/scratch/ghidra/native-build72.json` uses `cfg_full72-merged.json` (38,648 functions / 123,351,049 bytes). Public binary `public/halo2_recompiled.wasm` is Build 72.
+- Added and unit-tested STOSW (Direction Flag forward/backward). 1,084 tests pass across 128 files (0 failures, 5,404 assertions); clean typecheck.
+- Rebuilt `dist-recompile.cjs` CommonJS bundle (`bun build tools/recompile-native-cfg.ts --target=node --format=cjs --outfile=dist-recompile.cjs`). Note: node memory should use `--max-old-space-size=8192` (the machine has 15GB free RAM, avoiding OOM).
+- Space Bunny Max Alpha (Codebuff) notes: Single scenario map `01a_tutorial.map` (Armory); selecting other maps spins `GetFileAttributesA` forever with frozen heap. DInput accumulator slot gap blocks synthetic mouse-look. v86 2GB clamp is in `CPU.create_memory`.
+- Next: Inspect and recover target 0x5aa955 in Ghidra, append to `cfg_full72-merged.json`, recompile Build 73, and boot. Keep assets/binaries/logs/saves private and bun.lock unstaged.
+
+

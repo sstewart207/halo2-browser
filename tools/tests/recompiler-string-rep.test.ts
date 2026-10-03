@@ -129,3 +129,18 @@ test('single MOVSD preserves flags and ECX while moving one dword',()=>{
  const {instance,view}=buildFn('copy_one',[['MOV','ESI, 0x3000'],['MOV','EDI, 0x4000'],['MOV','ECX, 9'],['CMP','ECX, 9'],['MOVSD','ES:EDI, ESI'],['SETZ','AL'],['MOV','dword ptr [0x5000], ECX'],['RET','']]);
  view.setUint32(0x3000,0xabc123,true);expect((instance.exports.copy_one as Function)(0x8000,0,0)&255).toBe(1);expect(view.getUint32(0x4000,true)).toBe(0xabc123);expect(view.getUint32(0x5000,true)).toBe(9);
 });
+
+for (const backwards of [false, true]) test(`single STOSW stores word with DF=${backwards ? 1 : 0}`, () => {
+ const {instance, view} = buildFn('store_word', [
+  ['MOV', `EDI, ${backwards ? '0x4002' : '0x4000'}`],
+  ['MOV', 'EAX, 0x1234'],
+  [backwards ? 'STD' : 'CLD', ''],
+  ['STOSW', 'ES:EDI'],
+  ['MOV', 'dword ptr [0x5000], EDI'],
+  ['RET', '']
+ ]);
+ (instance.exports.store_word as Function)(0x8000, 0, 0);
+ expect(view.getUint16(backwards ? 0x4002 : 0x4000, true)).toBe(0x1234);
+ expect(view.getUint32(0x5000, true)).toBe(backwards ? 0x4000 : 0x4002);
+});
+

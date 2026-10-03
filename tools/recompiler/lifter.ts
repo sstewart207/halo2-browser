@@ -1791,6 +1791,23 @@ export class Lifter {
                 fn.end();
                 break;
             }
+            case 'STOSW': {
+                fn.local_get(LOCALS.EDI);
+                fn.local_get(LOCALS.EAX);
+                fn.i32_store16(0, 1);
+                fn.global_get(this.eflags);
+                fn.i32_const(0x400);
+                fn.i32_and();
+                fn.if_block(0x7f);
+                fn.i32_const(-2);
+                fn.else_block();
+                fn.i32_const(2);
+                fn.end();
+                fn.local_get(LOCALS.EDI);
+                fn.i32_add();
+                fn.local_set(LOCALS.EDI);
+                break;
+            }
             case 'STOSD': {
                 fn.local_get(LOCALS.EDI);
                 fn.local_get(LOCALS.EAX);
