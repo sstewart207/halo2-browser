@@ -336,9 +336,8 @@ export class RuntimeBridge {
         const memBytes = new Uint8Array(this.memory.buffer, this.memoryOffset, this.memoryLength);
         const view = new DataView(this.memory.buffer, this.memoryOffset, this.memoryLength);
         const key = `${dll.toLowerCase().replace(/\.dll$/, '')}:${func.toLowerCase()}`;
-        const effectiveArgCount = KNOWN_WIN32_ARG_COUNTS.has(key)
-            ? KNOWN_WIN32_ARG_COUNTS.get(key)!
-            : argCount;
+        const descriptorCount=this.dispatcher?.getStubByName?.(dll,func)?.argCount;
+        const effectiveArgCount=descriptorCount ?? KNOWN_WIN32_ARG_COUNTS.get(key) ?? argCount;
 
         // Read arguments from stack: [esp+4], [esp+8], ...
         const args: number[] = [];
@@ -390,10 +389,15 @@ export class RuntimeBridge {
             return typeof res === 'number' ? res : res.value;
         };
         if (this.logCalls) Logger.log(LogCategory.SYSTEM, `[AOT API] ${dll}!${func} esp=0x${esp.toString(16)} args=${args.map(a => '0x'+a.toString(16)).join(',')}`);
-        const res = impl(ctx, memBytes, args);
+        const apiFailure = (error: unknown): never => {
+            const message=error instanceof Error?error.message:String(error);
+            throw new Error(`AOT API failure: ${dll}!${func} (args=${effectiveArgCount}, esp=0x${esp.toString(16)}): ${message}`, {cause:error});
+        };
+        let res: number | ThunkResult | Promise<number | ThunkResult>;
+        try { res = impl(ctx, memBytes, args); } catch(error) { return apiFailure(error); }
         if (res instanceof Promise) {
             if (!this.enableAsync) throw new Error(`AOT async API unsupported: ${dll}!${func}`);
-            return res.then(finish);
+            return res.then(finish,apiFailure);
         }
         return finish(res);
     }

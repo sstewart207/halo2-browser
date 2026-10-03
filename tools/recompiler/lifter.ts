@@ -283,6 +283,7 @@ export class Lifter {
         wasmFn.addLocals(2, 0x7f); // locals 34/35: comparison operands
         wasmFn.addLocals(1, 0x7f); // local 36: PF
         wasmFn.addLocals(2, 0x7c); // locals 37/38: x87 value and f64 store scratch
+        wasmFn.addLocals(4, 0x7f); // locals 39..42: lane shuffle snapshot
         wasmFn.guestStoreF64Local = 38;
         wasmFn.guestMemoryBaseGlobal = this.memoryBaseGlobalIdx;
         wasmFn.guestStoreI32Local = 32;
@@ -725,7 +726,7 @@ export class Lifter {
             }
             case 'PUSHFD': case 'PUSHF': {
                 fn.global_get(this.eflags);
-                fn.i32_const(~0x08d5);
+                fn.i32_const(~0x08c5);
                 fn.i32_and();
                 fn.i32_const(0x0002);
                 fn.i32_or();
@@ -937,33 +938,40 @@ export class Lifter {
                 fn.local_get(LOCALS.ESP);fn.i32_const(4);fn.i32_add();fn.local_set(LOCALS.ESP);
                 break;
             }
-            case 'INC': {
-                const [dst] = inst.operands;
-                if (!dst) return;
-                this.emitLoadOperandValue(fn, dst);
-                fn.i32_const(1);
-                fn.i32_add();
-                fn.local_tee(LOCALS.TMP0);
-                // ZF and SF
-                fn.local_get(LOCALS.TMP0); fn.i32_eqz(); fn.local_set(LOCALS.ZF);
-                fn.local_get(LOCALS.TMP0); fn.i32_const(0); fn.i32_lt_s(); fn.local_set(LOCALS.SF);
-                fn.local_get(LOCALS.TMP0);
-                this.emitStoreOperandValue(fn, dst);
+            case 'INC': case 'INC.LOCK': case 'DEC': case 'DEC.LOCK': {
+                const [dst]=inst.operands;if(!dst || dst.kind==='imm')return;
+                // Single guest-thread AOT: LOCK has no competing guest execution.
+                const decrement=inst.mnemonic.startsWith('DEC');
+                const bits=Math.min(dst.size*8,32),mask=bits===32?-1:(1<<bits)-1;
+                this.emitLoadOperandValue(fn,dst);fn.i32_const(mask);fn.i32_and();fn.local_set(34);
+                fn.local_get(34);fn.i32_const(1);if(decrement)fn.i32_sub();else fn.i32_add();
+                fn.i32_const(mask);fn.i32_and();fn.local_set(LOCALS.TMP0);
+                this.emitParity(fn);
+                fn.local_get(LOCALS.TMP0);fn.i32_eqz();fn.local_set(LOCALS.ZF);
+                fn.local_get(LOCALS.TMP0);fn.i32_const(1<<(bits-1));fn.i32_and();fn.i32_eqz();fn.i32_eqz();fn.local_set(LOCALS.SF);
+                fn.local_get(34);fn.i32_const(decrement?1<<(bits-1):2**(bits-1)-1);fn.i32_eq();fn.local_set(LOCALS.OF);
+                fn.global_get(this.eflags);fn.i32_const(~0x10);fn.i32_and();
+                fn.local_get(34);fn.local_get(LOCALS.TMP0);fn.i32_xor();fn.i32_const(0x10);fn.i32_and();fn.i32_or();fn.global_set(this.eflags);
+                fn.local_get(LOCALS.TMP0);this.emitStoreOperandValue(fn,dst);
+                // INC/DEC preserve CF, including on wraparound.
                 break;
             }
-            case 'DEC': {
-                const [dst] = inst.operands;
-                if (!dst) return;
-                this.emitLoadOperandValue(fn, dst);
-                fn.i32_const(1);
-                fn.i32_sub();
-                fn.local_tee(LOCALS.TMP0);
-                // ZF and SF
-                fn.local_get(LOCALS.TMP0); fn.i32_eqz(); fn.local_set(LOCALS.ZF);
-                fn.local_get(LOCALS.TMP0); fn.i32_const(0); fn.i32_lt_s(); fn.local_set(LOCALS.SF);
-                fn.local_get(LOCALS.TMP0);
-                this.emitStoreOperandValue(fn, dst);
-                break;
+            case 'BT': {
+                const [dst,index]=inst.operands;if(!dst || !index || dst.kind==='imm')return;
+                const bits=dst.size===2?16:32;
+                this.emitLoadOperandValue(fn,index);fn.local_set(35);
+                if(dst.kind==='mem') {
+                    this.emitEffectiveAddress(fn,dst);
+                    // Register bit offsets address a signed bit string; immediates
+                    // select a bit inside the operand-sized memory word.
+                    if(index.kind!=='imm'){
+                        fn.local_get(35);fn.i32_const(bits===16?4:5);fn.i32_shr_s();
+                        fn.i32_const(bits===16?1:2);fn.i32_shl();fn.i32_add();
+                    }
+                    if(bits===16)fn.i32_load16_u();else fn.i32_load();
+                }else this.emitLoadOperandValue(fn,dst);
+                fn.local_get(35);fn.i32_const(bits-1);fn.i32_and();fn.i32_shr_u();
+                fn.i32_const(1);fn.i32_and();fn.local_set(LOCALS.CF);break;
             }
             case 'SHL': {
                 const [dst, count] = inst.operands;
@@ -1219,6 +1227,14 @@ export class Lifter {
                 break;
             }
             // --- SSE Single-Precision Instructions ---
+            case 'PSHUFD': {
+                const [dst,src,control]=inst.operands;
+                if(!dst || !src || !control || control.kind!=='imm')return;
+                // Snapshot the source before writing; source and destination can alias.
+                for(let lane=0;lane<4;lane++){this.emitXmmLaneLoad(fn,src,lane);fn.local_set(39+lane);}
+                for(let lane=0;lane<4;lane++){fn.local_get(39+((control.value>>>(lane*2))&3));this.emitXmmLaneStore(fn,dst,lane);}
+                break;
+            }
             case 'MOVLPD': case 'MOVLPS': {
                 this.emitXmmMove(fn,inst,2,false);break;
             }
@@ -1428,10 +1444,12 @@ export class Lifter {
                 fn.i32_const(inst.addr);fn.global_set(this.unsupportedPc);
                 fn.emitBytes([0x00]); break;
             case 'CMOVZ': case 'CMOVE': case 'CMOVNZ': case 'CMOVNE': {
-                const [dst,src]=inst.operands;if(!dst || !src)return;
-                this.emitLoadOperandValue(fn,src);fn.local_set(34);
-                this.emitJumpCondition(fn,inst.mnemonic==='CMOVZ'||inst.mnemonic==='CMOVE'?'JZ':'JNZ');
-                fn.if_block(0x40);fn.local_get(34);this.emitStoreOperandValue(fn,dst);fn.end();break;
+                this.emitConditionalMove(fn,inst);break;
+            }
+            case 'CMOVA': case 'CMOVAE': case 'CMOVB': case 'CMOVBE':
+            case 'CMOVL': case 'CMOVLE': case 'CMOVG': case 'CMOVGE':
+            case 'CMOVS': case 'CMOVNS': case 'CMOVP': case 'CMOVNP': {
+                this.emitConditionalMove(fn,inst);break;
             }
             case 'XCHG': {
                 let [dst,src]=inst.operands;
@@ -2132,6 +2150,13 @@ export class Lifter {
             }
             return;
         }
+    }
+
+    private emitConditionalMove(fn: WasmFunctionBuilder, inst: ParsedInstruction) {
+        const [dst,src]=inst.operands;if(!dst || !src)return;
+        this.emitLoadOperandValue(fn,src);fn.local_set(34);
+        this.emitJumpCondition(fn,'J'+inst.mnemonic.slice(4));
+        fn.if_block(0x40);fn.local_get(34);this.emitStoreOperandValue(fn,dst);fn.end();
     }
 
     private xmmIndex(op: Operand): number | undefined {

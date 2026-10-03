@@ -12,6 +12,16 @@ function build(ops:string[][],callee?:CFGFunction){
  return {i,v:new DataView(memory.buffer,0x1000,65536),run:()=> (i.exports.run as Function)(0x8000,0,0)};
 }
 const bits=[0x7fa12345,0x89abcdef,0x80000000,0x12345678];
+test('CMOVA and signed conditional moves distinguish ordering and equality',()=>{
+ for(const [op,left,right,selected] of [['CMOVA','0x201','0x200',true],['CMOVA','0x200','0x200',false],['CMOVA','0x1','0xffffffff',false],['CMOVB','0x1','0xffffffff',true],['CMOVL','0xffffffff','0x1',true],['CMOVGE','0xffffffff','0x1',false]] as const){
+  const {run}=build([['MOV',`ECX, ${left}`],['MOV',`EDX, ${right}`],['CMP','ECX, EDX'],['MOV','EAX, 0x7'],['MOV','EDX, 0x9'],[op,'EAX, EDX'],['RET','']]);expect(run()).toBe(selected?9:7);
+ }
+});
+test('PSHUFD snapshots aliased source before permuting or broadcasting lanes',()=>{
+ for(const [control,expected] of [['0x1b',[...bits].reverse()],['0x0',Array(4).fill(bits[0])]] as const){
+  const {v,run}=build([['MOVDQU','XMM0, xmmword ptr [0x2000]'],['PSHUFD',`XMM0, XMM0, ${control}`],['MOVDQU','xmmword ptr [0x2040], XMM0'],['RET','']]);bits.forEach((x,n)=>v.setUint32(0x2000+4*n,x,true));run();expect([0,1,2,3].map(n=>v.getUint32(0x2040+4*n,true))).toEqual(expected);
+ }
+});
 test('CMOVZ selects only on zero and preserves comparison flags',()=>{
  for(const zero of [false,true]) {
   const {run}=build([['MOV','EAX, 0x7'],['MOV','EDX, 0x9'],['CMP',zero?'EAX, EAX':'EAX, EDX'],['CMOVZ','EAX, EDX'],['CMOVNZ','EAX, EDX'],['RET','']]);expect(run()).toBe(9);

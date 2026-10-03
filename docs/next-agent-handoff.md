@@ -1,3 +1,18 @@
+# NEWEST-53: Locked increment, CRT memory fill and API argument metadata fixed
+
+Oct 3, 2026. Codex continued while the user was away.
+
+- GitHub issue bodies/titles 1,2,3,4,5,6,8,9,10 updated to distinguish historical v86 reports from current AOT acceptance. Historical reports preserved in collapsible sections; no issue closed. PR7 main title/body refreshed from stale NEWEST-28; no merge.
+- Added INC.LOCK/DEC.LOCK for the single guest-thread AOT path; corrected plain INC/DEC width masking, OF/SF/ZF/PF/AF and CF preservation. PUSHFD now includes stored AF. Multi-thread atomic ordering is not certified. Other arithmetic/POPF AF support remains incomplete.
+- Chrome passes prior INC.LOCK 0x131b79bb. Added BT after _memset stopped at 0x13197152: immediate/register bit indexing, operand-width masking, signed memory bit-string offsets, carry result. Added PSHUFD after next stop 0x13197177; source lanes snapshot before aliased writes, tested reverse/broadcast.
+- Chrome exposed host TypeError in kernel32 LCMapStringEx: AOT passed four args instead of nine. RuntimeBridge now prefers registered dispatcher stub argCount, matching its existing stackCleanup metadata; no fabricated API success. Added contextual API errors with cause and tests verifying all nine argument slots and cleanup. Live Chrome passes the call after fix.
+- Recovered 43 omitted xlive C/C++ initializer functions from exact native tables 0x1022a6ac..0x1022a6c8 and 0x1022a5f0..0x1022a6a0 (49 unique nonzero targets). Ghidra export cfg_xlive53.json has 9,959 functions. Private headless log tmp/recover-xlive53.log, extracted target list scratch/ghidra/xlive-init-targets53.json.
+- Added CMOVA/AE/B/BE/L/LE/G/GE/S/NS/P/NP using the existing tested branch conditions after runtime stop 0x131b535e. Regression covers signed/unsigned ordering and equality.
+- Final live Chrome stop: CVTDQ2PD XMM0,XMM0 at runtime 0x130ab570, preferred 0x100ab570, FUN_100ab480. Same block then uses ADDSD and CVTPD2PS for unsigned-int conversion/container load ratio. Next scope: accurate packed int-to-double, scalar double add and double-to-float lanes; preserve alias source and upper-bit semantics, document rounding limits.
+- Private manifest native-build53.json: cfg_full53.json EXE + cfg_d3dx9_43_51d.json at 0x13a10000 + cfg_xlive53.json at 0x13000000. Validated 31,182 functions / 82,356,238 bytes; output halo2-native53.wasm copied to public/halo2_recompiled.wasm. Builds/CFGs stay private.
+- Validation: 1,049 tests pass / 0 fail across 125 files, 5,162 assertions; TypeScript clean. D3DX attach still succeeds. xlive attach has not returned yet. No AOT video/menu/gameplay/60 FPS/audio/controller/saves acceptance.
+- Preserve previous warnings: experimental EXE successful-shell/synchronous-queue CFG substitutions, pending true TEB/TLS, remaining DLLs, dynamic attach and threads. Preserve unrelated Gemini edits unstaged and bun.lock/assets/logs/saves outside Git.
+
 # NEWEST-52: MOVLPD fixed; Cartographer native CRT progresses farther
 
 Oct 3, 2026. Codex continued from NEWEST-51 and verified each new build in desktop Chrome.

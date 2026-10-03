@@ -16,6 +16,18 @@ test('missing native export reports the loaded guest address without fake succes
  expect(()=>bridge.callApi('xlive.dll','ord_5000',0x8000)).toThrow('AOT native export not recompiled: xlive.dll!ord_5000@0x13001234');
 });
 
+test('AOT reads the registered nine-argument API descriptor and matching cleanup',()=>{
+ const memory=new WebAssembly.Memory({initial:1});const esp=new WebAssembly.Global({value:'i32',mutable:true},0);
+ const dispatcher={getStubByName:()=>({argCount:9,stackCleanupBytes:36}),getImplementation:()=> (_ctx:unknown,_mem:unknown,args:number[])=>{expect(args).toEqual([1,2,3,4,5,6,7,8,9]);return 7;}} as any;
+ const bridge=new RuntimeBridge({memory,dispatcher});bridge.registerExports({esp});const v=new DataView(memory.buffer);for(let n=1;n<=9;n++)v.setUint32(0x8000+n*4,n,true);
+ expect(bridge.callApi('kernel32','LCMapStringEx',0x8000)).toBe(7);expect(esp.value).toBe(0x8028);
+});
+
+test('AOT API failure retains the function name and original cause',()=>{
+ const original=new Error('bad pointer');const bridge=new RuntimeBridge({memory:new WebAssembly.Memory({initial:1})});bridge.registerModule('test',{fail:()=>{throw original;}});
+ try{bridge.callApi('test','fail',0x8000);throw new Error('expected API failure');}catch(error){expect((error as Error).message).toContain('test!fail');expect((error as Error).cause).toBe(original);}
+});
+
 function fixture(attach: number, nativeBase?: number) {
  const b=new WasmModuleBuilder();b.importMemory=true;b.memoryPages=160;const sig=b.addSignature([0x7f,0x7f,0x7f],[0x7f]);
  const count=b.addGlobal(0x7f,1,0);b.addExport('count',3,count);
