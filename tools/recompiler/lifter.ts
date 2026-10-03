@@ -134,6 +134,9 @@ export class Lifter {
     private mxcsr: number;
     private debugFuel?: number;
     private debugPc?: number;
+    private sehPrologs = new Map<number, { handler: number; cookie: number }>();
+    private sehEpilogs = new Set<number>();
+    private allocaProbes = new Map<number, number>();
 
     constructor(options: LiftedModuleOptions = {}) {
         this.options = {
@@ -235,6 +238,31 @@ export class Lifter {
         }
 
         for (const fn of functions) {
+            const entry = parseInt(fn.entry, 16);
+            if (fn.name.endsWith('__SEH_prolog4')) {
+                const insts = fn.basicBlocks[0]?.instructions;
+                if (insts && insts.length > 0) {
+                    const handler = parseInt(insts[0].ops, 16);
+                    const m = insts.find(i => i.mnemonic === 'MOV' && /\[0x[0-9a-fA-F]+\]/.test(i.ops));
+                    const cookie = m ? parseInt(m.ops.match(/\[(0x[0-9a-fA-F]+)\]/)![1], 16) : 0;
+                    this.sehPrologs.set(entry, { handler, cookie });
+                }
+            } else if (fn.name.endsWith('__SEH_epilog4')) {
+                this.sehEpilogs.add(entry);
+            } else if (fn.name.endsWith('__alloca_probe_16')) {
+                this.allocaProbes.set(entry, 16);
+            } else if (fn.name.endsWith('__alloca_probe_8')) {
+                this.allocaProbes.set(entry, 8);
+            } else if (fn.name.endsWith('__alloca_probe')) {
+                this.allocaProbes.set(entry, 0);
+            }
+        }
+        if (!this.sehPrologs.has(0x692cc3)) this.sehPrologs.set(0x692cc3, { handler: 0x68900b, cookie: 0x868b38 });
+        if (!this.sehEpilogs.has(0x692d08)) this.sehEpilogs.add(0x692d08);
+        if (!this.allocaProbes.has(0x687b7e)) this.allocaProbes.set(0x687b7e, 0);
+        if (!this.allocaProbes.has(0x68c215)) this.allocaProbes.set(0x68c215, 16);
+
+        for (const fn of functions) {
             for (const bb of fn.basicBlocks) {
                 for (const rawInst of bb.instructions) {
                     if (rawInst.mnemonic === 'CALL' || rawInst.mnemonic === 'JMP') {
@@ -249,8 +277,9 @@ export class Lifter {
                             }
                         }
                         if (target.kind === 'imm' && (
-                            target.value === 0x687b7e || target.value === 0x68c215 || // alloca
-                            target.value === 0x692cc3 || target.value === 0x692d08 || // SEH
+                            this.allocaProbes.has(target.value) ||
+                            this.sehPrologs.has(target.value) ||
+                            this.sehEpilogs.has(target.value) ||
                             this.funcEntryMap.has(target.value)
                         )) {
                             continue;
@@ -1989,19 +2018,25 @@ export class Lifter {
 
                 // 2. Direct internal function call: CALL imm
                 if (target.kind === 'imm') {
-                    // __alloca_probe / __alloca_probe_16: ESP = ESP - EAX
-                    if (target.value === 0x687b7e || target.value === 0x68c215) {
-                        fn.comment('Inlined compiler helper: __alloca_probe (ESP = ESP - EAX)');
+                    // alloca probe helpers (ESP = ESP - EAX, with optional alignment)
+                    if (this.allocaProbes.has(target.value)) {
+                        const align = this.allocaProbes.get(target.value)!;
+                        fn.comment(`Inlined compiler helper: alloca (align=${align})`);
                         fn.local_get(LOCALS.ESP);
                         fn.local_get(LOCALS.EAX);
                         fn.i32_sub();
+                        if (align > 0) {
+                            fn.i32_const(~(align - 1));
+                            fn.i32_and();
+                        }
                         fn.local_set(LOCALS.ESP);
                         return;
                     }
 
                     // __SEH_prolog4: Sets up caller's EBP, allocates stack frame, registers SEH
-                    if (target.value === 0x692cc3) {
-                        fn.comment('Inlined compiler helper: __SEH_prolog4');
+                    if (this.sehPrologs.has(target.value)) {
+                        const info = this.sehPrologs.get(target.value)!;
+                        fn.comment(`Inlined compiler helper: __SEH_prolog4 (handler=0x${info.handler.toString(16)}, cookie=0x${info.cookie.toString(16)})`);
                         const tebBase = this.options.tebAddress ?? 0x00030000;
 
                         // Save scope_table from [ESP] into TMP1
@@ -2040,7 +2075,7 @@ export class Lifter {
                             fn.local_get(LOCALS.ESP); fn.i32_const(offset); fn.i32_add();
                             fn.local_get(reg); fn.i32_store();
                         }
-                        fn.local_get(LOCALS.ESP); fn.i32_const(0x868b38); fn.i32_load();
+                        fn.local_get(LOCALS.ESP); fn.i32_const(info.cookie); fn.i32_load();
                         fn.local_get(LOCALS.EBP); fn.i32_xor(); fn.i32_store();
                         fn.local_get(LOCALS.EBP); fn.i32_const(0x18); fn.i32_sub();
                         fn.local_get(LOCALS.ESP); fn.i32_store();
@@ -2059,11 +2094,11 @@ export class Lifter {
                         fn.local_get(LOCALS.TMP1);
                         fn.i32_store(0, 2);
 
-                        // [EBP - 0xc] = 0x68900b (_except_handler4)
+                        // [EBP - 0xc] = handler (_except_handler4)
                         fn.local_get(LOCALS.EBP);
                         fn.i32_const(0xc);
                         fn.i32_sub();
-                        fn.i32_const(0x68900b);
+                        fn.i32_const(info.handler);
                         fn.i32_store(0, 2);
 
                         // [EBP - 0x10] = old FS:[0]
@@ -2084,7 +2119,7 @@ export class Lifter {
                     }
 
                     // __SEH_epilog4: Restores old FS:[0], restores ESP and EBP
-                    if (target.value === 0x692d08) {
+                    if (this.sehEpilogs.has(target.value)) {
                         fn.comment('Inlined compiler helper: __SEH_epilog4');
                         const tebBase = this.options.tebAddress ?? 0x00030000;
 
