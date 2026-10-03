@@ -1,3 +1,16 @@
+# NEWEST-61: sldl_dll cleanly stubbed via HLE; native build 61 produced
+
+October 3, 2026. Bypassed the native sldl_dll self-decrypting runtime initializer deadlock cleanly by implementing a faithful HLE sldl_dll module and removing sldl_dll from the native AOT compilation unit.
+
+- Identified that sldl_dll.dll is the legacy Windows software licensing entitlement client. A deep byte-scan of halo2.exe confirmed that the 7 imported SLDL_* functions (0x427642..0x427666) have zero runtime call sites in the executable; Cartographer bypasses this entirely.
+- Created src/worker/modules/sldl_dll.ts and src/worker/api/sldl_dll.api.ts providing HLE stubs returning S_OK (0), logging warnings on invocation, and zeroing out known output pointers (SLDLGetSLIDList, SLDLGetLicensingStatusInformation, SLDLOpen) to prevent undefined memory dereferences.
+- Registered sldl_dll in src/worker/core/api-registry.ts and src/worker/emulator.worker.ts. Added comprehensive unit tests in tools/tests/sldl-hle.test.ts (1,071 total passing tests, 0 failures, clean typecheck).
+- Committed lifter CFG truncated fallthrough trap (preventing infinite block wrapping).
+- Recompiled native AOT image via native-build61.json (containing halo2.exe, d3dx9_43.dll, and xlive.dll: 31,187 functions, 89,319,275 bytes) to public/halo2_recompiled.wasm.
+- Committed extended Win32 API argument counts and diagnostic logging in runtime-bridge.ts.
+- Next: run live verification in Chrome or headless runner to observe Cartographer progressing past sldl_dll towards remaining DLL attachments (pccompat, d3dx9_31) and WinMain.
+- Validation: 1,071 tests pass across 127 files (0 failures). TypeScript typecheck clean. No AOT video/menu/campaign/60fps acceptance.
+
 # NEWEST-60: sldl native startup compiled; malformed initializer CFG isolated
 
 October 3, 2026. Actual Chrome still completes D3DX and Cartographer xlive PROCESS_ATTACH. Added the exact private sldl_dll image to the native multi-image build; its DllMain now executes and creates a CRT critical section. No AOT menu/video/60fps acceptance.
