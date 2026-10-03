@@ -119,6 +119,7 @@ export class Lifter {
     private x87Imports = new Map<string, number>();
     private unsupportedPc: number;
     private eflags: number;
+    private mxcsr: number;
     private debugFuel?: number;
     private debugPc?: number;
 
@@ -153,6 +154,8 @@ export class Lifter {
         this.moduleBuilder.addExport('aot_unsupported_pc',3,this.unsupportedPc);
         this.eflags = this.moduleBuilder.addGlobal(0x7f, 1, 0x0202);
         this.moduleBuilder.addExport('eflags', 3, this.eflags);
+        this.mxcsr = this.moduleBuilder.addGlobal(0x7f, 1, 0x1f80);
+        this.moduleBuilder.addExport('mxcsr', 3, this.mxcsr);
         if (options.debugBlockLimit !== undefined) {
             this.debugFuel = this.moduleBuilder.addGlobal(0x7f, 1, options.debugBlockLimit);
             this.debugPc = this.moduleBuilder.addGlobal(0x7f, 1, 0);
@@ -1099,7 +1102,9 @@ export class Lifter {
             }
             // --- SSE Single-Precision Instructions ---
             case 'MOVSS':
-            case 'MOVAPS': {
+            case 'MOVAPS':
+            case 'MOVAPD':
+            case 'MOVDQA': {
                 const [dst, src] = inst.operands;
                 if (!dst || !src) return;
                 this.emitLoadFloatValue(fn, src);
@@ -1261,6 +1266,37 @@ export class Lifter {
                     fn.local_get(LOCALS.EAX);fn.i32_const(8+bit);fn.i32_shr_u();fn.i32_const(1);fn.i32_and();fn.local_set(local);
                 }break;
             }
+            case 'CPUID': {
+                fn.local_get(LOCALS.EAX);
+                fn.i32_eqz();
+                fn.if_block(0x40);
+                // Leaf 0: Maximum Basic Leaf = 1, Vendor = "GenuineIntel"
+                // EBX: "Genu" (0x756e6547)
+                // EDX: "ineI" (0x49656e69)
+                // ECX: "ntel" (0x6c65746e)
+                fn.i32_const(1); fn.local_set(LOCALS.EAX);
+                fn.i32_const(0x756e6547); fn.local_set(LOCALS.EBX);
+                fn.i32_const(0x49656e69); fn.local_set(LOCALS.EDX);
+                fn.i32_const(0x6c65746e); fn.local_set(LOCALS.ECX);
+                fn.else_block();
+                fn.local_get(LOCALS.EAX);
+                fn.i32_const(1);
+                fn.i32_eq();
+                fn.if_block(0x40);
+                // Leaf 1: Family/Model signature, features (including SSE2 in EDX bit 26: 0x04000000)
+                fn.i32_const(0x00010676); fn.local_set(LOCALS.EAX);
+                fn.i32_const(0x00020800); fn.local_set(LOCALS.EBX);
+                fn.i32_const(0x00000209); fn.local_set(LOCALS.ECX);
+                fn.i32_const(0x078bfbfd); fn.local_set(LOCALS.EDX);
+                fn.else_block();
+                fn.i32_const(0); fn.local_set(LOCALS.EAX);
+                fn.i32_const(0); fn.local_set(LOCALS.EBX);
+                fn.i32_const(0); fn.local_set(LOCALS.ECX);
+                fn.i32_const(0); fn.local_set(LOCALS.EDX);
+                fn.end();
+                fn.end();
+                break;
+            }
             case 'FPREM1': case 'FCOMP': case 'FCOMIP':
                 // Explicit unsupported behavior, rather than fabricated status/results.
                 fn.i32_const(inst.addr);fn.global_set(this.unsupportedPc);
@@ -1310,6 +1346,60 @@ export class Lifter {
                 fn.end();
                 break;
             }
+            case 'STOSB.REP': {
+                fn.block(0x40, '$stosb_end');
+                fn.loop(0x40, '$stosb_loop');
+                fn.local_get(LOCALS.ECX);
+                fn.i32_eqz();
+                fn.br_if(1);
+                fn.local_get(LOCALS.EDI);
+                fn.local_get(LOCALS.EAX);
+                fn.i32_store8(0, 0);
+                fn.local_get(LOCALS.EDI);
+                fn.i32_const(1);
+                fn.i32_add();
+                fn.local_set(LOCALS.EDI);
+                fn.local_get(LOCALS.ECX);
+                fn.i32_const(1);
+                fn.i32_sub();
+                fn.local_set(LOCALS.ECX);
+                fn.br(0);
+                fn.end();
+                fn.end();
+                break;
+            }
+            case 'STOSW.REP': {
+                fn.block(0x40, '$stosw_end');
+                fn.loop(0x40, '$stosw_loop');
+                fn.local_get(LOCALS.ECX);
+                fn.i32_eqz();
+                fn.br_if(1);
+                fn.local_get(LOCALS.EDI);
+                fn.local_get(LOCALS.EAX);
+                fn.i32_store16(0, 1);
+                fn.local_get(LOCALS.EDI);
+                fn.i32_const(2);
+                fn.i32_add();
+                fn.local_set(LOCALS.EDI);
+                fn.local_get(LOCALS.ECX);
+                fn.i32_const(1);
+                fn.i32_sub();
+                fn.local_set(LOCALS.ECX);
+                fn.br(0);
+                fn.end();
+                fn.end();
+                break;
+            }
+            case 'STOSD': {
+                fn.local_get(LOCALS.EDI);
+                fn.local_get(LOCALS.EAX);
+                fn.i32_store(0, 2);
+                fn.local_get(LOCALS.EDI);
+                fn.i32_const(4);
+                fn.i32_add();
+                fn.local_set(LOCALS.EDI);
+                break;
+            }
             case 'STOSD.REP': {
                 fn.block(0x40, '$stosd_end');
                 fn.loop(0x40, '$stosd_loop');
@@ -1332,6 +1422,33 @@ export class Lifter {
                 fn.end();
                 break;
             }
+            case 'MOVSB': {
+                fn.local_get(LOCALS.EDI);
+                fn.local_get(LOCALS.ESI);
+                fn.i32_load8_u(0, 0);
+                fn.i32_store8(0, 0);
+                fn.local_get(LOCALS.ESI); fn.i32_const(1); fn.i32_add(); fn.local_set(LOCALS.ESI);
+                fn.local_get(LOCALS.EDI); fn.i32_const(1); fn.i32_add(); fn.local_set(LOCALS.EDI);
+                break;
+            }
+            case 'MOVSB.REP': {
+                fn.block(0x40, '$movsb_end');
+                fn.loop(0x40, '$movsb_loop');
+                fn.local_get(LOCALS.ECX);
+                fn.i32_eqz();
+                fn.br_if(1);
+                fn.local_get(LOCALS.EDI);
+                fn.local_get(LOCALS.ESI);
+                fn.i32_load8_u(0, 0);
+                fn.i32_store8(0, 0);
+                fn.local_get(LOCALS.ESI); fn.i32_const(1); fn.i32_add(); fn.local_set(LOCALS.ESI);
+                fn.local_get(LOCALS.EDI); fn.i32_const(1); fn.i32_add(); fn.local_set(LOCALS.EDI);
+                fn.local_get(LOCALS.ECX); fn.i32_const(1); fn.i32_sub(); fn.local_set(LOCALS.ECX);
+                fn.br(0);
+                fn.end();
+                fn.end();
+                break;
+            }
             case 'MOVSD.REP': {
                 fn.block(0x40, '$movsd_end');
                 fn.loop(0x40, '$movsd_loop');
@@ -1345,6 +1462,30 @@ export class Lifter {
                 fn.local_get(LOCALS.ESI); fn.i32_const(4); fn.i32_add(); fn.local_set(LOCALS.ESI);
                 fn.local_get(LOCALS.EDI); fn.i32_const(4); fn.i32_add(); fn.local_set(LOCALS.EDI);
                 fn.local_get(LOCALS.ECX); fn.i32_const(1); fn.i32_sub(); fn.local_set(LOCALS.ECX);
+                fn.br(0);
+                fn.end();
+                fn.end();
+                break;
+            }
+            case 'SCASB.REPNE': {
+                fn.block(0x40, '$scasb_end');
+                fn.loop(0x40, '$scasb_loop');
+                fn.local_get(LOCALS.ECX);
+                fn.i32_eqz();
+                fn.br_if(1);
+                fn.local_get(LOCALS.EDI);
+                fn.i32_load8_u(0, 0);
+                fn.local_get(LOCALS.EAX);
+                fn.i32_const(0xff);
+                fn.i32_and();
+                fn.i32_sub();
+                fn.local_tee(LOCALS.TMP0);
+                fn.i32_eqz();
+                fn.local_set(LOCALS.ZF);
+                fn.local_get(LOCALS.EDI); fn.i32_const(1); fn.i32_add(); fn.local_set(LOCALS.EDI);
+                fn.local_get(LOCALS.ECX); fn.i32_const(1); fn.i32_sub(); fn.local_set(LOCALS.ECX);
+                fn.local_get(LOCALS.ZF);
+                fn.br_if(1);
                 fn.br(0);
                 fn.end();
                 fn.end();
@@ -1403,6 +1544,20 @@ export class Lifter {
                         this.emitStoreOperandValue(fn, dst);
                     }
                 }
+                break;
+            }
+            case 'STMXCSR': {
+                const [dst] = inst.operands;
+                if (!dst) return;
+                fn.global_get(this.mxcsr);
+                this.emitStoreOperandValue(fn, dst);
+                break;
+            }
+            case 'LDMXCSR': {
+                const [src] = inst.operands;
+                if (!src) return;
+                this.emitLoadOperandValue(fn, src);
+                fn.global_set(this.mxcsr);
                 break;
             }
             case 'PUNPCKHDQ': {
@@ -1894,8 +2049,21 @@ export class Lifter {
         if (dst.kind === 'mem') {
             fn.local_set(LOCALS.F32_TMP);
             this.emitEffectiveAddress(fn, dst);
-            fn.local_get(LOCALS.F32_TMP);
-            fn.f32_store(0, 2);
+            if (dst.size === 16) {
+                fn.local_set(LOCALS.TMP0);
+                for (const off of [0, 4, 8, 12]) {
+                    fn.local_get(LOCALS.TMP0);
+                    if (off > 0) {
+                        fn.i32_const(off);
+                        fn.i32_add();
+                    }
+                    fn.local_get(LOCALS.F32_TMP);
+                    fn.f32_store(0, 2);
+                }
+            } else {
+                fn.local_get(LOCALS.F32_TMP);
+                fn.f32_store(0, 2);
+            }
             return;
         }
     }

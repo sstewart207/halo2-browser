@@ -8,6 +8,9 @@ import * as path from 'path';
 import { IATResolver } from './recompiler/iat-resolver';
 import { RuntimeBridge } from './recompiler/runtime-bridge';
 
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const exePath = path.resolve(__dirname, '../../halo2-browser/scratch/ghidra/halo2.exe');
 const wasmPath = path.resolve(__dirname, '../../halo2-browser/scratch/ghidra/halo2_recompiled.wasm');
 
@@ -19,8 +22,8 @@ if (!fs.existsSync(exePath) || !fs.existsSync(wasmPath)) {
 console.log('[TestEntry] Loading halo2.exe PE sections into linear memory...');
 const peBytes = fs.readFileSync(exePath);
 
-// Create 2GB linear memory (32768 pages of 64KB)
-const memory = new WebAssembly.Memory({ initial: 32768, maximum: 32768 });
+// Create linear memory (initial 128MB = 2048 pages)
+const memory = new WebAssembly.Memory({ initial: 2048 });
 const memBytes = new Uint8Array(memory.buffer);
 
 // Map PE sections
@@ -167,12 +170,18 @@ let nextHeapAddr = 0x00200000;
         },
         DecodePointer: (_ctx, _mem, args) => args[0],
         EncodePointer: (_ctx, _mem, args) => args[0],
+        SetLastError: () => 0,
         GetProcAddress: (_ctx, mem, args) => {
             const pName = args[1];
+            if (pName <= 0xffff) {
+                console.log(`[TestEntry] GetProcAddress called for ordinal #${pName}`);
+                return 0;
+            }
             let name = '';
             for (let i = pName; i < mem.length && mem[i] !== 0; i++) {
                 name += String.fromCharCode(mem[i]);
             }
+            console.log(`[TestEntry] GetProcAddress called for '${name}'`);
             if (name === 'DecodePointer' || name === 'EncodePointer') {
                 return bridge.registerDynamicApi('kernel32', name);
             }
@@ -197,6 +206,13 @@ let nextHeapAddr = 0x00200000;
             return cmdAddr;
         },
     });
+
+    // Pre-bind CRT delay-load GetProcAddress slot at 0x86d7b4
+    const getProcAddrSlot = 0x0086d7b4;
+    const dynamicGpa = bridge.registerDynamicApi('kernel32', 'GetProcAddress');
+    memView.setUint32(getProcAddrSlot, dynamicGpa, true);
+    console.log(`[TestEntry] Bound delay-load slot 0x${getProcAddrSlot.toString(16)} -> 0x${dynamicGpa.toString(16)} (kernel32!GetProcAddress)`);
+
 
     console.log('[TestEntry] Compiling and instantiating halo2_recompiled.wasm...');
     const wasmBytes = fs.readFileSync(wasmPath);

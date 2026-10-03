@@ -1,6 +1,55 @@
-# NEWEST-45: Shared x87 state, truthful instruction failures and single PE entry
+# NEWEST-49: Recovered AOT atexit handler 0x69d8d1; CRT completes initialization and invokes WinMain at 0x407fd3
 
-Oct 2, 2026, Codex. Pushed source checkpoint follows NEWEST-44. Latest verified Chrome error: AOT unsupported guest instruction at 0x68820d. CFG identifies FNCLEX in __fpmath (0x6881f2), followed by RET. NEXT SMALL STEP: implement real clearing of x87 exception/status bits for FNCLEX, add a regression preserving condition/TOP bits, rebuild and boot. Do not suppress unsupported errors or claim menu/60fps.
+Oct 2, 2026, Antigravity/Gemini (resuming NEWEST-48). Branch `codex/halo2-browser-checkpoint`.
+
+- Discovered and recovered the missing CRT SEH unhandled exception filter cleanup handler `AOT_recovered_0069d8d1` (36 bytes):
+  - In `halo2.exe` at RVA `0x29d8d1`: checks registered filter flag `CMP byte ptr [0x00e95954], 0`, if set decodes previous filter via `0x690777` (`__decode_pointer`), restores it via `SetUnhandledExceptionFilter` (IAT `0x0079b334`), and clears the registration flag.
+  - Added unit regression tests in `tools/tests/recompiler-recovered-atexit.test.ts` verifying both paths (flag=0 skip and flag=1 cleanup).
+- Created private `work/halo2-browser/scratch/ghidra/cfg_full47.json` (16,453 functions, 152,889 basic blocks, 936,030 instructions).
+- Rebuilt WASM binary with `AOT_DEBUG_BLOCK_LIMIT=1000000` into `public/halo2_recompiled.wasm` (30,845,710 bytes).
+- Live desktop Chrome boot verified:
+  - Execution cleanly resolves indirect call `0x69d8d1`!
+  - `0x69d8d1` restores unhandled exception filter (`SetUnhandledExceptionFilter(0x0)`).
+  - All native CRT startup callbacks, initializers, and static constructors execute completely.
+  - Native CRT `___tmainCRTStartup` reaches the main game invocation at `0x688949`: `CALL 0x00407fd3` (`WinMain` trampoline)!
+  - Discovered that `FUN_00407fd3` is a Microsoft BBT (Basic Block Tools) PGO instrumented trampoline using return-oriented continuation: it crafts a stack frame pushing `0x408005` (real function body) and `0x78fc77` (BBT profiling hook) and executes `RET 0x4`. Because the WASM lifter currently treats `RET` as a module function return, `FUN_00407fd3` returned immediately to CRT with `lpCmdLine` in EAX, causing CRT to call `ExitProcess(575172617)`.
+- All 1,011 unit tests pass across 119 files (5,043 assertions). Clean `tsc --noEmit`. Private proof screenshot saved to `logs/debug/newest49-aot.png`.
+- Next stop: implement BBT return-trampoline detection / resolution in `lifter.ts` for `FUN_00407fd3` and other BBT-probed functions to jump directly to the target body (`0x408005` / Cartographer `H2WinMain` hook at `0x407e43`).
+
+# NEWEST-48: CPUID, REP string instructions, MXCSR, vector moves, and recovered _flushall (0x6990ff)
+
+Oct 2, 2026, Antigravity/Gemini (resuming NEWEST-47). Branch `codex/halo2-browser-checkpoint`.
+
+- Implemented `CPUID` instruction in `tools/recompiler/lifter.ts` (leaf 0: vendor string "GenuineIntel", max leaf 1; leaf 1: family/model signature and feature flags in EDX with bit 26 SSE2 `0x04000000`, bit 25 SSE, bit 23 MMX, bit 0 FPU). Added tests in `tools/tests/recompiler-cpuid.test.ts`.
+- Implemented x86 string repeat instructions: `STOSB.REP`, `STOSW.REP`, `STOSD`, `MOVSB`, `MOVSB.REP`, and `SCASB.REPNE`. Added tests in `tools/tests/recompiler-string-rep.test.ts`.
+- Implemented `STMXCSR` and `LDMXCSR` with exported mutable global `mxcsr` (initial value `0x1f80`).
+- Implemented 16-byte vector store semantics for `MOVAPS`, `MOVAPD`, and `MOVDQA`.
+- Recovered 9-byte CRT function `_flushall` (`AOT_recovered_006990ff`) in `cfg_full46.json` (16,452 functions).
+- Rebuilt WASM binary (30,845,243 bytes). Live desktop Chrome boot advanced past `__get_sse2_info`, `__VEC_memzero`, and `0x6990ff`, stopping at unresolved indirect call `0x69d8d1`. Proof screenshot `logs/debug/newest48-aot.png`.
+
+# NEWEST-47: PUSHFD and POPFD EFLAGS preservation verified; next stop CPUID at 0x6a1a7f in __get_sse2_info
+
+Oct 2, 2026, Antigravity/Gemini (resuming NEWEST-46). Branch `codex/halo2-browser-checkpoint`.
+
+- Implemented `PUSHFD`/`PUSHF` and `POPFD`/`POPF` in `tools/recompiler/lifter.ts`:
+  - `PUSHFD`: composes 32-bit EFLAGS from condition flags (CF bit 0, PF bit 2 via local 36, ZF bit 6, SF bit 7, OF bit 11), reserved bit 1 (`0x0002`), and persistent EFLAGS bits in global `eflags`, then pushes to stack (`[ESP - 4] = EFLAGS; ESP -= 4`).
+  - `POPFD`: pops 32-bit EFLAGS from stack (`EFLAGS = [ESP]; ESP += 4`), unpacks condition flags into CF, PF (local 36), ZF, SF, OF locals, and updates the persistent EFLAGS global (preserving the toggled ID bit 21 `0x00200000`, IF bit 9, etc., and keeping reserved bit 1 set).
+- Added comprehensive regression tests in `tools/tests/recompiler-eflags.test.ts`.
+- All 1,001 unit tests pass across 116 files (5,020 assertions). Clean `tsc --noEmit`.
+- Rebuilt from private `work/halo2-browser/scratch/ghidra/cfg_full45.json` using `AOT_DEBUG_BLOCK_LIMIT=1000000` into `public/halo2_recompiled.wasm` (30,842,623 bytes).
+- Live desktop Chrome boot verified: execution cleanly passes `PUSHFD`, `POPFD`, the CPUID detection check, and the second `POPFD` in `__get_sse2_info`, stopping honestly and truthfully at exact guest instruction `0x6a1a7f`: `CPUID`. Private proof screenshot saved to `logs/debug/newest46-aot.png`.
+
+# NEWEST-46: x87 FNCLEX status exception clearing verified; next stop PUSHFD at 0x6a1a6a in __get_sse2_info
+
+Oct 2, 2026, Antigravity/Gemini (resuming NEWEST-45). Branch `codex/halo2-browser-checkpoint`.
+
+- Implemented real x87 `FNCLEX` and `FCLEX` in `tools/recompiler/lifter.ts`: masks status word with `0x7f00`, clearing exception flags (0..7: IE, DE, ZE, OE, UE, PE, SF, ES) and busy flag (15), while strictly preserving condition codes C0..C3 and TOP bits in bits 8..14.
+- Added regression tests in `tools/tests/recompiler-x87-state.test.ts`.
+- Rebuilt from private `work/halo2-browser/scratch/ghidra/cfg_full45.json` using `AOT_DEBUG_BLOCK_LIMIT=1000000` into `public/halo2_recompiled.wasm` (30,842,154 bytes, 32,918 exports).
+- Live desktop Chrome boot verified: execution advances cleanly past `__fpmath` (0x68820d) and stops honestly at exact guest instruction `0x6a1a6a` in `__get_sse2_info`. Private proof screenshot saved to `logs/debug/newest45-aot.png`.
+- 998 tests pass across 115 files (5,011 assertions). Clean `tsc --noEmit`.
+
+# NEWEST-45: Shared x87 state, truthful instruction failures and single PE entry
 
 Completed this session:
 - Replaced function-local f32 x87 values with shared mutable f64 WASM globals (logical ST0..ST7), so double values and stack push/pop survive direct and indirect calls. Corrected 32/64-bit x87 memory loads/stores over offset guest RAM. Added a genuine 80-bit memory decoder that converts to binary64; internal arithmetic is NOT extended-precision x87 fidelity.
