@@ -284,6 +284,7 @@ export class Lifter {
         wasmFn.addLocals(1, 0x7f); // local 36: PF
         wasmFn.addLocals(2, 0x7c); // locals 37/38: x87 value and f64 store scratch
         wasmFn.addLocals(4, 0x7f); // locals 39..42: lane shuffle snapshot
+        wasmFn.addLocals(1, 0x7e); // local 43: bit-preserving binary64 XMM store
         wasmFn.guestStoreF64Local = 38;
         wasmFn.guestMemoryBaseGlobal = this.memoryBaseGlobalIdx;
         wasmFn.guestStoreI32Local = 32;
@@ -1227,6 +1228,24 @@ export class Lifter {
                 break;
             }
             // --- SSE Single-Precision Instructions ---
+            case 'CVTDQ2PD': {
+                const [dst,src]=inst.operands;
+                for(let lane=0;lane<2;lane++){this.emitXmmLaneLoad(fn,src,lane);fn.local_set(39+lane);}
+                for(let lane=0;lane<2;lane++){fn.local_get(39+lane);fn.f64_op(0xb7,'f64.convert_i32_s');this.emitXmmDoubleStore(fn,dst,lane);}
+                break;
+            }
+            case 'ADDSD': {
+                const [dst,src]=inst.operands;
+                this.emitXmmDoubleLoad(fn,dst,0);this.emitXmmDoubleLoad(fn,src,0);
+                fn.f64_op(0xa0,'f64.add');this.emitXmmDoubleStore(fn,dst,0);break;
+            }
+            case 'CVTPD2PS': {
+                const [dst,src]=inst.operands;
+                for(let lane=0;lane<2;lane++){this.emitXmmDoubleLoad(fn,src,lane);fn.local_set(37+lane);}
+                for(let lane=0;lane<2;lane++){fn.local_get(37+lane);fn.f64_op(0xb6,'f32.demote_f64');fn.i32_reinterpret_f32();this.emitXmmLaneStore(fn,dst,lane);}
+                for(let lane=2;lane<4;lane++){fn.i32_const(0);this.emitXmmLaneStore(fn,dst,lane);}
+                break;
+            }
             case 'PSHUFD': {
                 const [dst,src,control]=inst.operands;
                 if(!dst || !src || !control || control.kind!=='imm')return;
@@ -2161,6 +2180,18 @@ export class Lifter {
 
     private xmmIndex(op: Operand): number | undefined {
         return op.kind==='reg' && /^XMM[0-7]$/.test(op.baseReg) ? Number(op.baseReg.slice(3)) : undefined;
+    }
+
+    private emitXmmDoubleLoad(fn: WasmFunctionBuilder, op: Operand, pair: number) {
+        if(op.kind==='mem'){this.emitEffectiveAddress(fn,op);fn.f64_load(pair*8,0);return;}
+        this.emitXmmLaneLoad(fn,op,pair*2);fn.emitBytes([0xad]);
+        this.emitXmmLaneLoad(fn,op,pair*2+1);fn.emitBytes([0xad,0x42,0x20,0x86,0x84,0xbf]);
+    }
+
+    private emitXmmDoubleStore(fn: WasmFunctionBuilder, op: Operand, pair: number) {
+        fn.emitBytes([0xbd]);fn.local_set(43);
+        fn.local_get(43);fn.emitBytes([0xa7]);this.emitXmmLaneStore(fn,op,pair*2);
+        fn.local_get(43);fn.emitBytes([0x42,0x20,0x88,0xa7]);this.emitXmmLaneStore(fn,op,pair*2+1);
     }
 
     private emitXmmLaneLoad(fn: WasmFunctionBuilder, op: Operand, lane: number) {

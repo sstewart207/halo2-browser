@@ -12,6 +12,25 @@ function build(ops:string[][],callee?:CFGFunction){
  return {i,v:new DataView(memory.buffer,0x1000,65536),run:()=> (i.exports.run as Function)(0x8000,0,0)};
 }
 const bits=[0x7fa12345,0x89abcdef,0x80000000,0x12345678];
+test('CVTDQ2PD snapshots signed low integers before aliased binary64 writes',()=>{
+ for(const source of ['XMM0','qword ptr [0x2000]']){
+  const {v,run}=build([['MOVDQU','XMM0, xmmword ptr [0x2000]'],['CVTDQ2PD',`XMM0, ${source}`],['MOVDQU','xmmword ptr [0x2040], XMM0'],['RET','']]);
+  v.setInt32(0x2000,-2147483648,true);v.setInt32(0x2004,2147483647,true);run();
+  expect(v.getFloat64(0x2040,true)).toBe(-2147483648);expect(v.getFloat64(0x2048,true)).toBe(2147483647);
+ }
+});
+test('ADDSD preserves upper binary64 while converting unsigned maximum; CVTPD2PS clears upper lanes',()=>{
+ const {v,run}=build([['MOVDQU','XMM0, xmmword ptr [0x2000]'],['CVTDQ2PD','XMM0, XMM0'],['ADDSD','XMM0, qword ptr [0x2020]'],['MOVDQU','xmmword ptr [0x2040], XMM0'],['CVTPD2PS','XMM0, XMM0'],['MOVDQU','xmmword ptr [0x2060], XMM0'],['RET','']]);
+ v.setInt32(0x2000,-1,true);v.setInt32(0x2004,17,true);v.setFloat64(0x2020,4294967296,true);run();
+ expect(v.getFloat64(0x2040,true)).toBe(4294967295);expect(v.getFloat64(0x2048,true)).toBe(17);
+ expect(v.getFloat32(0x2060,true)).toBe(Math.fround(4294967295));expect(v.getFloat32(0x2064,true)).toBe(17);
+ expect(v.getUint32(0x2068,true)).toBe(0);expect(v.getUint32(0x206c,true)).toBe(0);
+});
+test('CVTPD2PS memory conversion rounds to nearest even and preserves signed zero',()=>{
+ const {v,run}=build([['CVTPD2PS','XMM0, xmmword ptr [0x2000]'],['MOVDQU','xmmword ptr [0x2040], XMM0'],['RET','']]);
+ v.setFloat64(0x2000,1+2**-24,true);v.setFloat64(0x2008,-0,true);run();
+ expect(v.getFloat32(0x2040,true)).toBe(1);expect(v.getUint32(0x2044,true)).toBe(0x80000000);
+});
 test('CMOVA and signed conditional moves distinguish ordering and equality',()=>{
  for(const [op,left,right,selected] of [['CMOVA','0x201','0x200',true],['CMOVA','0x200','0x200',false],['CMOVA','0x1','0xffffffff',false],['CMOVB','0x1','0xffffffff',true],['CMOVL','0xffffffff','0x1',true],['CMOVGE','0xffffffff','0x1',false]] as const){
   const {run}=build([['MOV',`ECX, ${left}`],['MOV',`EDX, ${right}`],['CMP','ECX, EDX'],['MOV','EAX, 0x7'],['MOV','EDX, 0x9'],[op,'EAX, EDX'],['RET','']]);expect(run()).toBe(selected?9:7);

@@ -1,3 +1,14 @@
+# NEWEST-54: SSE double conversions pass native Chrome startup
+
+October 3, 2026. Implemented CVTDQ2PD signed low-two-int conversion into packed binary64, ADDSD scalar addition preserving upper 64 bits, and CVTPD2PS conversion with upper 64 bits cleared. Sources snapshot before aliased destination writes. Binary64 XMM access uses i64 bitcasts, preserving all bits rather than scalar-f32 storage.
+
+- Validation: 1,052 tests / 0 failures / 5,174 assertions across 125 files; TypeScript clean. Tests cover signed extrema, unsigned-max correction, aliasing, memory operands, upper-lane preservation/clearing, nearest-even ties and negative zero.
+- Rounding limitation: WASM nearest-even conversion is supported; alternate MXCSR rounding modes and SSE exception reporting remain incomplete.
+- Actual Chrome passes CVTDQ2PD 0x130ab570 and adjacent ADDSD/CVTPD2PS. Next unsupported instruction: PSRLQ XMM0,0x34 at runtime 0x131c7706, preferred 0x101c7706, FUN_101c76f0. This CRT math block also uses MOVQ, ANDPD and PSUBD; check existing MOVQ fidelity before claiming correct math.
+- Private native-build54.json / halo2-native54.wasm preserves build53 inputs: 31,182 functions, 82,437,398 bytes. Public runtime binary copied; all proprietary outputs remain outside Git.
+- D3DX attach succeeds; xlive attach has not returned. No AOT title/menu/video/60fps acceptance. Pending remaining DLLs, real TEB/TLS, dynamic attach and threads; inherited EXE shell/queue substitutions remain experimental.
+- Preserve unrelated Gemini edits and bun.lock unstaged. Only sstewart207/halo2-browser is authorized for pushes/comments; do not merge PR7 or close issues.
+
 # NEWEST-53: Locked increment, CRT memory fill and API argument metadata fixed
 
 Oct 3, 2026. Codex continued while the user was away.
