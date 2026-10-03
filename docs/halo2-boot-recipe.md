@@ -1,5 +1,7 @@
 # Halo 2 boot-to-campaign recipe (Chrome, dev build)
 
+> Historical v86 recipe. Current NEWEST-56 uses AOT and has not reached an interactive menu or campaign. For current native build, stop and next task, read `halo2-aot-boot-checkpoint.md` first. Do not interpret the historical campaign recipe or 60-fps retry loop below as AOT acceptance.
+
 Verified Oct 1 2026 (Claude Sonnet 5.5), CORRECTED Oct 2 2026 (Codex). Gets from a cold page to the playable level with about 12 browser calls. The bundle stays private and outside Git.
 
 > **Two corrections (Oct 2).** (1) The harness global is `window.__BS__.harness`, not `window.harness`. (2) **Choose "Armory" (the 2nd entry), not Cairo Station.** The bundle contains only `01a_tutorial.map`; every other mission's scenario file is missing and the game retries it forever at 60 fps (see next-agent-handoff.md, section 1).

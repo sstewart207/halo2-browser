@@ -1,3 +1,14 @@
+# NEWEST-56: Native string routines and two recovered Cartographer entries
+
+October 3, 2026. BSR/BSF implement highest/lowest-set-bit indexing with word masking and ZF for zero. Zero-source destination and other flags are architecturally undefined, not certified. PSHUFLW snapshots low-word shuffles and preserves upper source qword. PCMPEQW compares all eight words, ORPS combines all four bit lanes, PMOVMSKB extracts all sixteen sign bits. MMX variants remain explicitly unsupported.
+
+- Ghidra recovered observed constructor 0x100e4f00 and omitted continuation 0x100ac352 into private cfg_xlive56b.json, now 9,961 functions. The continuation restores SEH/frame state; its diagnostic stack top was not a valid function-return slot, so do not infer stack corruption from 0x8d78ba18 alone. Native execution passes both recovered entries.
+- Chrome passes BSR 0x130ab79e, PSHUFLW 0x1319669a, PCMPEQW 0x131966b8 and BSF 0x131966d0. Cartographer installs its exception filter, reads halo2.exe version resource, and reaches SetCurrentDirectoryW with an empty string (API currently reports success; investigate semantics if it becomes causal).
+- Current stop: unresolved indirect target 0x131891e0, preferred 0x101891e0, return 0x1316a8d1, last debug block 0x13172c70. Next verify/recover the native function with Ghidra, then build/boot. No fake constructor success or API shortcut added.
+- Validation: 1,062 tests / 0 fail / 5,271 assertions across 125 files; TypeScript clean. Private native-build56.json / halo2-native56.wasm uses cfg_full53 EXE, cfg_d3dx9_43_51d and cfg_xlive56b; 31,184 functions, 82,524,644 bytes. Public binary copied. Native private build remains untracked.
+- D3DX attach succeeds; xlive attach has not returned. No AOT video/menu/campaign/60fps acceptance. Preserve rounding, true TEB/TLS, remaining DLLs/threads/dynamic attach and experimental EXE shell/queue warnings from previous checkpoints.
+- Unrelated Gemini changes and bun.lock remain unstaged. Root AGENTS/CODEX-HANDOFF/HANDOFF and repo handoffs updated; only own private repo allowed for GitHub activity. No PR merge or issue closure.
+
 # NEWEST-55: Packed CRT math executes; next stop BSR
 
 October 3, 2026. Fixed SSE MOVQ to preserve all 64 low bits, clear the upper destination qword and store exactly eight bytes. Prior scalar-f32 implementation silently lost half the bits.

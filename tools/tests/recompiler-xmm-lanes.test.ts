@@ -12,6 +12,33 @@ function build(ops:string[][],callee?:CFGFunction){
  return {i,v:new DataView(memory.buffer,0x1000,65536),run:()=> (i.exports.run as Function)(0x8000,0,0)};
 }
 const bits=[0x7fa12345,0x89abcdef,0x80000000,0x12345678];
+test('BSF finds first matching byte mask with aliased destination and zero flag',()=>{
+ for(const [value,expected] of [[1,0],[0x80000000,31],[0xb330,4],[0,undefined]] as const){
+  const {v,run}=build([['MOV',`EAX, 0x${value.toString(16)}`],['BSF','EAX, EAX'],['PUSHFD',''],['POP','ECX'],['MOV','dword ptr [0x2040], ECX'],['RET','']]);const result=run();if(expected!==undefined)expect(result).toBe(expected);expect(v.getUint32(0x2040,true)&0x40).toBe(value===0?64:0);
+ }
+});
+test('CRT word comparison combines masks and extracts all sixteen sign bits',()=>{
+ const {v,run}=build([['MOVDQU','XMM0, xmmword ptr [0x2000]'],['MOVDQU','XMM1, xmmword ptr [0x2020]'],['PCMPEQW','XMM0, XMM1'],['MOVDQU','xmmword ptr [0x2040], XMM0'],['ORPS','XMM0, xmmword ptr [0x2030]'],['PMOVMSKB','EAX, XMM0'],['RET','']]);
+ for(let n=0;n<8;n++){v.setUint16(0x2000+2*n,n,true);v.setUint16(0x2020+2*n,n%2?n+1:n,true);}v.setUint8(0x203f,0x80);expect(run()).toBe(0xb333);expect([0,1,2,3,4,5,6,7].map(n=>v.getUint16(0x2040+2*n,true))).toEqual([65535,0,65535,0,65535,0,65535,0]);
+});
+test('PMOVMSKB maps each byte independently; PCMPEQW self compare sets every word',()=>{
+ for(let byte=0;byte<16;byte++){
+  const {v,run}=build([['MOVDQU','XMM0, xmmword ptr [0x2000]'],['PMOVMSKB','EAX, XMM0'],['RET','']]);v.setUint8(0x2000+byte,0x80);expect(run()).toBe(1<<byte);
+ }
+ const {v,run}=build([['MOVDQU','XMM0, xmmword ptr [0x2000]'],['PCMPEQW','XMM0, XMM0'],['PMOVMSKB','EAX, XMM0'],['RET','']]);bits.forEach((x,n)=>v.setUint32(0x2000+n*4,x,true));expect(run()).toBe(65535);
+});
+test('PSHUFLW shuffles low words and copies unchanged upper source qword',()=>{
+ for(const [control,expected] of [[0,[1,1,1,1]],[0x1b,[4,3,2,1]],[0xe4,[1,2,3,4]]] as const){
+  for(const source of ['XMM0','xmmword ptr [0x2000]']){
+   const {v,run}=build([['MOVDQU','XMM0, xmmword ptr [0x2000]'],['PSHUFLW',`XMM0, ${source}, 0x${control.toString(16)}`],['MOVDQU','xmmword ptr [0x2040], XMM0'],['RET','']]);[1,2,3,4].forEach((x,n)=>v.setUint16(0x2000+n*2,x,true));v.setBigUint64(0x2008,0xfedcba9876543210n,true);run();expect([0,1,2,3].map(n=>v.getUint16(0x2040+n*2,true))).toEqual(expected);expect(v.getBigUint64(0x2048,true)).toBe(0xfedcba9876543210n);
+  }
+ }
+});
+test('BSR scans highest bit for register/memory sources, narrows words and sets zero flag',()=>{
+ for(const [src,value,expected] of [['EDX',1,0],['EDX',0x80000000,31],['EDX',0x1fffffff,28],['DX',0x80010000,-1],['word ptr [0x2000]',0x80010000,-1],['dword ptr [0x2000]',0x80010000,31],['DX',0x8001,15]] as const){
+  const {v,run}=build([['MOV','EAX, 0x12345678'],['MOV',`EDX, 0x${value.toString(16)}`],['BSR',`${src==='DX'||src.startsWith('word')?'AX':'EAX'}, ${src}`],['PUSHFD',''],['POP','ECX'],['MOV','dword ptr [0x2040], ECX'],['RET','']]);v.setUint32(0x2000,value,true);const result=run();expect(v.getUint32(0x2040,true)&0x40).toBe(expected===-1?0x40:0);if(expected!==-1)expect(result).toBe(src==='DX'||src.startsWith('word')?0x12340000+expected:expected);
+ }
+});
 test('CMPNLEPD creates full-qword masks including unordered NaNs and aliased operands',()=>{
  for(const source of ['XMM1','xmmword ptr [0x2020]','XMM0']){
   const {v,run}=build([['MOVDQU','XMM0, xmmword ptr [0x2000]'],['MOVDQU','XMM1, xmmword ptr [0x2020]'],['CMPNLEPD',`XMM0, ${source}`],['MOVDQU','xmmword ptr [0x2040], XMM0'],['RET','']]);v.setFloat64(0x2000,4,true);v.setFloat64(0x2008,NaN,true);v.setFloat64(0x2020,3,true);v.setFloat64(0x2028,1,true);run();expect(v.getBigUint64(0x2040,true)).toBe(source==='XMM0'?0n:0xffffffffffffffffn);expect(v.getBigUint64(0x2048,true)).toBe(0xffffffffffffffffn);

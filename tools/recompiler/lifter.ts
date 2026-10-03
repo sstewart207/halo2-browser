@@ -1228,6 +1228,19 @@ export class Lifter {
                 break;
             }
             // --- SSE Single-Precision Instructions ---
+            case 'BSF':
+            case 'BSR': {
+                const [dst,src]=inst.operands;
+                this.emitLoadOperandValue(fn,src);
+                if(src.size===2){fn.i32_const(0xffff);fn.i32_and();}
+                fn.local_set(34);fn.local_get(34);fn.i32_eqz();fn.local_set(LOCALS.ZF);
+                fn.local_get(LOCALS.ZF);fn.i32_eqz();fn.if_block(0x40);
+                if(inst.mnemonic==='BSR'){fn.i32_const(31);fn.local_get(34);fn.emitBytes([0x67]);fn.i32_sub();}
+                else {fn.local_get(34);fn.emitBytes([0x68]);}
+                this.emitStoreOperandValue(fn,dst);fn.end();
+                // Other flags and the zero-source destination are architecturally undefined.
+                break;
+            }
             case 'CMPNLEPD': {
                 const [dst,src]=inst.operands;
                 for(let pair=0;pair<2;pair++){
@@ -1255,13 +1268,34 @@ export class Lifter {
                 }
                 break;
             }
+            case 'PCMPEQW': {
+                const [dst,src]=inst.operands;
+                if(this.xmmIndex(dst)===undefined){fn.i32_const(inst.addr);fn.global_set(this.unsupportedPc);fn.emitBytes([0x00]);break;}
+                for(let lane=0;lane<4;lane++){
+                    this.emitXmmLaneLoad(fn,dst,lane);fn.local_set(34);this.emitXmmLaneLoad(fn,src,lane);fn.local_set(35);
+                    for(let half=0;half<2;half++){
+                        for(const operand of [34,35]){fn.local_get(operand);if(half){fn.i32_const(16);fn.i32_shr_u();}else{fn.i32_const(0xffff);fn.i32_and();}}
+                        fn.i32_eq();fn.if_block(0x7f);fn.i32_const(half?-65536:65535);fn.else_block();fn.i32_const(0);fn.end();if(half)fn.i32_or();
+                    }
+                    this.emitXmmLaneStore(fn,dst,lane);
+                }break;
+            }
+            case 'PMOVMSKB': {
+                const [dst,src]=inst.operands;
+                if(this.xmmIndex(src)===undefined){fn.i32_const(inst.addr);fn.global_set(this.unsupportedPc);fn.emitBytes([0x00]);break;}
+                fn.i32_const(0);fn.local_set(39);
+                for(let byte=0;byte<16;byte++){
+                    fn.local_get(39);this.emitXmmLaneLoad(fn,src,byte>>>2);fn.i32_const((byte%4)*8+7);fn.i32_shr_u();fn.i32_const(1);fn.i32_and();fn.i32_const(byte);fn.i32_shl();fn.i32_or();fn.local_set(39);
+                }fn.local_get(39);this.emitStoreOperandValue(fn,dst);break;
+            }
+            case 'ORPS':
             case 'ANDPD':
             case 'PSUBD': {
                 const [dst,src]=inst.operands;
                 if(this.xmmIndex(dst)===undefined){fn.i32_const(inst.addr);fn.global_set(this.unsupportedPc);fn.emitBytes([0x00]);break;}
                 for(let lane=0;lane<4;lane++){
                     this.emitXmmLaneLoad(fn,dst,lane);this.emitXmmLaneLoad(fn,src,lane);
-                    if(inst.mnemonic==='ANDPD')fn.i32_and();else fn.i32_sub();
+                    if(inst.mnemonic==='ANDPD')fn.i32_and();else if(inst.mnemonic==='ORPS')fn.i32_or();else fn.i32_sub();
                     this.emitXmmLaneStore(fn,dst,lane);
                 }
                 break;
@@ -1283,6 +1317,20 @@ export class Lifter {
                 for(let lane=0;lane<2;lane++){fn.local_get(37+lane);fn.f64_op(0xb6,'f32.demote_f64');fn.i32_reinterpret_f32();this.emitXmmLaneStore(fn,dst,lane);}
                 for(let lane=2;lane<4;lane++){fn.i32_const(0);this.emitXmmLaneStore(fn,dst,lane);}
                 break;
+            }
+            case 'PSHUFLW': {
+                const [dst,src,control]=inst.operands;
+                if(control.kind!=='imm')throw new Error('PSHUFLW requires an immediate');
+                for(let lane=0;lane<4;lane++){this.emitXmmLaneLoad(fn,src,lane);fn.local_set(39+lane);}
+                for(let lane=0;lane<2;lane++){
+                    for(let half=0;half<2;half++){
+                        const word=(control.value>>>((lane*2+half)*2))&3;
+                        fn.local_get(39+(word>>>1));if(word&1){fn.i32_const(16);fn.i32_shr_u();}fn.i32_const(0xffff);fn.i32_and();
+                        if(half){fn.i32_const(16);fn.i32_shl();fn.i32_or();}
+                    }
+                    this.emitXmmLaneStore(fn,dst,lane);
+                }
+                for(let lane=2;lane<4;lane++){fn.local_get(39+lane);this.emitXmmLaneStore(fn,dst,lane);}break;
             }
             case 'PSHUFD': {
                 const [dst,src,control]=inst.operands;
