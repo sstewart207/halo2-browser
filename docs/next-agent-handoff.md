@@ -412,3 +412,11 @@ Read in this order: this file, HANDOFF.md newest NEWEST-N entry, then `work/bott
 **Stop and report to the user** if a tool or browser call fails three times, if you are about to spend more than a few steps on something not in the open list, or if you are unsure whether an action is outward-facing.
 
 **Privacy note for free or "stealth" models:** anonymous free preview models may log prompts for the provider's training. Do not paste game logs, saves, account data, tokens or the private bundle; stick to source files and docs.
+# NEWEST-64: Native D3DX9_31 attach succeeds; EXE startup reaches 0x404561
+
+October 3, 2026. Live Chrome completes all four native DLL DllMain calls (d3dx9_43, xlive, pccompat, d3dx9_31) and executes halo2.exe. Current explicit stop is unresolved 0x404561 after recovered function 0x5ba425; last block 0x5ba440, ESP=0x1301d3c, EBP=0x1301fe4. No AOT title/menu/video/campaign/60fps acceptance.
+
+- Private Ghidra CFG `../halo2-browser/scratch/ghidra/cfg_d3dx9_31_64c.json` recovers 55 missing functions in the exact 70-entry D3DX9_31 CRT table (PE raw 0x6d8..0x7ef); all 70 now compile. The loaded DLL base is 0x13c70000. FPATAN uses tested atan2(ST1, ST0) plus one x87 pop. Chrome completes DLL attach without skipping initializers.
+- Whole-image compiler no longer retains WAT with `emitWat:false`, defers binary serialization until DLL exports exist and parses each DLL CFG once. Private `native-build64e.json` outputs 38,632-function, 123,275,338-byte WASM. `cfg_full64e-merged.json` starts from prior cfg_full53 and adds only Ghidra-recovered EXE function 0x5ba425; replacing cfg_full53 with raw Ghidra export would lose 13 prior functions.
+- Next inspect exact 0x404561 in Ghidra, recover if actual entry, append only its CFG to cfg_full64e-merged, rebuild and Chrome boot. `bun run tools/boot-halo2.ts` works through the connected Chrome harness. Tests 1,077 pass, typecheck clean. Keep private binaries/CFG/bundle/logs/saves and bun.lock out of Git.
+

@@ -1,4 +1,4 @@
-import { aotCos, loadExtended80 } from '../../src/worker/core/recompiler/x87-math';
+import { aotAtan2, aotCos, loadExtended80 } from '../../src/worker/core/recompiler/x87-math';
 /**
  * runtime-bridge.ts — Stage 3 Runtime Linker connecting recompiled WebAssembly modules
  * to BottleShip Win32 and Direct3D HLE implementations with zero emulation trap overhead.
@@ -489,6 +489,7 @@ export class RuntimeBridge {
             memory: this.memory,
             ...this.registeredImports,
             aot_cos: aotCos,
+            aot_atan2: aotAtan2,
             aot_load_f80: (address: number) => loadExtended80(this.memory, this.memoryOffset, this.memoryLength, address),
         };
 

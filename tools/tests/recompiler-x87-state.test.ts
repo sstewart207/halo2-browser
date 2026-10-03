@@ -18,6 +18,13 @@ test('FDIVRP divides ST0 by ST1 and pops while preserving the next stack value',
  (i.exports.divide_pop as Function)(0x8000,0,0);
  expect(v.getFloat64(0x2018,true)).toBe(4);expect(v.getFloat64(0x2020,true)).toBe(17);
 });
+test('FPATAN computes atan2(ST1, ST0), pops once and preserves lower x87 values',()=>{
+ const f=fn('atan_quadrant',0x1000,[['FLD','double ptr [0x2000]'],['FLD','double ptr [0x2008]'],['FLD','double ptr [0x2010]'],['FPATAN',''],['FSTP','double ptr [0x2018]'],['FSTP','double ptr [0x2020]'],['RET','']]);
+ const {i,v}=build([f]);v.setFloat64(0x2000,42,true);v.setFloat64(0x2008,1,true);v.setFloat64(0x2010,-1,true);
+ (i.exports.atan_quadrant as Function)(0x8000,0,0);
+ expect(v.getFloat64(0x2018,true)).toBeCloseTo(3*Math.PI/4,14);
+ expect(v.getFloat64(0x2020,true)).toBe(42);
+});
 test('x87 doubles, stack pushes/pops and cosine survive an internal call at an offset',()=>{
  const caller=fn('caller',0x1000,[['FLD','double ptr [0x2000]'],['FLD','double ptr [0x2008]'],['CALL','0x1100'],['FSTP','double ptr [0x2010]'],['FSTP','double ptr [0x2018]'],['RET','']]);
  const callee=fn('callee',0x1100,[['FCOS',''],['RET','']]);

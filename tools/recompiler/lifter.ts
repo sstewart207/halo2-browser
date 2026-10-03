@@ -234,6 +234,7 @@ export class Lifter {
         const ops=functions.flatMap(f=>f.basicBlocks.flatMap(b=>b.instructions));
         const addMath=(name:string,params:number[])=>this.x87Imports.set(name,this.moduleBuilder.addFunctionImport('env',name,this.moduleBuilder.addSignature(params,[0x7c])));
         if (ops.some(i=>i.mnemonic==='FCOS')) addMath('aot_cos',[0x7c]);
+        if (ops.some(i=>i.mnemonic==='FPATAN')) addMath('aot_atan2',[0x7c,0x7c]);
         if (ops.some(i=>i.mnemonic==='FLD' && /extended double/.test(i.ops))) addMath('aot_load_f80',[0x7f]);
 
         let hasIndirectCall = false;
@@ -306,7 +307,7 @@ export class Lifter {
         if (!this.funcEntryMap.has(entryAddr)) {
             this.funcEntryMap.set(entryAddr, this.moduleBuilder.functions.length);
         }
-        const wasmFn = this.moduleBuilder.addFunction(fn.name, this.funcSigIndex);
+        const wasmFn = this.moduleBuilder.addFunction(fn.name, this.funcSigIndex, this.options.emitWat !== false);
 
         // Locals: EDX, EBX, EBP, ESI, EDI, ZF, SF, CF, OF, TMP0, TMP1, BLOCK_ID (12 additional i32 locals)
         wasmFn.addLocals(12, 0x7f);
@@ -1578,6 +1579,15 @@ export class Lifter {
                 fn.else_block();fn.global_get(this.x87Stack[0]);fn.call_func(this.x87Imports.get('aot_cos')!);fn.global_set(this.x87Stack[0]);
                 fn.global_get(this.x87Status);fn.i32_const(~0x400);fn.i32_and();fn.global_set(this.x87Status);fn.end();break;
             }
+            case 'FPATAN': {
+                // atan2(ST1, ST0) replaces ST1, then the x87 stack pops ST0.
+                fn.global_get(this.x87Stack[1]);
+                fn.global_get(this.x87Stack[0]);
+                fn.call_func(this.x87Imports.get('aot_atan2')!);
+                fn.global_set(this.x87Stack[1]);
+                this.emitX87Pop(fn);
+                break;
+            }
             case 'FSTCW': case 'FNSTCW': {
                 const dst=inst.operands[0];if(!dst)return;fn.global_get(this.x87Control);this.emitStoreOperandValue(fn,dst);break;
             }
@@ -2574,7 +2584,7 @@ export function liftExportedModule(cfgExport: CFGExport, options: LiftedModuleOp
 
     return {
         builder: lifter.moduleBuilder,
-        wasmBytes: lifter.moduleBuilder.toBinary(),
+        wasmBytes: options.emitBinary === false ? new Uint8Array() : lifter.moduleBuilder.toBinary(),
         watText: options.emitWat !== false ? lifter.moduleBuilder.toWat() : '',
     };
 

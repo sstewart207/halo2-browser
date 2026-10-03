@@ -13,6 +13,17 @@ import {
     CFGFunction
 } from '../recompiler';
 
+it('discards WAT while retaining a valid deferred binary build', () => {
+    const builder = new WasmModuleBuilder();
+    const signature = builder.addSignature([], []);
+    const fn = builder.addFunction('no_wat', signature, false);
+    for (let i = 0; i < 1000; i++) fn.nop();
+    expect(fn.watLines.length).toBe(0);
+    builder.addExport('no_wat', 0, 0);
+    const bytes = builder.toBinary();
+    expect(WebAssembly.validate(bytes as any)).toBe(true);
+});
+
 describe('Recompiler Operand & Instruction Parser', () => {
     it('parses registers correctly', () => {
         const eax = parseOperand('EAX');

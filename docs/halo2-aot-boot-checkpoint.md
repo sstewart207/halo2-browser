@@ -281,3 +281,7 @@ Validation: typecheck clean; 967 tests pass across 108 files, 4923 assertions. N
 
 Next bounded task: design and test AOT async call suspension/resumption for LoadLibraryA, including native DLL DllMain initialization and delay-load calls. A synchronous WASM invocation cannot simply await a Promise import; do not fabricate zero/success or restart with v86 and call it AOT success. Current bridge rejection is an honest unsupported-path failure, not completed async integration. Also reconcile fixed compiler FS/TEB address 0x30000 with scheduler main-thread TEB 0x1302000/TLS before accepting DLL-heavy startup. Raw Target auto-attach remains unsupported through extension; use supported tools without bypass.
 
+# NEWEST-64: D3DX9_31 native attach passes; EXE startup advances
+
+Live Chrome Build64e completes d3dx9_43, xlive, pccompat and d3dx9_31 DllMain, then enters halo2.exe. D3DX9_31's exact 70-entry CRT initializer table was recovered in Ghidra (55 missing functions), and FPATAN received tested atan2 plus x87 pop behavior. The compiler discards unused WAT and serializes once, allowing the 38,632-function/123,275,338-byte private WASM build. EXE function 0x5ba425 was recovered without replacing prior cfg_full53 modifications. Current stop is unresolved EXE target 0x404561 (last block 0x5ba440). Private build manifest `../halo2-browser/scratch/ghidra/native-build64e.json`, merged CFG `cfg_full64e-merged.json`; 1,077 tests/typecheck pass. No AOT title/menu/video/campaign/60fps acceptance. Next inspect/recover 0x404561 and boot again.
+

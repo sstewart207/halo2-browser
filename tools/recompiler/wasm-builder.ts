@@ -76,16 +76,23 @@ export interface WasmFuncSignature {
     results: number[]; // 0x7F for i32
 }
 
+// Whole-image builds need the opcode stream, not millions of retained WAT lines.
+class DiscardWatLines extends Array<string> {
+    override push(..._items: string[]): number { return 0; }
+}
+const DISCARD_WAT_LINES = new DiscardWatLines();
+
 export class WasmFunctionBuilder {
     name: string;
     sigIndex: number;
     locals: number[] = []; // count of i32 locals
     bytecode: number[] = [];
-    watLines: string[] = [];
+    watLines: string[];
 
-    constructor(name: string, sigIndex: number) {
+    constructor(name: string, sigIndex: number, emitWat = true) {
         this.name = name;
         this.sigIndex = sigIndex;
+        this.watLines = emitWat ? [] : DISCARD_WAT_LINES;
     }
 
     addLocals(count: number, type: number = 0x7f) {
@@ -437,8 +444,8 @@ export class WasmModuleBuilder {
         return this.functionImports.length + localIdx;
     }
 
-    addFunction(name: string, sigIndex: number): WasmFunctionBuilder {
-        const fn = new WasmFunctionBuilder(name, sigIndex);
+    addFunction(name: string, sigIndex: number, emitWat = true): WasmFunctionBuilder {
+        const fn = new WasmFunctionBuilder(name, sigIndex, emitWat);
         this.functions.push(fn);
         return fn;
     }

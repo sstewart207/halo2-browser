@@ -4,6 +4,10 @@ export function aotCos(value: number): number {
     return Math.cos(value);
 }
 
+export function aotAtan2(y: number, x: number): number {
+    return Math.atan2(y, x);
+}
+
 /** Decode the actual 80-bit little-endian memory representation to binary64. */
 export function loadExtended80(memory: WebAssembly.Memory, offset: number, length: number | undefined, address: number): number {
     const view = new DataView(memory.buffer, offset, length);
