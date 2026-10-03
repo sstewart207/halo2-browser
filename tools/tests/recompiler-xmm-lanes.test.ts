@@ -12,6 +12,35 @@ function build(ops:string[][],callee?:CFGFunction){
  return {i,v:new DataView(memory.buffer,0x1000,65536),run:()=> (i.exports.run as Function)(0x8000,0,0)};
 }
 const bits=[0x7fa12345,0x89abcdef,0x80000000,0x12345678];
+test('CMPNLEPD creates full-qword masks including unordered NaNs and aliased operands',()=>{
+ for(const source of ['XMM1','xmmword ptr [0x2020]','XMM0']){
+  const {v,run}=build([['MOVDQU','XMM0, xmmword ptr [0x2000]'],['MOVDQU','XMM1, xmmword ptr [0x2020]'],['CMPNLEPD',`XMM0, ${source}`],['MOVDQU','xmmword ptr [0x2040], XMM0'],['RET','']]);v.setFloat64(0x2000,4,true);v.setFloat64(0x2008,NaN,true);v.setFloat64(0x2020,3,true);v.setFloat64(0x2028,1,true);run();expect(v.getBigUint64(0x2040,true)).toBe(source==='XMM0'?0n:0xffffffffffffffffn);expect(v.getBigUint64(0x2048,true)).toBe(0xffffffffffffffffn);
+ }
+});
+test('PSLLQ shifts packed qwords left with independent wrapping and saturated counts',()=>{
+ for(const count of [1n,63n,64n,0x100000000n]){
+  const {v,run}=build([['MOVDQU','XMM0, xmmword ptr [0x2000]'],['PSLLQ','XMM0, qword ptr [0x2020]'],['MOVDQU','xmmword ptr [0x2040], XMM0'],['RET','']]);v.setBigUint64(0x2000,0xfedcba9876543210n,true);v.setBigUint64(0x2008,1n,true);v.setBigUint64(0x2020,count,true);run();expect(v.getBigUint64(0x2040,true)).toBe(count>=64n?0n:BigInt.asUintN(64,0xfedcba9876543210n<<count));expect(v.getBigUint64(0x2048,true)).toBe(count>=64n?0n:1n<<count);
+ }
+});
+test('PSRLQ handles qword count saturation, aliasing and logical shifts',()=>{
+ for(const count of [0,52,64,255]){
+  const {v,run}=build([['MOVDQU','XMM0, xmmword ptr [0x2000]'],['PSRLQ',`XMM0, 0x${count.toString(16)}`],['MOVDQU','xmmword ptr [0x2040], XMM0'],['RET','']]);v.setBigUint64(0x2000,0xffffffffffffffffn,true);run();expect(v.getBigUint64(0x2040,true)).toBe(count>=64?0n:0xffffffffffffffffn>>BigInt(count));
+ }
+ for(const count of [0n,52n,63n,64n,65n,0x100000000n]){
+  for(const source of ['XMM1','qword ptr [0x2020]']){
+   const {v,run}=build([['MOVDQU','XMM0, xmmword ptr [0x2000]'],['MOVQ','XMM1, qword ptr [0x2020]'],['PSRLQ',`XMM0, ${source}`],['MOVDQU','xmmword ptr [0x2040], XMM0'],['RET','']]);
+   v.setBigUint64(0x2000,0xfedcba9876543210n,true);v.setBigUint64(0x2008,0x8000000000000001n,true);v.setBigUint64(0x2020,count,true);run();
+   expect(v.getBigUint64(0x2040,true)).toBe(count>=64n?0n:0xfedcba9876543210n>>count);expect(v.getBigUint64(0x2048,true)).toBe(count>=64n?0n:0x8000000000000001n>>count);
+  }
+ }
+ const {v,run}=build([['MOVDQU','XMM0, xmmword ptr [0x2000]'],['PSRLQ','XMM0, XMM0'],['MOVDQU','xmmword ptr [0x2040], XMM0'],['RET','']]);v.setBigUint64(0x2000,1n,true);v.setBigUint64(0x2008,8n,true);run();expect(v.getBigUint64(0x2048,true)).toBe(4n);
+});
+test('MOVQ preserves low qword bits, clears upper register and stores only eight bytes',()=>{
+ const {v,run}=build([['MOVQ','XMM0, qword ptr [0x2000]'],['MOVQ','XMM1, XMM0'],['MOVDQU','xmmword ptr [0x2040], XMM1'],['MOVQ','qword ptr [0x2060], XMM1'],['RET','']]);v.setBigUint64(0x2000,0x7ff12345fedcba98n,true);v.setUint32(0x2068,0xcafebabe,true);run();expect(v.getBigUint64(0x2040,true)).toBe(0x7ff12345fedcba98n);expect(v.getBigUint64(0x2048,true)).toBe(0n);expect(v.getUint32(0x2068,true)).toBe(0xcafebabe);
+});
+test('ANDPD and PSUBD operate bitwise and wrap individual dwords without carries',()=>{
+ const {v,run}=build([['MOVDQU','XMM0, xmmword ptr [0x2000]'],['ANDPD','XMM0, xmmword ptr [0x2020]'],['PSUBD','XMM0, xmmword ptr [0x2030]'],['MOVDQU','xmmword ptr [0x2040], XMM0'],['RET','']]);bits.forEach((x,n)=>{v.setUint32(0x2000+4*n,x,true);v.setUint32(0x2020+4*n,0xffffffff,true);v.setUint32(0x2030+4*n,x+1,true);});run();expect([0,1,2,3].map(n=>v.getUint32(0x2040+4*n,true))).toEqual(Array(4).fill(0xffffffff));
+});
 test('CVTDQ2PD snapshots signed low integers before aliased binary64 writes',()=>{
  for(const source of ['XMM0','qword ptr [0x2000]']){
   const {v,run}=build([['MOVDQU','XMM0, xmmword ptr [0x2000]'],['CVTDQ2PD',`XMM0, ${source}`],['MOVDQU','xmmword ptr [0x2040], XMM0'],['RET','']]);

@@ -1,3 +1,16 @@
+# NEWEST-55: Packed CRT math executes; next stop BSR
+
+October 3, 2026. Fixed SSE MOVQ to preserve all 64 low bits, clear the upper destination qword and store exactly eight bytes. Prior scalar-f32 implementation silently lost half the bits.
+
+- Added PSRLQ/PSLLQ using independent logical qword shifts. Entire low source qword determines count; counts >=64 yield zero, rather than WASM's masked count behavior. Aliased count snapshots preserved. MMX shift/subtract variants explicitly trap; no claim of MMX support.
+- Added ANDPD bit masks, wrapping PSUBD per-dword subtraction and CMPNLEPD full-qword masks, including unordered NaNs. Comparisons snapshot before destination overwrite.
+- Tests: 1,057 pass / 0 fail / 5,221 assertions across 125 files; TypeScript clean. Shift tests caught an incorrect signed-LEB constant for 64, corrected before live boot.
+- Whole build initially exposed unsupported MMX operands; restricted new packed instructions to XMM and rebuilt successfully. Chrome passes PSRLQ 0x131c7706, PSLLQ 0x131c7778 and CMPNLEPD 0x131c778e. CRT routine FUN_101c76f0 returns; execution reaches Cartographer FUN_100ab790.
+- Current unsupported BSR ECX,EAX at runtime 0x130ab79e, preferred 0x100ab79e. Next implement accurate highest-set-bit semantics, zero-input ZF and operand widths with tests, then boot again.
+- Private native-build55.json / halo2-native55.wasm uses unchanged build53 CFG inputs, 31,182 functions / 82,509,706 bytes. Current public binary copied. Proprietary builds/CFGs/logs/screenshot remain outside Git.
+- D3DX attach succeeds; xlive attach still pending. No AOT video/menu/campaign/60fps acceptance. NEWEST-54 rounding limits and inherited shell/queue substitutions, TEB/TLS, remaining DLLs and threads limitations remain.
+- Preserve unrelated Gemini edits and bun.lock unstaged. Main GitHub README updated; PR7 remains open; no issues closed.
+
 # NEWEST-54: SSE double conversions pass native Chrome startup
 
 October 3, 2026. Implemented CVTDQ2PD signed low-two-int conversion into packed binary64, ADDSD scalar addition preserving upper 64 bits, and CVTPD2PS conversion with upper 64 bits cleared. Sources snapshot before aliased destination writes. Binary64 XMM access uses i64 bitcasts, preserving all bits rather than scalar-f32 storage.

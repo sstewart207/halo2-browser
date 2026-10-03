@@ -1228,6 +1228,44 @@ export class Lifter {
                 break;
             }
             // --- SSE Single-Precision Instructions ---
+            case 'CMPNLEPD': {
+                const [dst,src]=inst.operands;
+                for(let pair=0;pair<2;pair++){
+                    this.emitXmmDoubleLoad(fn,dst,pair);this.emitXmmDoubleLoad(fn,src,pair);fn.f64_op(0x65,'f64.le');fn.i32_eqz();
+                    fn.if_block(0x7f);fn.i32_const(-1);fn.else_block();fn.i32_const(0);fn.end();fn.local_set(39+pair);
+                }
+                for(let pair=0;pair<2;pair++)for(let half=0;half<2;half++){fn.local_get(39+pair);this.emitXmmLaneStore(fn,dst,pair*2+half);}
+                break;
+            }
+            case 'PSLLQ':
+            case 'PSRLQ': {
+                const [dst,src]=inst.operands;
+                if(this.xmmIndex(dst)===undefined){fn.i32_const(inst.addr);fn.global_set(this.unsupportedPc);fn.emitBytes([0x00]);break;}
+                // Register counts use the entire low qword, not a masked shift count.
+                if(src.kind==='imm'){fn.emitBytes([0x42,0x00]);fn.local_set(43);fn.i32_const(src.value>=64?64:src.value);fn.local_set(39);}
+                else {
+                    this.emitXmmLaneLoad(fn,src,0);fn.emitBytes([0xad]);
+                    this.emitXmmLaneLoad(fn,src,1);fn.emitBytes([0xad,0x42,0x20,0x86,0x84]);fn.local_set(43);
+                    fn.local_get(43);fn.emitBytes([0x42,0xc0,0x00,0x5a]);fn.if_block(0x7f);fn.i32_const(64);fn.else_block();fn.local_get(43);fn.emitBytes([0xa7]);fn.end();fn.local_set(39);
+                }
+                for(let pair=0;pair<2;pair++){
+                    fn.local_get(39);fn.i32_const(64);fn.i32_ge_u();fn.if_block(0x7e);fn.emitBytes([0x42,0x00]);fn.else_block();
+                    this.emitXmmLaneLoad(fn,dst,pair*2);fn.emitBytes([0xad]);this.emitXmmLaneLoad(fn,dst,pair*2+1);fn.emitBytes([0xad,0x42,0x20,0x86,0x84]);
+                    fn.local_get(39);fn.emitBytes([0xad,inst.mnemonic==='PSLLQ'?0x86:0x88]);fn.end();fn.emitBytes([0xbf]);this.emitXmmDoubleStore(fn,dst,pair);
+                }
+                break;
+            }
+            case 'ANDPD':
+            case 'PSUBD': {
+                const [dst,src]=inst.operands;
+                if(this.xmmIndex(dst)===undefined){fn.i32_const(inst.addr);fn.global_set(this.unsupportedPc);fn.emitBytes([0x00]);break;}
+                for(let lane=0;lane<4;lane++){
+                    this.emitXmmLaneLoad(fn,dst,lane);this.emitXmmLaneLoad(fn,src,lane);
+                    if(inst.mnemonic==='ANDPD')fn.i32_and();else fn.i32_sub();
+                    this.emitXmmLaneStore(fn,dst,lane);
+                }
+                break;
+            }
             case 'CVTDQ2PD': {
                 const [dst,src]=inst.operands;
                 for(let lane=0;lane<2;lane++){this.emitXmmLaneLoad(fn,src,lane);fn.local_set(39+lane);}
@@ -1724,6 +1762,11 @@ export class Lifter {
             case 'MOVQ': {
                 const [dst, src] = inst.operands;
                 if (!dst || !src) return;
+                if(this.xmmIndex(dst)!==undefined || this.xmmIndex(src)!==undefined){
+                    this.emitXmmMove(fn,inst,2,false);
+                    if(this.xmmIndex(dst)!==undefined)for(let lane=2;lane<4;lane++){fn.i32_const(0);this.emitXmmLaneStore(fn,dst,lane);}
+                    break;
+                }
                 this.emitLoadFloatValue(fn, src);
                 this.emitStoreFloatValue(fn, dst);
                 break;
