@@ -931,6 +931,7 @@ export class Lifter {
                 this.emitStoreOperandValue(fn, dst);
                 break;
             }
+            case 'OR.LOCK': // Single guest thread; cross-thread atomic ordering remains unverified.
             case 'OR': {
                 const [dst, src] = inst.operands;
                 if (!dst || !src) return;

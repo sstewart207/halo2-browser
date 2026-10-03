@@ -76,6 +76,7 @@ export const advapi32Module: ModuleDescriptor = {
         makeFunc("CryptGenRandom", 3),
         makeFunc("CryptCreateHash", 5),
         makeFunc("CryptHashData", 4),
+        makeFunc("CryptGetHashParam", 5),
         makeFunc("CryptImportKey", 6),
         makeFunc("CryptVerifySignatureA", 6),
         makeFunc("CryptDestroyHash", 1),

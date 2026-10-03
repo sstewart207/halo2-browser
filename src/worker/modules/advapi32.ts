@@ -1706,8 +1706,9 @@ export class Advapi32 implements IModule {
             return { value: 1, stackCleanup: 12 }; // TRUE (call succeeded)
         };
 
-        // BOOL CryptAcquireContextA(PHCRYPTPROV, LPCSTR, LPCSTR, DWORD, DWORD)
-        this.exports["CryptAcquireContextA"] = (ctx, mem, args) => {
+        // ANSI and UTF-16 entry points share the existing provider lifecycle.
+        for (const suffix of ["A", "W"] as const) {
+        this.exports[`CryptAcquireContext${suffix}`] = (ctx, mem, args) => {
             const phProv = args[0] >>> 0;
             const pszContainer = args[1] >>> 0;
             const pszProvider = args[2] >>> 0;
@@ -1719,8 +1720,9 @@ export class Advapi32 implements IModule {
                 return { value: 0, stackCleanup: 20 };
             }
 
-            const container = pszContainer ? Marshaler.readString(mem, pszContainer) : "";
-            const provider = pszProvider ? Marshaler.readString(mem, pszProvider) : "";
+            const readName = suffix === "W" ? Marshaler.readWideString : Marshaler.readString;
+            const container = pszContainer ? readName(mem, pszContainer) : "";
+            const provider = pszProvider ? readName(mem, pszProvider) : "";
             const handle = process.resourceProvider.registerKernelObject({
                 kind: "crypt_prov",
                 container,
@@ -1737,11 +1739,12 @@ export class Advapi32 implements IModule {
 
             Logger.verbose(
                 LogCategory.SYSTEM,
-                `CryptAcquireContextA(container="${container}", provider="${provider}", type=${dwProvType}, flags=0x${dwFlags.toString(16)}) -> 0x${handle.toString(16)}`
+                `CryptAcquireContext${suffix}(container="${container}", provider="${provider}", type=${dwProvType}, flags=0x${dwFlags.toString(16)}) -> 0x${handle.toString(16)}`
             );
             system.scheduler.setLastError(0);
             return { value: 1, stackCleanup: 20 };
         };
+        }
 
         // BOOL CryptReleaseContext(HCRYPTPROV, DWORD)
         this.exports["CryptReleaseContext"] = (ctx, mem, args) => {
@@ -1811,6 +1814,9 @@ export class Advapi32 implements IModule {
                 flags: dwFlags,
                 bytesHashed: 0,
                 checksum: 0,
+                chunks: [] as Uint8Array[],
+                finalized: false,
+                digest: null as Uint8Array | null,
             });
 
             if (!Mem.writeUint32(phHash, handle >>> 0)) {
@@ -1835,6 +1841,14 @@ export class Advapi32 implements IModule {
                 system.scheduler.setLastError(ERROR_INVALID_HANDLE);
                 return { value: 0, stackCleanup: 16 };
             }
+            if (hashObj.finalized) {
+                system.scheduler.setLastError(0x8009000c); // NTE_BAD_HASH_STATE
+                return { value: 0, stackCleanup: 16 };
+            }
+            if (dwFlags !== 0) {
+                system.scheduler.setLastError(0x80090009); // NTE_BAD_FLAGS
+                return { value: 0, stackCleanup: 16 };
+            }
 
             if (dwDataLen > 0) {
                 if (!pbData || pbData + dwDataLen > mem.length || !isValidAddress(mem, pbData, dwDataLen, "r")) {
@@ -1852,6 +1866,7 @@ export class Advapi32 implements IModule {
                 }
                 hashObj.bytesHashed = ((hashObj.bytesHashed >>> 0) + dwDataLen) >>> 0;
                 hashObj.checksum = checksum >>> 0;
+                hashObj.chunks.push(chunk.slice());
             }
 
             Logger.verbose(
@@ -1860,6 +1875,38 @@ export class Advapi32 implements IModule {
             );
             system.scheduler.setLastError(0);
             return { value: 1, stackCleanup: 16 };
+        };
+
+        // SHA-256 is the observed Cartographer path. Other algorithms are not
+        // represented by the legacy checksum: unsupported digest queries fail.
+        this.exports["CryptGetHashParam"] = async (ctx, mem, args) => {
+            const [hHash,param,pData,pLength,flags]=args.map(n=>n>>>0);
+            const hash=process.resourceProvider.getKernelObject(hHash);
+            const fail=(error:number)=>{system.scheduler.setLastError(error);return {value:0,stackCleanup:20};};
+            if(!hash || hash.kind!=="crypt_hash")return fail(ERROR_INVALID_HANDLE);
+            if(flags)return fail(0x80090009);
+            if(!pLength || pLength+4>mem.length || !isValidAddress(mem,pLength,4,"rw"))return fail(ERROR_INVALID_PARAMETER);
+            if(param!==1 && param!==2 && param!==4)return fail(0x8009000a); // NTE_BAD_TYPE
+            if(hash.algId!==0x800c)return fail(0x80090008); // NTE_BAD_ALGID
+            const required=param===2?32:4,capacity=Mem.readUint32(pLength);
+            if(capacity===null || !Mem.writeUint32(pLength,required))return fail(ERROR_INVALID_PARAMETER);
+            if(!pData){system.scheduler.setLastError(0);return {value:1,stackCleanup:20};}
+            if(capacity<required)return fail(234); // ERROR_MORE_DATA
+            if(pData+required>mem.length || !isValidAddress(mem,pData,required,"rw"))return fail(ERROR_INVALID_PARAMETER);
+            let output:Uint8Array;
+            if(param===2){
+                if(!hash.digest){
+                    const chunks=hash.chunks as Uint8Array[],length=chunks.reduce((n,c)=>n+c.length,0);
+                    const input=new Uint8Array(length);let offset=0;for(const c of chunks){input.set(c,offset);offset+=c.length;}
+                    hash.finalized=true;
+                    try{hash.digest=new Uint8Array(await crypto.subtle.digest("SHA-256",input.buffer));}
+                    catch{return fail(0x80090020);}
+                    hash.chunks=[];
+                }output=hash.digest;
+            }else{output=new Uint8Array(4);new DataView(output.buffer).setUint32(0,param===1?hash.algId:32,true);}
+            // JSPI may suspend here; write through the fresh guest-memory accessor.
+            if(Mem.writeBytes(pData,output)!==output.length)return fail(ERROR_INVALID_PARAMETER);
+            system.scheduler.setLastError(0);return {value:1,stackCleanup:20};
         };
 
         // BOOL CryptImportKey(HCRYPTPROV, const BYTE*, DWORD, HCRYPTKEY, DWORD, HCRYPTKEY*)

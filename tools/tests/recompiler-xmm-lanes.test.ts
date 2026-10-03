@@ -12,6 +12,9 @@ function build(ops:string[][],callee?:CFGFunction){
  return {i,v:new DataView(memory.buffer,0x1000,65536),run:()=> (i.exports.run as Function)(0x8000,0,0)};
 }
 const bits=[0x7fa12345,0x89abcdef,0x80000000,0x12345678];
+test('single-thread locked OR updates CRT stream flags without neighboring writes',()=>{
+ const {v,run}=build([['MOV','EAX, 0x2000'],['MOV','ECX, 0x2000'],['OR.LOCK','dword ptr [EAX], ECX'],['PUSHFD',''],['POP','EAX'],['RET','']]);v.setUint32(0x2000,0x80000001,true);v.setUint32(0x2004,0xcafebabe,true);expect(run()&0x8c5).toBe(0x80);expect(v.getUint32(0x2000,true)).toBe(0x80002001);expect(v.getUint32(0x2004,true)).toBe(0xcafebabe);
+});
 test('ADD masks operand width and publishes carry, overflow, parity and auxiliary carry',()=>{
  for(const [reg,value,expected,flags] of [['EAX',0xffffffff,0,0x55],['AL',0x123456ff,0x12345600,0x55],['AX',0x1234ffff,0x12340000,0x55],['EAX',0x7fffffff,0x80000000,0x894]] as const){
   const {v,run}=build([['MOV',`EAX, 0x${value.toString(16)}`],['ADD',`${reg}, 0x1`],['PUSHFD',''],['POP','ECX'],['MOV','dword ptr [0x2040], ECX'],['RET','']]);expect(run()>>>0).toBe(expected);expect(v.getUint32(0x2040,true)&0x8d5).toBe(flags);
