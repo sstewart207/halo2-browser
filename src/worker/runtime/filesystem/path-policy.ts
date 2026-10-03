@@ -25,6 +25,7 @@ export const DEFAULT_EPHEMERAL_GLOBS = [
     "temp/**",
     "tmp/**",
     "cache/**",
+    "s16i.*",
 ];
 
 /** Default globs treated as persistent when in allowlist (persistOnly) mode. */

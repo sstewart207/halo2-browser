@@ -1827,10 +1827,11 @@ export const exports: Record<string, ThunkImplementation> = (() => {
     exports['GetFileAttributesW'] = (ctx, mem, args) => {
         const lpFileName = args[0];
         const filename = lpFileName ? readStringW(mem, lpFileName) : '';
+        const retAddr = new DataView(mem.buffer, mem.byteOffset, mem.byteLength).getUint32(ctx.esp, true);
         if (filename.toLowerCase().endsWith('.bmp')) {
-            Logger.log(LogCategory.KERNEL32, `GetFileAttributesW BMP: "${filename}"`);
+            Logger.log(LogCategory.KERNEL32, `GetFileAttributesW BMP: "${filename}" (ret=0x${retAddr.toString(16)})`);
         } else {
-            Logger.log(LogCategory.KERNEL32, `GetFileAttributesW("${filename}")`);
+            Logger.log(LogCategory.KERNEL32, `GetFileAttributesW("${filename}") ret=0x${retAddr.toString(16)}`);
         }
 
         const vfs = System.getInstance().fileSystem;
@@ -1845,15 +1846,21 @@ export const exports: Record<string, ThunkImplementation> = (() => {
             );
         }
 
-        if (vfs.directoryExists(resolved)) {
+        const isDir = vfs.directoryExists(resolved);
+        if (isDir) {
+            const rel = (vfs as any).relRomPath ? (vfs as any).relRomPath(resolved).toLowerCase() : "";
+            const ovHas = (vfs as any).overlay?.hasDirectory(resolved);
+            const romHas = (vfs as any).romDirs?.has(rel.replace(/\/+$/, ""));
+            Logger.log(LogCategory.KERNEL32, `GetFileAttributesW("${filename}") -> DIR (resolved="${resolved}", ovHas=${ovHas}, romHas=${romHas}, rel="${rel}")`);
             return FILE_ATTRIBUTE_DIRECTORY;
         }
 
         if (vfs.fileExists(resolved)) {
+            Logger.log(LogCategory.KERNEL32, `GetFileAttributesW("${filename}") -> FILE (resolved="${resolved}")`);
             return FILE_ATTRIBUTE_ARCHIVE;
         }
 
-        Logger.verbose(LogCategory.KERNEL32, `GetFileAttributesW: file not found "${filename}"`);
+        Logger.log(LogCategory.KERNEL32, `GetFileAttributesW("${filename}") -> NOT_FOUND (resolved="${resolved}")`);
         System.getInstance().scheduler.setLastError(ERROR_FILE_NOT_FOUND);
         return INVALID_FILE_ATTRIBUTES;
     };

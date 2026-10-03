@@ -100,7 +100,90 @@ const KNOWN_WIN32_ARG_COUNTS = new Map<string, number>([
     ['kernel32:rtlunwind', 4],
     ['kernel32:getmodulefilenamea', 3],
     ['kernel32:getmodulefilenamew', 3],
+    ['kernel32:createthread', 6],
+    ['kernel32:setthreadpriority', 2],
+    ['kernel32:createsemaphorea', 4],
+    ['kernel32:createsemaphorew', 4],
+    ['kernel32:releasesemaphore', 3],
+    ['kernel32:terminatethread', 2],
+    ['kernel32:switchtothread', 0],
     ['d3d9:direct3dcreate9', 1],
+    ['ole32:cocreateinstance', 5],
+    ['ole32:coinitialize', 1],
+    ['ole32:coinitializesecurity', 9],
+    ['ole32:coinitializeex', 2],
+    ['ole32:couninitialize', 0],
+    ['ole32:cotaskmemalloc', 1],
+    ['ole32:cotaskmemfree', 1],
+    ['ole32:coregisterclassobject', 5],
+    ['ole32:corevokeclassobject', 1],
+    ['ole32:propvariantclear', 1],
+    ['ole32:cosetproxyblanket', 8],
+    ['user32:getsystemmetrics', 1],
+    ['user32:loadcursora', 2],
+    ['user32:setcursor', 1],
+    ['user32:getcursor', 0],
+    ['user32:showwindow', 2],
+    ['user32:movewindow', 6],
+    ['user32:destroywindow', 1],
+    ['user32:getclientrect', 2],
+    ['user32:getwindowrect', 2],
+    ['user32:screentoclient', 2],
+    ['user32:getdc', 1],
+    ['user32:releasedc', 2],
+    ['user32:beginpaint', 2],
+    ['user32:endpaint', 2],
+    ['user32:getkeystate', 1],
+    ['user32:getasynckeystate', 1],
+    ['user32:getkeyboardstate', 1],
+    ['user32:setkeyboardstate', 1],
+    ['user32:setfocus', 1],
+    ['user32:getfocus', 0],
+    ['user32:setforegroundwindow', 1],
+    ['user32:getforegroundwindow', 0],
+    ['user32:postmessagea', 4],
+    ['user32:sendmessagea', 4],
+    ['user32:postquitmessage', 1],
+    ['user32:translatemessage', 1],
+    ['user32:adjustwindowrectex', 4],
+    ['user32:setwindowpos', 7],
+    ['user32:enumdisplaysettingsa', 3],
+    ['user32:changedisplaysettingsa', 2],
+    ['user32:messageboxa', 4],
+    ['user32:unregisterclassa', 2],
+    ['user32:isiconic', 1],
+    ['user32:getdesktopwindow', 0],
+    ['user32:loadicona', 2],
+    ['user32:releasecapture', 0],
+    ['user32:setcapture', 1],
+    ['user32:getcaretblinktime', 0],
+    ['user32:getcursorpos', 1],
+    ['user32:mapvirtualkeya', 2],
+    ['user32:sendinput', 3],
+    ['user32:getkeyboardlayout', 1],
+    ['user32:getmonitorinfoa', 2],
+    ['advapi32:regclosekey', 1],
+    ['advapi32:reggetvaluea', 7],
+    ['advapi32:regsetvalueexa', 6],
+    ['advapi32:regcreatekeyexa', 9],
+    ['advapi32:regopenkeyexa', 5],
+    ['advapi32:regdeletevaluea', 2],
+    ['advapi32:regqueryvalueexa', 6],
+    ['advapi32:cryptacquirecontexta', 5],
+    ['advapi32:cryptreleasecontext', 2],
+    ['advapi32:cryptdestroyhash', 1],
+    ['advapi32:cryptgethashparam', 5],
+    ['advapi32:cryptcreatehash', 5],
+    ['advapi32:cryptdestroykey', 1],
+    ['shell32:commandlinetoargvw', 2],
+    ['shell32:shgetfolderpathw', 5],
+    ['dinput8:directinput8create', 5],
+    ['winmm:timegettime', 0],
+    ['winmm:timebeginperiod', 1],
+    ['winmm:timeendperiod', 1],
+    ['version:getfileversioninfosizea', 2],
+    ['version:getfileversioninfoa', 4],
+    ['version:verqueryvaluea', 4],
 ]);
 
 export class RuntimeBridge {
@@ -198,10 +281,14 @@ export class RuntimeBridge {
     callApi(dll: string, func: string, esp: number, argCount: number = 4): number | Promise<number> {
         const memBytes = new Uint8Array(this.memory.buffer, this.memoryOffset, this.memoryLength);
         const view = new DataView(this.memory.buffer, this.memoryOffset, this.memoryLength);
+        const key = `${dll.toLowerCase().replace(/\.dll$/, '')}:${func.toLowerCase()}`;
+        const effectiveArgCount = KNOWN_WIN32_ARG_COUNTS.has(key)
+            ? KNOWN_WIN32_ARG_COUNTS.get(key)!
+            : argCount;
 
         // Read arguments from stack: [esp+4], [esp+8], ...
         const args: number[] = [];
-        for (let i = 0; i < argCount; i++) {
+        for (let i = 0; i < effectiveArgCount; i++) {
             args.push(view.getUint32(esp + 4 + i * 4, true));
         }
 
@@ -223,6 +310,25 @@ export class RuntimeBridge {
 
         if (!impl && this.dispatcher) {
             impl = this.dispatcher.getImplementation(dll, func);
+        }
+
+        if (!impl) {
+            const normDll = dll.toLowerCase().replace(/\.dll$/, '');
+            if (normDll === 'kernel32') {
+                if (func === 'CreateMutexW' || func === 'CreateMutexA') {
+                    impl = (_ctx, _mem, _args) => {
+                        const lastErrorOffset = 0x00030034;
+                        if (lastErrorOffset + 4 <= (this.memoryLength ?? (this.memory.buffer.byteLength - this.memoryOffset))) {
+                            new DataView(this.memory.buffer, this.memoryOffset, this.memoryLength).setUint32(lastErrorOffset, 0, true);
+                        }
+                        return 0x00000400;
+                    };
+                }
+            } else if (normDll === 'pccompat') {
+                impl = (_ctx, _mem, _args) => {
+                    return 1;
+                };
+            }
         }
 
         if (this.logCalls) {
@@ -318,6 +424,40 @@ export class RuntimeBridge {
                                 return result instanceof Promise ? result.then(finish) : finish(result);
                             }
                         }
+                    }
+                }
+            }
+
+            // 3b. Inspect for MSVC delay-load resolver thunk
+            if (addr > 0 && addr + 36 <= (this.memoryLength ?? (this.memory.buffer.byteLength - this.memoryOffset))) {
+                const view = new DataView(this.memory.buffer, this.memoryOffset, this.memoryLength);
+                if (view.getUint8(addr) === 0x68 &&
+                    view.getUint16(addr + 5, true) === 0x35ff &&
+                    view.getUint8(addr + 11) === 0x68 &&
+                    view.getUint8(addr + 16) === 0x68 &&
+                    view.getUint8(addr + 21) === 0x68 &&
+                    view.getUint8(addr + 26) === 0xe8 &&
+                    view.getUint16(addr + 31, true) === 0x25ff) {
+                    const iatSlot = view.getUint32(addr + 12, true);
+                    const apiNamePtr = view.getUint32(addr + 17, true);
+                    const dllNamePtr = view.getUint32(addr + 22, true);
+
+                    const readAnsi = (ptr: number): string => {
+                        let s = '';
+                        for (let p = ptr; p < (this.memoryLength ?? (this.memory.buffer.byteLength - this.memoryOffset)); p++) {
+                            const b = view.getUint8(p);
+                            if (b === 0) break;
+                            s += String.fromCharCode(b);
+                        }
+                        return s;
+                    };
+
+                    const apiName = readAnsi(apiNamePtr);
+                    const dllName = readAnsi(dllNamePtr);
+                    if (apiName && dllName) {
+                        this.dynamicIatTable.set(iatSlot, { dll: dllName, func: apiName });
+                        this.dynamicIatTable.set(addr, { dll: dllName, func: apiName });
+                        return this.callApi(dllName, apiName, esp);
                     }
                 }
             }

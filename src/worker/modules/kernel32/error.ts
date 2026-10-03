@@ -65,7 +65,7 @@ export const exports: Record<string, ThunkImplementation> = (() => {
 
     exports['GetLastError'] = (ctx, mem, args) => {
         const lastError = System.getInstance().scheduler.getLastError();
-        Logger.verbose(LogCategory.KERNEL32, `GetLastError() -> ${lastError}`);
+        Logger.log(LogCategory.KERNEL32, `GetLastError() -> ${lastError}`);
         return lastError;
     };
 
