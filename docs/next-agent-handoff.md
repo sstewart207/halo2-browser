@@ -447,5 +447,17 @@ Chrome passes all four native DLL attaches, Cartographer ordinal 5236, EXE callb
 - All 1,084 tests pass across 128 files (0 failures), typecheck clean (`tsc -p tsconfig.json --noEmit`).
 - Next: Inspect and recover target 0x5a9e4e in Ghidra, append to `cfg_full73-merged.json`, recompile Build 74, and boot. Keep assets/binaries/logs/saves private and bun.lock unstaged.
 
+## Free Model / Codex Quick Action Playbook (for target 0x5a9e4e):
+1. Recover target in Ghidra:
+   `& "C:\Users\sstew\Downloads\ghidra_12.1.4_PUBLIC_20260921\ghidra_12.1.4_PUBLIC\support\analyzeHeadless.bat" "C:\Users\sstew\Documents\Codex\2026-09-29\private-just-for-us-do-i\work\halo2-browser\scratch\ghidra\proj" halo2 -process halo2.exe -noanalysis -scriptPath "C:\Users\sstew\Documents\Codex\2026-09-29\private-just-for-us-do-i\work\halo2-browser\scratch\ghidra" -postScript RecoverAotEntries.java 0x5a9e4e ExportFunctionCFG.java "C:\Users\sstew\Documents\Codex\2026-09-29\private-just-for-us-do-i\work\halo2-browser\scratch\ghidra\cfg_full74.json" 0 include-thunks`
+2. Merge target from `cfg_full74.json` into `cfg_full74-merged.json` (based on `cfg_full73-merged.json`) and write `native-build74.json`.
+3. Recompile WASM with Node:
+   `node --max-old-space-size=8192 dist-recompile.cjs ../halo2-browser/scratch/ghidra/native-build74.json`
+4. Deploy to public:
+   `Copy-Item "..\halo2-browser\scratch\ghidra\halo2-native74.wasm" "public\halo2_recompiled.wasm" -Force`
+5. Boot in Chrome:
+   `$env:PATH = "C:\Users\sstew\AppData\Local\Temp\bun-node-744846f84;" + $env:PATH; bun tools/boot-halo2.ts; Start-Sleep 3; bun tools/read-chrome-logs.ts`
+
+
 
 
