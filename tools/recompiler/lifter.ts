@@ -559,6 +559,10 @@ export class Lifter {
 
     emitJumpCondition(fn: WasmFunctionBuilder, mnemonic: string) {
         switch (mnemonic) {
+            case 'JO':
+                fn.local_get(LOCALS.OF);break;
+            case 'JNO':
+                fn.local_get(LOCALS.OF);fn.i32_eqz();break;
             case 'JZ':
             case 'JE':
                 fn.local_get(LOCALS.ZF);
@@ -830,11 +834,17 @@ export class Lifter {
             case 'ADD': {
                 const [dst, src] = inst.operands;
                 if (!dst || !src) return;
-                this.emitLoadOperandValue(fn, dst);
-                this.emitLoadOperandValue(fn, src);
-                fn.i32_add();
-                fn.local_tee(LOCALS.TMP0); // result
-                this.emitSetFlagsArithmetic(fn);
+                const bits=Math.min(dst.size*8,32),mask=bits===32?-1:(1<<bits)-1;
+                this.emitLoadOperandValue(fn,dst);fn.i32_const(mask);fn.i32_and();fn.local_set(34);
+                this.emitLoadOperandValue(fn,src);fn.i32_const(mask);fn.i32_and();fn.local_set(35);
+                fn.local_get(34);fn.local_get(35);fn.i32_add();fn.i32_const(mask);fn.i32_and();fn.local_set(LOCALS.TMP0);
+                fn.local_get(LOCALS.TMP0);fn.i32_eqz();fn.local_set(LOCALS.ZF);
+                fn.local_get(LOCALS.TMP0);fn.i32_const(1<<(bits-1));fn.i32_and();fn.i32_eqz();fn.i32_eqz();fn.local_set(LOCALS.SF);this.emitParity(fn);
+                fn.local_get(LOCALS.TMP0);fn.local_get(34);fn.i32_lt_u();fn.local_set(LOCALS.CF);
+                fn.local_get(34);fn.local_get(35);fn.i32_xor();fn.i32_const(-1);fn.i32_xor();
+                fn.local_get(34);fn.local_get(LOCALS.TMP0);fn.i32_xor();fn.i32_and();fn.i32_const(1<<(bits-1));fn.i32_and();fn.i32_eqz();fn.i32_eqz();fn.local_set(LOCALS.OF);
+                fn.global_get(this.eflags);fn.i32_const(~0x10);fn.i32_and();
+                fn.local_get(34);fn.local_get(35);fn.i32_xor();fn.local_get(LOCALS.TMP0);fn.i32_xor();fn.i32_const(0x10);fn.i32_and();fn.i32_or();fn.global_set(this.eflags);
                 fn.local_get(LOCALS.TMP0);
                 this.emitStoreOperandValue(fn, dst);
                 break;
@@ -1579,6 +1589,7 @@ export class Lifter {
                 this.emitConditionalMove(fn,inst);break;
             }
             case 'CMOVC': case 'CMOVNC':
+            case 'CMOVO': case 'CMOVNO':
             case 'CMOVA': case 'CMOVAE': case 'CMOVB': case 'CMOVBE':
             case 'CMOVL': case 'CMOVLE': case 'CMOVG': case 'CMOVGE':
             case 'CMOVS': case 'CMOVNS': case 'CMOVP': case 'CMOVNP': {

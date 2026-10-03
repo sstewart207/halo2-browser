@@ -1,3 +1,14 @@
+# NEWEST-58: ADD flag fidelity fixed; further native constructor reached
+
+October 3, 2026. Recovered observed callback preferred 0x10059b30 using Ghidra into cfg_xlive58.json (9,963 xlive functions). Chrome executes it and reaches CMOVO at 0x130689cc in Cartographer object allocation/setup.
+
+- Implemented CMOVO/CMOVNO plus JO/JNO conditions. The regression exposed inherited ADD clearing CF/OF instead of calculating them. Corrected ADD width masking and ZF/SF/PF/CF/OF/AF. Tests verify byte/word/dword wraps, signed overflow, parity and auxiliary carry; no claim that ADC/SBB or all arithmetic flags are now correct.
+- Overflow test initially trapped because JO/JNO were unsupported; after adding conditions it failed on ADD overflow. Both defects corrected before live verification. Other legacy arithmetic/POPF AF omissions remain.
+- Chrome passes observed CMOVO, still enumerates display modes, then reaches unresolved native constructor 0x13068b20, preferred 0x10068b20, return 0x13193d89, last block 0x13017070. Next recover verified callback and re-export xlive CFG, rebuild/boot. xlive attach still has not returned.
+- Validation: 1,065 tests / 0 failures / 5,300 assertions across 125 files; TypeScript clean. Private native-build58.json / halo2-native58.wasm: 31,186 functions, 89,315,510 bytes; cfg_full53 EXE, cfg_d3dx9_43_51d and cfg_xlive58. Public binary copied. Assets/CFGs/binaries/logs stay private.
+- No AOT title/menu/video/campaign/60fps acceptance. Prior warnings about true TEB/TLS, remaining DLLs, threads/dynamic attach, SSE rounding and experimental EXE shell/queue substitutions remain. Keep unrelated Gemini edits and bun.lock unstaged.
+- Root AGENTS/CODEX-HANDOFF/HANDOFF and repo handoffs updated; only own private repo for outward work, no PR merge or issue closure.
+
 # NEWEST-57: Cartographer reaches native display-mode enumeration
 
 October 3, 2026. Ghidra recovered observed callback 0x101891e0 into cfg_xlive57.json (9,962 xlive functions). It runs two native helpers and returns a status value; Chrome passes it, initializing additional CRT critical sections.

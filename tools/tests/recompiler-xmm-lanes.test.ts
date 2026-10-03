@@ -12,6 +12,11 @@ function build(ops:string[][],callee?:CFGFunction){
  return {i,v:new DataView(memory.buffer,0x1000,65536),run:()=> (i.exports.run as Function)(0x8000,0,0)};
 }
 const bits=[0x7fa12345,0x89abcdef,0x80000000,0x12345678];
+test('ADD masks operand width and publishes carry, overflow, parity and auxiliary carry',()=>{
+ for(const [reg,value,expected,flags] of [['EAX',0xffffffff,0,0x55],['AL',0x123456ff,0x12345600,0x55],['AX',0x1234ffff,0x12340000,0x55],['EAX',0x7fffffff,0x80000000,0x894]] as const){
+  const {v,run}=build([['MOV',`EAX, 0x${value.toString(16)}`],['ADD',`${reg}, 0x1`],['PUSHFD',''],['POP','ECX'],['MOV','dword ptr [0x2040], ECX'],['RET','']]);expect(run()>>>0).toBe(expected);expect(v.getUint32(0x2040,true)&0x8d5).toBe(flags);
+ }
+});
 test('PSRLDQ shifts the whole 128-bit value by bytes and zeros vacated bytes',()=>{
  for(const count of [0,1,4,8,15,16,255]){
   const {v,run}=build([['MOVDQU','XMM0, xmmword ptr [0x2000]'],['PSRLDQ',`XMM0, 0x${count.toString(16)}`],['MOVDQU','xmmword ptr [0x2040], XMM0'],['RET','']]);for(let n=0;n<16;n++)v.setUint8(0x2000+n,n+1);run();expect(Array.from({length:16},(_,n)=>v.getUint8(0x2040+n))).toEqual(Array.from({length:16},(_,n)=>n+count<16?n+count+1:0));
@@ -98,6 +103,9 @@ test('CVTPD2PS memory conversion rounds to nearest even and preserves signed zer
  expect(v.getFloat32(0x2040,true)).toBe(1);expect(v.getUint32(0x2044,true)).toBe(0x80000000);
 });
 test('CMOVA and signed conditional moves distinguish ordering and equality',()=>{
+ for(const [op,wantOverflow] of [['CMOVO',true],['CMOVNO',false]] as const){
+  for(const overflow of [true,false]){const {run}=build([['MOV',overflow?'EAX, 0x7fffffff':'EAX, 0x1'],['ADD','EAX, 0x1'],['MOV','EAX, 0x7'],['MOV','EDX, 0x9'],[op,'EAX, EDX'],['RET','']]);expect(run()).toBe(overflow===wantOverflow?9:7);}
+ }
  for(const [op,carry] of [['CMOVC',true],['CMOVNC',false]] as const){
   for(const less of [true,false]){const {run}=build([['MOV','EAX, 0x7'],['MOV','EDX, 0x9'],['CMP',less?'EAX, EDX':'EDX, EAX'],[op,'EAX, EDX'],['RET','']]);expect(run()).toBe(less===carry?9:7);}
  }
