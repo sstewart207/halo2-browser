@@ -10,20 +10,20 @@ Active code is on [codex/halo2-browser-checkpoint](https://github.com/sstewart20
 
 ### Verified progress
 
-- Ghidra CFG extraction and whole-program WASM generation: the latest build covers **34,486 functions across the EXE, D3DX, Cartographer and sldl DLLs**. Additional observed indirect-call entries are recovered as startup exposes them.
+- Ghidra CFG extraction and whole-program WASM generation: the latest build covers **32,821 functions across the EXE, D3DX9_43, Cartographer xlive, and pccompat DLLs**. Additional observed indirect-call entries are recovered as startup exposes them.
 - Chrome compiles and instantiates the actual generated WASM over guest memory. Execution proceeds through real CRT paths and Win32 HLE calls, including version checks, heap allocation, locks and TLS/FLS operations.
 - Corrected stack and calling-convention bugs: mutable shared ESP, stdcall cleanup, multi-block returns, external/indirect tail calls, SEH epilog stack restoration and CALL-IAT/RET wrappers.
 - Fixed CMP borrow/overflow, HLE export jump trampolines and API import parsing for names such as `ws2_32`.
 - Diagnosed a startup hang in the CRT cosine routine: unsupported `JP` had become an unconditional jump. Shared binary64 x87 state, stack push/pop, double memory access, cosine, status/control words, SAHF/parity branches and rounding-mode conversion now pass targeted tests. **The real Chrome boot gets past the previous cosine blocker.** Full x87 fidelity is still incomplete.
-- **1,067 tests pass; TypeScript checks clean.** Synthetic tests do not establish gameplay or rendering acceptance.
+- **1,075 tests pass; TypeScript checks clean.** Synthetic tests do not establish gameplay or rendering acceptance.
 
 Earlier CPU-emulation checkpoints recorded title/menu rendering and Armory campaign work. Those results belong to the earlier v86 execution path; they do not establish AOT rendering, AOT performance, or mobile compatibility.
 
 ### Current work
 
-Latest verified Chrome boot (NEWEST-60): **both D3DX and Cartographer's native xlive DLL complete process initialization successfully.** Unicode CryptoAPI and real SHA-256 now work on that path. The next native DLL, sldl, is compiled and its startup begins; all 19 native CRT initializer-table entries have been recovered with Ghidra.
+Latest verified Chrome boot (NEWEST-63): **D3DX9_43, Cartographer xlive, and pccompat complete native process initialization.** Correcting zero-argument GetEnvironmentStringsW stack cleanup fixed pccompat's corrupted CRT frame. The next explicit stop is **d3dx9_31 native entry 0x13e8af6c has not yet been recompiled.**
 
-The private module contains 34,486 functions (94.8 MB). Current stop: **an incompletely disassembled sldl initializer loops at `0x13eb0416` until the watchdog stops it.** Original bytes identify a missing LEA instruction and stack-based return dispatch. Next: correct that analysis and implement/test the required control flow, then remaining DLL/thread/TLS work and title/menu acceptance. Experimental EXE shell-success/synchronous-job substitutions still require review. No AOT video/menu, playable campaign or 60 FPS result is claimed.
+The current private module contains 32,821 functions (92.9 MB). The next build adds d3dx9_31 and then tests EXE entry/WinMain. Experimental EXE shell-success/synchronous-job substitutions still require review. No AOT video/menu, playable campaign or 60 FPS result is claimed.
 
 ## Goal
 
