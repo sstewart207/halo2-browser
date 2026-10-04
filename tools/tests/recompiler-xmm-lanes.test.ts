@@ -60,6 +60,36 @@ test('PMOVMSKB maps each byte independently; PCMPEQW self compare sets every wor
  }
  const {v,run}=build([['MOVDQU','XMM0, xmmword ptr [0x2000]'],['PCMPEQW','XMM0, XMM0'],['PMOVMSKB','EAX, XMM0'],['RET','']]);bits.forEach((x,n)=>v.setUint32(0x2000+n*4,x,true));expect(run()).toBe(65535);
 });
+test('SETcc writes the exact condition result into an 8-bit destination',()=>{
+ // xlive 0x101a2cf3 is `SETA AL`; the byte write must not disturb the rest of EAX.
+ // unsigned CMP left,right: a=CF0&ZF0 ae=!CF be=CF|ZF s=SF ns=!SF
+ const pairs=[[5,3,1,1,0,0,1],[3,3,0,1,1,0,1],[3,5,0,0,1,1,0],[0xffffffff,1,1,1,0,1,0],[2,0xfffffffe,0,0,1,0,1]] as const;
+ for(const [left,right,a,ae,be,sg,ns] of pairs){
+  const values:Record<string,number>={SETA:a,SETAE:ae,SETBE:be,SETS:sg,SETNS:ns};
+  for(const [mnemonic,expected] of Object.entries(values)){
+   const {v,run}=build([['MOV','EAX, 0x11223344'],['MOV',`EDX, 0x${left.toString(16)}`],['CMP',`EDX, 0x${right.toString(16)}`],[mnemonic,'AL'],['MOV','dword ptr [0x2040], EAX'],['RET','']]);
+   run();
+   expect(v.getUint32(0x2040,true)).toBe((0x11223300|expected)>>>0);
+  }
+ }
+ for(const mnemonic of ['SETP','SETNP','SETNO']){
+  const {v,run}=build([['MOV','EAX, 0x11223344'],['MOV','EDX, 0x5'],['CMP','EDX, 0x3'],[mnemonic,'AL'],['MOV','dword ptr [0x2040], EAX'],['RET','']]);
+  run();const byte=v.getUint32(0x2040,true)&0xff;
+  expect(byte===0||byte===1).toBe(true);expect(v.getUint32(0x2040,true)&0xffffff00).toBe(0x11223300);
+ }
+});
+test('PCMPEQB compares bytes independently, and the SSE memcmp loop it feeds works',()=>{
+ // halo2.exe/xlive use MOVAPS+PCMPEQB+PMOVMSKB as a 16-byte-at-a-time memcmp.
+ for(const source of ['XMM1','xmmword ptr [0x2020]','XMM0']){
+  const {v,run}=build([['MOVDQU','XMM0, xmmword ptr [0x2000]'],['MOVDQU','XMM1, xmmword ptr [0x2020]'],['PCMPEQB',`XMM0, ${source}`],['MOVDQU','xmmword ptr [0x2040], XMM0'],['PMOVMSKB','EAX, XMM0'],['RET','']]);
+  for(let n=0;n<16;n++){v.setUint8(0x2000+n,n);v.setUint8(0x2020+n,n%2?n+1:n);}
+  run();
+  // Even bytes compare equal and odd bytes differ, so every lane is byte3..byte0
+  // = 00 FF 00 FF. A whole-lane or whole-register comparison would not produce this.
+  expect([0,1,2,3].map(n=>v.getUint32(0x2040+n*4,true))).toEqual(Array(4).fill(source==='XMM0'?0xffffffff:0x00ff00ff));
+  expect(Array.from({length:16},(_,i)=>v.getUint8(0x2040+i)===0xff?1<<i:0).reduce((a,b)=>a|b,0)).toBe(source==='XMM0'?0xffff:0x5555);
+ }
+});
 test('PSHUFLW shuffles low words and copies unchanged upper source qword',()=>{
  for(const [control,expected] of [[0,[1,1,1,1]],[0x1b,[4,3,2,1]],[0xe4,[1,2,3,4]]] as const){
   for(const source of ['XMM0','xmmword ptr [0x2000]']){

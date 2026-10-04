@@ -42,6 +42,7 @@ export const LOCALS = {
     SF: 9,
     CF: 10,
     OF: 11,
+    PF: 36, // allocated via addLocals(1, 0x7f) below
     TMP0: 12,
     TMP1: 13,
     BLOCK_ID: 14,
@@ -1248,6 +1249,67 @@ export class Lifter {
                 this.emitStoreOperandValue(fn, dst);
                 break;
             }
+            // Remaining SETcc forms. Each writes 1 when the condition holds, else 0.
+            case 'SETA': case 'SETNBE': {          // CF=0 and ZF=0
+                const [dst] = inst.operands;
+                if (!dst) return;
+                fn.local_get(LOCALS.CF); fn.i32_eqz();
+                fn.local_get(LOCALS.ZF); fn.i32_eqz();
+                fn.i32_and();
+                this.emitStoreOperandValue(fn, dst);
+                break;
+            }
+            case 'SETAE': case 'SETNB': case 'SETNC': {   // CF=0
+                const [dst] = inst.operands;
+                if (!dst) return;
+                fn.local_get(LOCALS.CF); fn.i32_eqz();
+                this.emitStoreOperandValue(fn, dst);
+                break;
+            }
+            case 'SETBE': case 'SETNA': {          // CF=1 or ZF=1
+                const [dst] = inst.operands;
+                if (!dst) return;
+                fn.local_get(LOCALS.CF);
+                fn.local_get(LOCALS.ZF);
+                fn.i32_or();
+                this.emitStoreOperandValue(fn, dst);
+                break;
+            }
+            case 'SETNO': {
+                const [dst] = inst.operands;
+                if (!dst) return;
+                fn.local_get(LOCALS.OF); fn.i32_eqz();
+                this.emitStoreOperandValue(fn, dst);
+                break;
+            }
+            case 'SETP': case 'SETPE': {
+                const [dst] = inst.operands;
+                if (!dst) return;
+                fn.local_get(LOCALS.PF);
+                this.emitStoreOperandValue(fn, dst);
+                break;
+            }
+            case 'SETNP': case 'SETPO': {
+                const [dst] = inst.operands;
+                if (!dst) return;
+                fn.local_get(LOCALS.PF); fn.i32_eqz();
+                this.emitStoreOperandValue(fn, dst);
+                break;
+            }
+            case 'SETS': {
+                const [dst] = inst.operands;
+                if (!dst) return;
+                fn.local_get(LOCALS.SF);
+                this.emitStoreOperandValue(fn, dst);
+                break;
+            }
+            case 'SETNS': {
+                const [dst] = inst.operands;
+                if (!dst) return;
+                fn.local_get(LOCALS.SF); fn.i32_eqz();
+                this.emitStoreOperandValue(fn, dst);
+                break;
+            }
             case 'MUL': {
                 const [src] = inst.operands;
                 if (!src) return;
@@ -1359,6 +1421,25 @@ export class Lifter {
                         fn.local_get(sourceLocal);fn.i32_const((element%units)*width);fn.i32_shr_u();fn.i32_const((1<<width)-1);fn.i32_and();
                         if(unit){fn.i32_const(unit*width);fn.i32_shl();fn.i32_or();}
                     }this.emitXmmLaneStore(fn,dst,lane);
+                }break;
+            }
+            case 'PCMPEQB': {
+                const [dst,src]=inst.operands;
+                if(this.xmmIndex(dst)===undefined){fn.i32_const(inst.addr);fn.global_set(this.unsupportedPc);fn.emitBytes([0x00]);break;}
+                // Each of the sixteen bytes becomes 0xFF when equal, else 0x00.
+                // The shifted byte must be masked: a bare `>>` would still compare
+                // the higher bytes of the lane, unlike the 16-bit word case.
+                for(let lane=0;lane<4;lane++){
+                    this.emitXmmLaneLoad(fn,dst,lane);fn.local_set(34);this.emitXmmLaneLoad(fn,src,lane);fn.local_set(35);
+                    for(let byte=0;byte<4;byte++){
+                        for(const operand of [34,35]){
+                            fn.local_get(operand);
+                            if(byte){fn.i32_const(byte*8);fn.i32_shr_u();}
+                            fn.i32_const(0xff);fn.i32_and();
+                        }
+                        fn.i32_eq();fn.if_block(0x7f);fn.i32_const((0xff<<(byte*8))|0);fn.else_block();fn.i32_const(0);fn.end();if(byte)fn.i32_or();
+                    }
+                    this.emitXmmLaneStore(fn,dst,lane);
                 }break;
             }
             case 'PCMPEQW': {
