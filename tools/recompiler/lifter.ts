@@ -123,6 +123,7 @@ export class Lifter {
     funcEntryMap = new Map<number, number>(); // entryAddr -> local function index (0..N-1)
     espGlobalIdx: number;
     private registerGlobals = new Map<number, number>();
+    private flagGlobals = new Map<number, number>();
     private xmmLanes: number[][] = [];
     memoryBaseGlobalIdx: number;
     private x87Stack: number[] = [];
@@ -163,6 +164,13 @@ export class Lifter {
             const index = this.moduleBuilder.addGlobal(0x7f, 1, 0);
             this.registerGlobals.set(LOCALS[name], index);
             this.moduleBuilder.addExport(name.toLowerCase(), 3, index);
+        }
+        // A CALL does not reset EFLAGS. Profiling hooks begin with PUSHFD and
+        // inspect the condition flags left by the caller's preceding TEST/Jcc.
+        for (const name of ['CF', 'PF', 'ZF', 'SF', 'OF'] as const) {
+            const index = this.moduleBuilder.addGlobal(0x7f, 1, 0);
+            this.flagGlobals.set(LOCALS[name], index);
+            this.moduleBuilder.addExport(`flag_${name.toLowerCase()}`, 3, index);
         }
         this.memoryBaseGlobalIdx = this.moduleBuilder.addGlobal(0x7f, 1, 0);
         for (let reg=0;reg<8;reg++) {
@@ -433,11 +441,17 @@ export class Lifter {
         for (const [local, global] of this.registerGlobals) {
             fn.local_get(local); fn.global_set(global);
         }
+        for (const [local, global] of this.flagGlobals) {
+            fn.local_get(local); fn.global_set(global);
+        }
     }
 
     private emitReloadRegisters(fn: WasmFunctionBuilder, includeEcx = true) {
         for (const [local, global] of this.registerGlobals) {
             if (!includeEcx && local === LOCALS.ECX) continue;
+            fn.global_get(global); fn.local_set(local);
+        }
+        for (const [local, global] of this.flagGlobals) {
             fn.global_get(global); fn.local_set(local);
         }
     }

@@ -1,5 +1,7 @@
 # CHECKPOINT — NEWEST-91 (October 3, 2026)
 
+**Source correction:** NEWEST-92 establishes that the runtime page is a 4096-byte copy of EXE page `0x661e28` with three patched regions. The first seven target bytes also match `0x453210`, but that short match does not identify the copied page's source. See `CHECKPOINT-92.md`.
+
 **Live Chrome stop:** `AOT unresolved indirect call: 0x1970421`, ESP `0x12ffb90`, return `0x408f4a`, last debug block `0x6875db`. No AOT menu, video, audio, campaign, or 60-fps acceptance.
 
 Build 89 recovered the real seven-block function at `0x449614` (Ghidra initially misread it as one MOV because of an offcut). Chrome passed it, then raised `0xC0000409` after a profiling wrapper returned through two guest addresses. The wrapper `0x4089ba` uses `RET 4` to enter hook `0x78fc77`, then body continuation `0x4089f2`. The lifter now recognizes this narrow wrapper pattern, preregisters the indirect-call import before any function indices are assigned, and executes the hook and continuation. A synthetic regression checks both effects and final ESP. Ghidra-recovered hook and continuation are merged into private `cfg_full90-merged.json`; `native-build90.json` produced 38,757 functions / 124,989,701 bytes. Live Chrome passed the earlier cookie failure and reached a null table call at `0x42335e`.

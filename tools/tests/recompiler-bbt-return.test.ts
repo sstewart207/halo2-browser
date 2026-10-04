@@ -73,3 +73,22 @@ test('unsigned MUL provides EDX for Halo 2 function-table modulo 124', () => {
     const instance = new WebAssembly.Instance(new WebAssembly.Module(lifter.moduleBuilder.toBinary()), bridge.createWasmImports());
     expect((instance.exports.table_index as Function)(0x8000, 0, 0)).toBe(0x12345678);
 });
+
+test('PUSHFD in a called profiling hook observes the caller TEST flags', () => {
+    const caller = oneBlock('flag_caller', 0x1000, [
+        ['MOV', 'ESI, 0x0'], ['TEST', 'ESI, ESI'], ['CALL', '0x2000'], ['RET', ''],
+    ]);
+    const hook = oneBlock('flag_hook', 0x2000, [
+        ['PUSHFD', ''], ['POP', 'EAX'], ['RET', ''],
+    ]);
+    const lifter = new Lifter({ importMemory: true, memoryPages: 1 });
+    lifter.prepareModule([caller, hook]);
+    lifter.liftFunction(caller);
+    lifter.liftFunction(hook);
+    lifter.moduleBuilder.addExport('flag_caller', 0, 0);
+    const memory = new WebAssembly.Memory({ initial: 1 });
+    const bridge = new RuntimeBridge({ memory });
+    const instance = new WebAssembly.Instance(new WebAssembly.Module(lifter.moduleBuilder.toBinary()), bridge.createWasmImports());
+    const flags = (instance.exports.flag_caller as Function)(0x8000, 0, 0) >>> 0;
+    expect(flags & (0x01 | 0x04 | 0x40 | 0x80 | 0x800)).toBe(0x04 | 0x40);
+});
