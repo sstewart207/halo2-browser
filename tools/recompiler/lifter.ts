@@ -960,7 +960,7 @@ export class Lifter {
                 this.emitLoadOperandValue(fn, src);
                 fn.i32_and();
                 fn.local_set(LOCALS.TMP0); // result
-                this.emitSetFlagsLogic(fn);
+                this.emitSetFlagsLogic(fn, dst.kind === 'imm' ? 32 : Math.min(dst.size * 8, 32));
                 break;
             }
             case 'XOR': {
@@ -2419,16 +2419,24 @@ export class Lifter {
         fn.local_get(LOCALS.TMP0);fn.i32_const(0xff);fn.i32_and();fn.emitByte(0x69);fn.watLines.push('    i32.popcnt');
         fn.i32_const(1);fn.i32_and();fn.i32_eqz();fn.local_set(36);
     }
-    emitSetFlagsLogic(fn: WasmFunctionBuilder) {
+    emitSetFlagsLogic(fn: WasmFunctionBuilder, bits = 32) {
+        if (bits < 32) {
+            fn.local_get(LOCALS.TMP0);
+            fn.i32_const((1 << bits) - 1);
+            fn.i32_and();
+            fn.local_set(LOCALS.TMP0);
+        }
         this.emitParity(fn);
         // ZF = (TMP0 == 0)
         fn.local_get(LOCALS.TMP0);
         fn.i32_eqz();
         fn.local_set(LOCALS.ZF);
-        // SF = (TMP0 < 0)
+        // SF is the sign bit of the guest operand width, not of the i32 host local.
         fn.local_get(LOCALS.TMP0);
-        fn.i32_const(0);
-        fn.i32_lt_s();
+        fn.i32_const(1 << (bits - 1));
+        fn.i32_and();
+        fn.i32_eqz();
+        fn.i32_eqz();
         fn.local_set(LOCALS.SF);
         // CF = 0, OF = 0
         fn.i32_const(0); fn.local_set(LOCALS.CF);
