@@ -1,3 +1,7 @@
+# NEWEST-83: three verified computed EXE targets; next stop 0x5d9d98
+
+October 3, 2026. Chrome passed Ghidra-recovered EXE functions `0x5e81d6`, `0x5e5996`, and `0x5d7591` in successive native AOT builds. Private Build 83 has 38,718 functions / 123,447,658 bytes, deployed to ignored `public/halo2_recompiled.wasm`; current explicit stop is unresolved indirect call `0x5d9d98` (return `0x5ad4c6`, last block `0x5d7591`). No AOT menu/video/audio/campaign/60-fps acceptance. Baseline 1,090 tests passed and typecheck was clean; no tracked code changed. Read `work/bottleship-research/docs/CHECKPOINT-83.md` for exact private manifests, recovery method, and the correction that the takeover tree was not clean. Next: verify `0x5d9d98` in Ghidra and batch-mine computed function-pointer targets rather than rebuilding for every one.
+
 # NEWEST-80: PCMPEQB + SETcc implemented; boot reaches a new indirect-call stop
 
 October 3, 2026. Two missing CPU instructions implemented and verified live. The boot now passes the SSE memcmp loop and the CRT `SETA` sequence, then stops on an unresolved INDIRECT call target `0x5e81d6`. Still no AOT title/menu/video/campaign/60fps acceptance.
