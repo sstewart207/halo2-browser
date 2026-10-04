@@ -140,6 +140,7 @@ export class Lifter {
     private sehPrologs = new Map<number, { handler: number; cookie: number }>();
     private sehEpilogs = new Set<number>();
     private allocaProbes = new Map<number, number>();
+    private bbtReturnChain = false;
 
     constructor(options: LiftedModuleOptions = {}) {
         this.options = {
@@ -276,6 +277,7 @@ export class Lifter {
         if (!this.allocaProbes.has(0x68c215)) this.allocaProbes.set(0x68c215, 16);
 
         for (const fn of functions) {
+            if (this.isBbtReturnChain(fn)) hasIndirectCall = true;
             for (const bb of fn.basicBlocks) {
                 for (const rawInst of bb.instructions) {
                     if (rawInst.mnemonic === 'CALL' || rawInst.mnemonic === 'JMP') {
@@ -308,7 +310,20 @@ export class Lifter {
         }
     }
 
+    private isBbtReturnChain(fn: CFGFunction): boolean {
+        const instructions = fn.basicBlocks.length === 1 ? fn.basicBlocks[0].instructions : [];
+        const compact = (ops: string) => ops.replace(/\s+/g, '').toUpperCase();
+        return instructions.at(-1)?.mnemonic === 'RET'
+            && compact(instructions.at(-1)?.ops ?? '') === '0X4'
+            && instructions.filter(i => i.mnemonic === 'LEA' && compact(i.ops) === 'ESP,[ESP+-0X4]').length >= 3
+            && instructions.some(i => i.mnemonic === 'MOV' && compact(i.ops) === 'DWORDPTR[ESP+0X4],EDI');
+    }
+
     liftFunction(fn: CFGFunction): WasmFunctionBuilder {
+        // MSVC BBT wrappers push a profiling hook and body continuation, then
+        // RET 4 into the hook. Both guest returns must execute before the
+        // original WASM caller resumes.
+        this.bbtReturnChain = this.isBbtReturnChain(fn);
         const entryAddr = parseInt(fn.entry, 16);
         if (!this.funcEntryMap.has(entryAddr)) {
             this.funcEntryMap.set(entryAddr, this.moduleBuilder.functions.length);
@@ -327,6 +342,7 @@ export class Lifter {
         wasmFn.addLocals(2, 0x7c); // locals 37/38: x87 value and f64 store scratch
         wasmFn.addLocals(4, 0x7f); // locals 39..42: lane shuffle snapshot
         wasmFn.addLocals(1, 0x7e); // local 43: bit-preserving binary64 XMM store
+        wasmFn.addLocals(1, 0x7e); // local 44: full unsigned MUL product
         wasmFn.guestStoreF64Local = 38;
         wasmFn.guestMemoryBaseGlobal = this.memoryBaseGlobalIdx;
         wasmFn.guestStoreI32Local = 32;
@@ -1316,9 +1332,19 @@ export class Lifter {
                 this.emitLoadOperandValue(fn, src);
                 fn.local_set(LOCALS.TMP0);
                 fn.local_get(LOCALS.EAX);
+                fn.emitBytes([0xad]); // i64.extend_i32_u
                 fn.local_get(LOCALS.TMP0);
-                fn.i32_mul();
+                fn.emitBytes([0xad, 0x7e]); // i64.extend_i32_u; i64.mul
+                fn.local_set(44);
+                fn.local_get(44);
+                fn.emitBytes([0xa7]); // i32.wrap_i64
                 fn.local_set(LOCALS.EAX);
+                fn.local_get(44);
+                fn.emitBytes([0x42, 0x20, 0x88, 0xa7]); // i64.const 32; i64.shr_u; i32.wrap_i64
+                fn.local_set(LOCALS.EDX);
+                fn.local_get(LOCALS.EDX); fn.i32_eqz(); fn.i32_eqz();
+                fn.local_set(LOCALS.CF);
+                fn.local_get(LOCALS.CF); fn.local_set(LOCALS.OF);
                 break;
             }
             case 'DIV': {
@@ -2149,6 +2175,37 @@ export class Lifter {
                 let imm = 0;
                 if (inst.operands.length > 0 && inst.operands[0].kind === 'imm') {
                     imm = inst.operands[0].value;
+                }
+                if (this.bbtReturnChain) {
+                    // RET 4 targets the guest hook; its RET targets the body;
+                    // the body's RET finally reaches the original caller.
+                    fn.local_get(LOCALS.ESP); fn.i32_load(); fn.local_set(LOCALS.TMP0);
+                    fn.local_get(LOCALS.ESP); fn.i32_const(imm + 4); fn.i32_add(); fn.local_set(LOCALS.ESP);
+                    fn.local_get(LOCALS.ESP); fn.global_set(this.espGlobalIdx);
+                    this.emitPublishRegisters(fn);
+                    fn.local_get(LOCALS.TMP0);
+                    fn.local_get(LOCALS.ESP);
+                    fn.local_get(LOCALS.ECX);
+                    fn.local_get(LOCALS.EAX);
+                    fn.call_func(this.getOrAddIndirectCallImport());
+                    fn.local_set(LOCALS.EAX);
+                    fn.global_get(this.espGlobalIdx); fn.local_set(LOCALS.ESP);
+                    this.emitReloadRegisters(fn);
+
+                    // The hook popped its return address from [ESP - 4].
+                    fn.local_get(LOCALS.ESP); fn.i32_const(4); fn.i32_sub(); fn.i32_load(); fn.local_set(LOCALS.TMP0);
+                    fn.local_get(LOCALS.ESP); fn.global_set(this.espGlobalIdx);
+                    this.emitPublishRegisters(fn);
+                    fn.local_get(LOCALS.TMP0);
+                    fn.local_get(LOCALS.ESP);
+                    fn.local_get(LOCALS.ECX);
+                    fn.local_get(LOCALS.EAX);
+                    fn.call_func(this.getOrAddIndirectCallImport());
+                    fn.local_set(LOCALS.EAX);
+                    fn.global_get(this.espGlobalIdx); fn.local_set(LOCALS.ESP);
+                    this.emitReloadRegisters(fn);
+                    fn.local_get(LOCALS.EAX); fn.return_op();
+                    break;
                 }
                 // Pop return address (+4) and callee arguments (+imm)
                 fn.local_get(LOCALS.ESP);

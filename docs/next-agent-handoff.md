@@ -1,3 +1,7 @@
+# NEWEST-91: BBT and MUL fixed; runtime-patched code is next
+
+Build 91 (private `../halo2-browser/scratch/ghidra/native-build91.json`, `cfg_full90-merged.json`) has 38,757 functions / 125,099,216 bytes. Chrome passes recovered `0x449614`, BBT wrapper `0x4089ba` through hook `0x78fc77` and continuation `0x4089f2`, and the `MUL ESI` high-half table-index bug at `0x42331b`. It stops at runtime-copied/patched code `0x1970421` (return `0x408f4a`), whose first seven bytes match EXE `0x453210`. Do not blindly alias or skip it. 1,093 tests and typecheck pass. Full evidence and commands: `docs/CHECKPOINT-91.md`. No AOT menu/video/campaign/60fps acceptance. Preserve private assets and unrelated edits.
+
 # NEWEST-87: TEST BX sign-bit fix passes Chrome; next target 0x449614
 
 October 3, 2026. Recovered 29 direct-call entries and seven jump destinations omitted from the EXE CFG. Build 86 passed the old `0x5d9d98`/`0x5ec24b` stops but exposed a real lifter bug: `TEST BX,BX` used the 32-bit host sign bit, causing a negative 16-bit loop counter to walk backward through memory and end in `_strncpy_s` invalid-parameter shutdown. A regression test failed before the fix and passes after it. Private Build 87 has 38,754 functions / 124,987,018 bytes. Live Chrome now passes the map-folder failure path and stops honestly at unresolved target `0x449614` (return `0x68b0db`, last block `0x68b0d5`). 1,091 tests pass and typecheck is clean. No AOT menu/video/audio/campaign/60-fps acceptance. Read `work/bottleship-research/docs/CHECKPOINT-87.md` for private manifest and exact proof. Preserve unrelated edits and assets.
@@ -543,7 +547,3 @@ Chrome passes all four native DLL attaches, Cartographer ordinal 5236, EXE callb
    `Copy-Item "..\halo2-browser\scratch\ghidra\halo2-native74.wasm" "public\halo2_recompiled.wasm" -Force`
 5. Boot in Chrome:
    `$env:PATH = "C:\Users\sstew\AppData\Local\Temp\bun-node-744846f84;" + $env:PATH; bun tools/boot-halo2.ts; Start-Sleep 3; bun tools/read-chrome-logs.ts`
-
-
-
-
