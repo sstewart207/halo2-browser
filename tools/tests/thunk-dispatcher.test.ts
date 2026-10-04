@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from 'bun:test';
 import { ThunkDispatcher } from '../../src/worker/core/thunking/thunk-dispatcher';
+import { ThunkGenerator } from '../../src/worker/core/thunking/thunk-generator';
 
 const SPIN_ADDR = 0xdead0000;
 
@@ -315,5 +316,24 @@ describe('ThunkDispatcher AOT pending API lookup', () => {
         const impl = () => ({value: 0, stackCleanup: 4});
         d.pendingRegistrations.set('kernel32:deletecriticalsection', {impl});
         expect(d.getImplementation('KERNEL32.dll', 'DeleteCriticalSection')).toBe(impl);
+    });
+});
+
+describe('ThunkDispatcher.getImplementation — DLL name forms', () => {
+    it('resolves an implementation when the caller passes the .dll-suffixed name', () => {
+        // PE import tables name files ("IPHLPAPI.DLL"); modules register bare
+        // ("iphlpapi"). A suffix-sensitive index made the guest call miss and threw
+        // "AOT API implementation missing: IPHLPAPI.DLL!GetAdaptersAddresses".
+        const gen = new ThunkGenerator();
+        gen.generateStubDll('iphlpapi', [{ name: 'GetAdaptersAddresses', argCount: 8 }]);
+        const d: any = new ThunkDispatcher({ add_listener: () => {} } as any, gen as any);
+
+        const impl = () => 232;
+        d.registerModule('iphlpapi', { GetAdaptersAddresses: impl });
+
+        expect(d.getImplementation('IPHLPAPI.DLL', 'GetAdaptersAddresses')).toBe(impl);
+        expect(d.getImplementation('iphlpapi.dll', 'GetAdaptersAddresses')).toBe(impl);
+        expect(d.getImplementation('iphlpapi', 'GetAdaptersAddresses')).toBe(impl);
+        expect(d.getImplementation('IPHLPAPI.DLL', 'NoSuchFunction')).toBeNull();
     });
 });

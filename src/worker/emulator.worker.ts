@@ -2178,6 +2178,9 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       tapi32.initialize(process);
       setupapi.initialize(process);
       netapi32.initialize(process);
+      // Without initialize() the exports map stays empty and the guest's
+      // IPHLPAPI.DLL!GetAdaptersAddresses call resolves to no implementation.
+      iphlpapi.initialize(process);
 
       process.registerModule(kernel32.name, kernel32);
       process.registerModule(ntdll.name, ntdll);

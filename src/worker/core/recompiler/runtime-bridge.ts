@@ -21,6 +21,9 @@ export interface RuntimeBridgeOptions {
 }
 
 const KNOWN_WIN32_ARG_COUNTS = new Map<string, number>([
+    ['iphlpapi:getadaptersaddresses', 5],
+    ['iphlpapi:getadaptersinfo', 2],
+    ['iphlpapi:getipaddrtable', 3],
     ['msvcrt:_initterm', 2],
     ['msvcrt:_initterm_e', 2],
     ['kernel32:getprocaddress', 2],
@@ -363,7 +366,8 @@ export class RuntimeBridge {
             eflags: 0,
         };
 
-        const mod = this.apiModules.get(dll.toLowerCase());
+        const mod = this.apiModules.get(key.split(':')[0])
+            ?? this.apiModules.get(dll.toLowerCase());
         let impl = mod ? mod[func] : null;
 
         if (!impl && this.dispatcher) {

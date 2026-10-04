@@ -305,7 +305,8 @@ export class RuntimeBridge {
             eflags: 0,
         };
 
-        const mod = this.apiModules.get(dll.toLowerCase());
+        const mod = this.apiModules.get(key.split(':')[0])
+            ?? this.apiModules.get(dll.toLowerCase());
         let impl = mod ? mod[func] : null;
 
         if (!impl && this.dispatcher) {

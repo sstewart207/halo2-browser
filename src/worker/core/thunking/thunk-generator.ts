@@ -23,7 +23,9 @@ function buildQualifiedThunkKey(dllName: string, functionName: string): string {
 }
 
 function buildNormalizedThunkKey(dllName: string, functionName: string): string {
-    return `${dllName.toLowerCase()}:${normalizeThunkExportName(functionName)}`;
+    // Modules register under their bare name ("iphlpapi") while PE import tables
+    // name the file ("IPHLPAPI.DLL"), so the normalized key drops the extension.
+    return `${dllName.toLowerCase().replace(/\.dll$/, '')}:${normalizeThunkExportName(functionName)}`;
 }
 
 /** CRT/versioned DLL aliases — data exports registered on the canonical name only. */
