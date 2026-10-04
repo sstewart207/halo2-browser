@@ -1,0 +1,16 @@
+# CHECKPOINT — NEWEST-95 (October 4, 2026)
+
+This is a handoff and factual correction, not a new runtime milestone. Build 92 remains the last verified native AOT build: Chrome reaches the guest-generated executable page at `0x1970000` and stops at `0x1970421`. The 4096-byte live capture in CHECKPOINT-94 measured 3630 nonzero bytes and decoded the entry prefix as `PUSH ESI; MOV ESI,[ESP+8]; TEST ESI,ESI; CALL 0x78fccb`. No AOT menu, video, campaign, audio, input, saves, or 60-fps acceptance has been demonstrated. The most recent reported tests were 1,094 passing and typecheck clean; they were not rerun for this docs-only checkpoint.
+
+## Defender and xlive.dll: correct the record
+
+The user's Windows Security Protection history screenshot shows `C:\Games\Halo 2 Project Cartographer\xlive.dll` under a **Threat restored** event, following quarantine and a severe Trojan detection. This disproves CHECKPOINT-93's claim that the DLL was never quarantined. The screenshot does not prove whether Defender caused its absence during the Build 92 attempt; do not assert either cause. The detection is not confirmed false positive. The user temporarily disabled Defender and manages its settings; agents must not change protection, exclusions, or restore the installed DLL. Build 92 already compiled and booted with a reconstructed private analysis PE from Ghidra, so further AOT work does not depend on changing Defender.
+
+## Claude's next step
+
+1. Read root `AGENTS.md` and the newest root `HANDOFF.md`, then CHECKPOINT-94 for the live page evidence. Check `git status` before editing. At handoff, branch `codex/halo2-browser-checkpoint` was at `30a0dfb` and in sync with `origin`; unrelated tracked `src/worker/api/iphlpapi.api.ts` and `src/worker/modules/iphlpapi.ts` edits plus many untracked scratch files were present. Preserve them. Do not stage all files.
+2. Use the captured private `tmp/dynamic93-page.bin` and/or a verified live page read to decode only reachable instructions starting at `0x1970421`. The prior 4063/4096 EXE-page match was not reproduced; do not use static aliasing. `harness.call("readBytes", [addr, len])` silently used the 64-byte default in the prior capture; verify response `len` or use `bun tools/harness.ts readBytes 0x1970000 0x400` in chunks.
+3. Design a narrow runtime-code interpreter/bridge that preserves actual guest EIP, ESP, GPRs, memory, and CF/PF/ZF/SF/OF across the `0x78fccb` call. Prove the measured prefix and hook transition in a synthetic test before booting in visible Chrome. Do not skip the profiling hook or fabricate successful execution. If adding iced-x86, record the dependency and why it is needed; no decoder dependency is in the repo yet.
+4. Re-run relevant tests and `node node_modules/tsgo/bin/tsc -p tsconfig.json --noEmit`. If the lifter changes, rebundle `dist-recompile.cjs` before rebuilding WASM and compare binary size/hash to avoid stale output. Only claim an advance when the Chrome log or screenshot shows the next stop or visible game output.
+
+Keep private binaries, bundles, saves, logs, page dumps, screenshots and `bun.lock` out of Git. Push only to `sstewart207/halo2-browser`; do not touch `upstream`, merge PR #7, or close issues without the user asking.

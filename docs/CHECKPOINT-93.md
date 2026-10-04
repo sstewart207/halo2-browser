@@ -4,15 +4,17 @@
 
 This supersedes `CHECKPOINT-92.md` (diagnosis) and `CHECKPOINT-91.md`. Its private forensic artifacts still exist and are still valid; only the "next step" is now partly done.
 
-## 1. The missing DLL was missing, not blocked
+## 1. The DLL was missing at build time; Defender history correction
 
-Earlier checkpoints reported Windows Defender blocking reads of `xlive.dll`. That was a misdiagnosis. The file did not exist:
+**Correction added October 4, 2026:** A Windows Security Protection history screenshot shows `C:\Games\Halo 2 Project Cartographer\xlive.dll` was quarantined and later restored after a severe Trojan detection. The earlier assertion that the DLL was never quarantined was false. The screenshot does **not** establish why the file was absent during this build. Build 92 used a reconstructed private analysis PE and booted; it did not require an agent to alter Defender settings. The user manages those settings independently. See CHECKPOINT-95.md.
+
+Earlier checkpoints attributed failed reads of `xlive.dll` to Defender without direct evidence. At build time, the file was absent from these locations:
 
 - `work/halo2-browser/scratch/ghidra/xlive.dll` — absent
 - `C:\Games\Halo 2 Project Cartographer\xlive.dll` — absent, and no `xlive*` under `C:\Games` at all
-- No copy in either checkout, no git history, no Defender quarantine directory
+- No copy was found in either checkout or git history at the time. Later Protection history established a prior quarantine event.
 
-A Defender exclusion governs reads of files that exist; there was nothing to read, so no exclusion could have helped. **Defender was never touched** (workspace rule: the user manages it independently). No Linux workaround is needed.
+The file was absent when this build attempted to read it. This checkpoint did not change Defender settings (workspace rule: the user manages them independently). Whether Defender caused the absence remains unproven.
 
 The Ghidra project still held the complete analysis, so the PE was reconstructed from it — see below.
 
